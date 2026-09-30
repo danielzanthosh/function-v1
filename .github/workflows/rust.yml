@@ -16,8 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # (Linux dependencies step removed since this is a macOS exclusive runner)
-
       - name: Build
         run: cargo build --release --verbose
 
@@ -27,6 +25,8 @@ jobs:
       - name: Upload macOS Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: program-macos
-          path: target/release/function
+          name: assistant-macos
+          path: |
+            target/release/assistant
+            target/release/assistant.app
           if-no-files-found: error
