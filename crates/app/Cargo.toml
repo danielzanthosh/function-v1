@@ -1,0 +1,23 @@
+[package]
+name = "assistant-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+assistant-config.workspace = true
+assistant-platform.workspace = true
+assistant-providers.workspace = true
+assistant-tools.workspace = true
+assistant-memory.workspace = true
+assistant-agent.workspace = true
+assistant-ui.workspace = true
+gpui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true

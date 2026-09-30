@@ -1,0 +1,18 @@
+[package]
+name = "assistant-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+
+[dependencies]
+gpui.workspace = true
+assistant-agent.workspace = true
+assistant-config.workspace = true
+assistant-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true

@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/ui",
+    "crates/agent",
+    "crates/memory",
+    "crates/tools",
+    "crates/providers",
+    "crates/platform",
+    "crates/config",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = []
+license = "Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "windows-manifest"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.38", features = ["sync", "rt", "rt-multi-thread", "macros"] }
+async-trait = "0.1"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Internal workspace crates
+assistant-app = { path = "crates/app" }
+assistant-ui = { path = "crates/ui" }
+assistant-agent = { path = "crates/agent" }
+assistant-memory = { path = "crates/memory" }
+assistant-tools = { path = "crates/tools" }
+assistant-providers = { path = "crates/providers" }
+assistant-platform = { path = "crates/platform" }
+assistant-config = { path = "crates/config" }
