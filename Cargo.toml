@@ -27,6 +27,8 @@ anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cpal = "0.18.2"
+hound = "3.5.1"
 
 # Internal workspace crates
 assistant-app = { path = "crates/app" }

@@ -251,11 +251,16 @@ impl SpeechToTextProvider for WhisperSttProvider {
         let bytes = audio_pcm.to_vec();
 
         tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
-            let temp_file = std::env::temp_dir().join(format!("fn_audio_{}.wav", std::process::id()));
+            let unique_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let temp_file = std::env::temp_dir().join(format!("fn_audio_{}_{}.wav", std::process::id(), unique_id));
             std::fs::write(&temp_file, &bytes)
                 .map_err(|e| ProviderError::Network(format!("Failed to write audio: {}", e)))?;
 
-            let mut cmd = Command::new("curl.exe");
+            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-X")
                 .arg("POST")
@@ -284,10 +289,18 @@ impl SpeechToTextProvider for WhisperSttProvider {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let parsed: serde_json::Value = serde_json::from_str(&stdout)?;
 
+            if let Some(err_obj) = parsed.get("error") {
+                let msg = err_obj.get("message").and_then(|m| m.as_str()).unwrap_or("Whisper API error");
+                return Err(ProviderError::Api {
+                    code: 400,
+                    message: msg.to_string(),
+                });
+            }
+
             if let Some(text) = parsed.get("text").and_then(|t| t.as_str()) {
                 Ok(text.trim().to_string())
             } else {
-                Ok(stdout)
+                Ok(stdout.trim().to_string())
             }
         })
         .await

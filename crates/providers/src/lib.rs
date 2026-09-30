@@ -157,6 +157,7 @@ pub struct SearchResult {
 }
 
 /// Mock LLM provider for testing and development.
+/// Mock LLM provider for testing and development.
 pub struct MockLlmProvider {
     pub canned_response: String,
 }
@@ -183,6 +184,33 @@ impl LlmProvider for MockLlmProvider {
     }
 }
 
+/// Mock Speech-to-Text provider for testing and offline development.
+pub struct MockSttProvider {
+    pub canned_transcript: String,
+}
+
+impl MockSttProvider {
+    pub fn new(canned_transcript: impl Into<String>) -> Self {
+        Self {
+            canned_transcript: canned_transcript.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl SpeechToTextProvider for MockSttProvider {
+    fn name(&self) -> &str {
+        "mock-stt"
+    }
+
+    async fn transcribe_audio(&self, audio_pcm: &[u8], _sample_rate: u32) -> Result<String, ProviderError> {
+        if audio_pcm.is_empty() {
+            return Ok(String::new());
+        }
+        Ok(self.canned_transcript.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +226,12 @@ mod tests {
         };
         let res = provider.complete(req).await.unwrap();
         assert_eq!(res.message.content, "Task completed");
+    }
+
+    #[tokio::test]
+    async fn test_mock_stt_provider() {
+        let provider = MockSttProvider::new("Search the web for Rust documentation");
+        let res = provider.transcribe_audio(b"RIFF...", 16000).await.unwrap();
+        assert_eq!(res, "Search the web for Rust documentation");
     }
 }

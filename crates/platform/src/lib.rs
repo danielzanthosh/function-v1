@@ -3,10 +3,13 @@
 //! Provides isolated, first-class native OS abstractions for global hotkeys,
 //! accessibility permissions, microphone availability detection, and window control.
 
+pub mod audio;
 pub mod computer;
+pub use audio::*;
 pub use computer::*;
 
 use async_trait::async_trait;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -56,6 +59,9 @@ pub trait PlatformService: Send + Sync {
 
     /// Check whether a microphone device is connected and accessible by the OS.
     async fn is_microphone_available(&self) -> bool;
+
+    /// Return the active audio capture service.
+    fn audio_capture(&self) -> Arc<dyn AudioCapture>;
 }
 
 #[cfg(target_os = "windows")]
@@ -65,6 +71,7 @@ pub mod windows {
     pub struct WindowsPlatformService {
         registered_hotkey: std::sync::RwLock<Option<String>>,
         hotkey_tx: broadcast::Sender<()>,
+        audio_capture: Arc<dyn AudioCapture>,
     }
 
     impl WindowsPlatformService {
@@ -73,7 +80,13 @@ pub mod windows {
             Self {
                 registered_hotkey: std::sync::RwLock::new(None),
                 hotkey_tx,
+                audio_capture: Arc::new(CpalAudioCapture::new()),
             }
+        }
+
+        pub fn with_audio_capture(mut self, audio: Arc<dyn AudioCapture>) -> Self {
+            self.audio_capture = audio;
+            self
         }
     }
 
@@ -115,7 +128,7 @@ pub mod windows {
             PermissionStatus {
                 accessibility: true,
                 screen_recording: true,
-                microphone: true,
+                microphone: self.audio_capture.is_microphone_available(),
             }
         }
 
@@ -124,8 +137,11 @@ pub mod windows {
         }
 
         async fn is_microphone_available(&self) -> bool {
-            // Check for audio input endpoint availability; fallback to true on standard Windows desktop
-            true
+            self.audio_capture.is_microphone_available()
+        }
+
+        fn audio_capture(&self) -> Arc<dyn AudioCapture> {
+            self.audio_capture.clone()
         }
     }
 }
@@ -137,6 +153,7 @@ pub mod macos {
     pub struct MacOsPlatformService {
         registered_hotkey: std::sync::RwLock<Option<String>>,
         hotkey_tx: broadcast::Sender<()>,
+        audio_capture: Arc<dyn AudioCapture>,
     }
 
     impl MacOsPlatformService {
@@ -145,6 +162,7 @@ pub mod macos {
             Self {
                 registered_hotkey: std::sync::RwLock::new(None),
                 hotkey_tx,
+                audio_capture: Arc::new(CpalAudioCapture::new()),
             }
         }
     }
@@ -187,7 +205,7 @@ pub mod macos {
             PermissionStatus {
                 accessibility: false,
                 screen_recording: false,
-                microphone: false,
+                microphone: self.audio_capture.is_microphone_available(),
             }
         }
 
@@ -196,7 +214,11 @@ pub mod macos {
         }
 
         async fn is_microphone_available(&self) -> bool {
-            false
+            self.audio_capture.is_microphone_available()
+        }
+
+        fn audio_capture(&self) -> Arc<dyn AudioCapture> {
+            self.audio_capture.clone()
         }
     }
 }
@@ -204,7 +226,7 @@ pub mod macos {
 /// Fallback / mock platform service for tests and cross-compilation environments.
 pub struct FallbackPlatformService {
     hotkey_tx: broadcast::Sender<()>,
-    mic_available: bool,
+    audio_capture: Arc<dyn AudioCapture>,
 }
 
 impl FallbackPlatformService {
@@ -212,12 +234,30 @@ impl FallbackPlatformService {
         let (hotkey_tx, _) = broadcast::channel(16);
         Self {
             hotkey_tx,
-            mic_available: false,
+            audio_capture: Arc::new(MockAudioCapture::new()),
         }
     }
 
     pub fn with_mic(mut self, available: bool) -> Self {
-        self.mic_available = available;
+        if !available {
+            struct DisabledMic;
+            impl AudioCapture for DisabledMic {
+                fn is_microphone_available(&self) -> bool { false }
+                fn start_recording(&self) -> Result<(), PlatformError> {
+                    Err(PlatformError::SystemApi("Microphone not available".to_string()))
+                }
+                fn stop_recording(&self) -> Result<Vec<u8>, PlatformError> { Ok(Vec::new()) }
+                fn is_recording(&self) -> bool { false }
+            }
+            self.audio_capture = Arc::new(DisabledMic);
+        } else {
+            self.audio_capture = Arc::new(MockAudioCapture::new());
+        }
+        self
+    }
+
+    pub fn with_audio_capture(mut self, audio: Arc<dyn AudioCapture>) -> Self {
+        self.audio_capture = audio;
         self
     }
 }
@@ -256,7 +296,7 @@ impl PlatformService for FallbackPlatformService {
         PermissionStatus {
             accessibility: true,
             screen_recording: true,
-            microphone: self.mic_available,
+            microphone: self.audio_capture.is_microphone_available(),
         }
     }
 
@@ -265,7 +305,11 @@ impl PlatformService for FallbackPlatformService {
     }
 
     async fn is_microphone_available(&self) -> bool {
-        self.mic_available
+        self.audio_capture.is_microphone_available()
+    }
+
+    fn audio_capture(&self) -> Arc<dyn AudioCapture> {
+        self.audio_capture.clone()
     }
 }
 
@@ -617,5 +661,20 @@ mod tests {
 
         let fallback_with_mic = FallbackPlatformService::new().with_mic(true);
         assert!(fallback_with_mic.is_microphone_available().await);
+    }
+
+    #[tokio::test]
+    async fn test_audio_recording_wav() {
+        let audio = MockAudioCapture::new();
+        assert!(audio.is_microphone_available());
+        assert!(!audio.is_recording());
+        audio.start_recording().unwrap();
+        assert!(audio.is_recording());
+        let wav_bytes = audio.stop_recording().unwrap();
+        assert!(!audio.is_recording());
+        assert!(wav_bytes.len() > 44);
+        // Validate standard RIFF and WAVE magic headers
+        assert_eq!(&wav_bytes[0..4], b"RIFF");
+        assert_eq!(&wav_bytes[8..12], b"WAVE");
     }
 }

@@ -97,7 +97,7 @@ fn main() {
         tracing::info!(model = %config.ai_provider.model, "Using configured OpenAI-compatible LLM provider");
         std::sync::Arc::new(assistant_providers::OpenAiLlmProvider::new(
             &config.ai_provider.base_url,
-            api_key,
+            api_key.clone(),
             &config.ai_provider.model,
         ))
     } else {
@@ -107,6 +107,20 @@ fn main() {
         ))
     };
 
+    let stt_provider: std::sync::Arc<dyn assistant_providers::SpeechToTextProvider> = if config.ai_provider.is_configured() {
+        tracing::info!("Using Whisper STT provider");
+        std::sync::Arc::new(assistant_providers::WhisperSttProvider::new(
+            &config.ai_provider.base_url,
+            api_key,
+        ))
+    } else {
+        tracing::info!("Using Mock STT provider (fallback)");
+        std::sync::Arc::new(assistant_providers::MockSttProvider::new(
+            "Open my browser and navigate to YouTube",
+        ))
+    };
+
+    let audio_capture = platform.audio_capture();
     let agent = std::sync::Arc::new(assistant_agent::Agent::new(provider, tools, memory));
 
     // 5. Launch GPUI desktop application
@@ -160,11 +174,15 @@ fn main() {
 
         let agent_clone = agent.clone();
         let config_clone = config.clone();
+        let audio_capture_clone = audio_capture.clone();
+        let stt_provider_clone = stt_provider.clone();
         let _window = cx.open_window(window_options, move |_window, cx| {
             cx.new(|cx| {
                 AssistantView::new(cx, mic_configured, mic_available)
                     .with_agent(agent_clone, cx)
                     .with_config(config_clone)
+                    .with_audio_capture(audio_capture_clone)
+                    .with_stt_provider(stt_provider_clone)
             })
         });
 

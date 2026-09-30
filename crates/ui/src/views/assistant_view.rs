@@ -53,6 +53,10 @@ pub struct AssistantView {
     pub activities: Vec<ActivityEntry>,
     pub latest_result: Option<String>,
     pub listening: bool,
+    pub audio_capture: Option<std::sync::Arc<dyn assistant_platform::AudioCapture>>,
+    pub stt_provider: Option<std::sync::Arc<dyn assistant_providers::SpeechToTextProvider>>,
+    pub is_transcribing: bool,
+    pub voice_error: Option<String>,
     pub theme: Theme,
     pub focus_handle: FocusHandle,
     pub agent: Option<std::sync::Arc<assistant_agent::Agent>>,
@@ -118,6 +122,10 @@ impl AssistantView {
             activities: Vec::new(),
             latest_result: None,
             listening: false,
+            audio_capture: None,
+            stt_provider: None,
+            is_transcribing: false,
+            voice_error: None,
             theme: Theme::from_config(&config),
             focus_handle,
             agent: None,
@@ -213,6 +221,16 @@ impl AssistantView {
         self
     }
 
+    pub fn with_audio_capture(mut self, capture: std::sync::Arc<dyn assistant_platform::AudioCapture>) -> Self {
+        self.audio_capture = Some(capture);
+        self
+    }
+
+    pub fn with_stt_provider(mut self, stt: std::sync::Arc<dyn assistant_providers::SpeechToTextProvider>) -> Self {
+        self.stt_provider = Some(stt);
+        self
+    }
+
     pub fn play_sound_feedback(&self, effect: SoundEffect) {
         if self.config.sound_enabled {
             play_sound(effect);
@@ -293,19 +311,147 @@ impl AssistantView {
     }
 
     pub fn toggle_voice(&mut self, _: &ToggleVoice, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.mic_configured || !self.mic_available {
-            tracing::warn!("Microphone is not configured or unavailable");
-            return;
-        }
-
-        self.listening = !self.listening;
         if self.listening {
+            // Stop recording & begin transcription
+            self.listening = false;
+            self.play_sound_feedback(SoundEffect::Select);
+
+            if let Some(ref capture) = self.audio_capture {
+                match capture.stop_recording() {
+                    Ok(wav_bytes) => {
+                        if wav_bytes.is_empty() {
+                            self.state = AgentState::Idle;
+                            self.voice_error = Some("No speech detected. Type your request instead.".to_string());
+                            cx.notify();
+                            return;
+                        }
+
+                        self.is_transcribing = true;
+                        self.state = AgentState::Processing {
+                            thought_summary: Some("Transcribing audio...".to_string()),
+                        };
+                        self.voice_error = None;
+                        cx.notify();
+
+                        let stt = self.stt_provider.clone();
+                        let agent = self.agent.clone();
+
+                        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                            let cx = cx.clone();
+                            async move {
+                                let result = if let Some(stt) = stt {
+                                    stt.transcribe_audio(&wav_bytes, 16000).await
+                                } else {
+                                    Err(assistant_providers::ProviderError::NotConfigured(
+                                        "Speech-to-text provider not configured".to_string(),
+                                    ))
+                                };
+
+                                let _ = cx.update(|cx| {
+                                    this.update(cx, |view, cx| {
+                                        view.is_transcribing = false;
+                                        match result {
+                                            Ok(transcript) => {
+                                                let text = transcript.trim().to_string();
+                                                if !text.is_empty() {
+                                                    view.voice_error = None;
+                                                    view.play_sound_feedback(SoundEffect::Success);
+                                                    if let Some(agent_arc) = agent {
+                                                        view.active_task = Some(text.clone());
+                                                        view.input_buffer.clear();
+                                                        view.mode = AssistantMode::Expanded;
+                                                        view.activities.clear();
+                                                        view.activities.push(ActivityEntry {
+                                                            step: 1,
+                                                            description: format!("Spoken prompt: \"{}\"", text),
+                                                            status: ActivityStatus::Done,
+                                                        });
+                                                        view.activities.push(ActivityEntry {
+                                                            step: 2,
+                                                            description: "Executing computer task".to_string(),
+                                                            status: ActivityStatus::Running,
+                                                        });
+                                                        view.state = AgentState::Processing {
+                                                            thought_summary: Some("Executing spoken request...".to_string()),
+                                                        };
+                                                        let prompt_text = text.clone();
+                                                        if let Some(handle) = crate::get_runtime_handle() {
+                                                            handle.spawn(async move {
+                                                                let _ = agent_arc.execute_task(&prompt_text).await;
+                                                            });
+                                                        } else {
+                                                            tokio::spawn(async move {
+                                                                let _ = agent_arc.execute_task(&prompt_text).await;
+                                                            });
+                                                        }
+                                                    } else {
+                                                        view.input_buffer = text;
+                                                        view.state = AgentState::Idle;
+                                                    }
+                                                } else {
+                                                    view.voice_error = Some(
+                                                        "No speech detected. Type your request instead.".to_string(),
+                                                    );
+                                                    view.state = AgentState::Idle;
+                                                    view.play_sound_feedback(SoundEffect::Error);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(error = %e, "Voice transcription failed");
+                                                view.voice_error = Some(format!(
+                                                    "Speech error: {}. You can type your request instead.",
+                                                    e
+                                                ));
+                                                view.state = AgentState::Idle;
+                                                view.play_sound_feedback(SoundEffect::Error);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })
+                                });
+                            }
+                        })
+                        .detach();
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to stop audio recording");
+                        self.state = AgentState::Idle;
+                        self.voice_error = Some(format!("Audio recording error: {}", e));
+                        self.play_sound_feedback(SoundEffect::Error);
+                        cx.notify();
+                    }
+                }
+            } else {
+                self.state = AgentState::Idle;
+                cx.notify();
+            }
+        } else {
+            // Start recording
+            if !self.mic_available || self.audio_capture.is_none() {
+                tracing::warn!("Microphone is not available or audio capture uninitialized");
+                self.voice_error =
+                    Some("Microphone unavailable. You can type your request directly.".to_string());
+                self.play_sound_feedback(SoundEffect::Error);
+                cx.notify();
+                return;
+            }
+
+            if let Some(ref capture) = self.audio_capture {
+                if let Err(e) = capture.start_recording() {
+                    tracing::error!(error = %e, "Failed to start audio recording");
+                    self.voice_error = Some(format!("Mic error: {}. Type your request directly.", e));
+                    self.play_sound_feedback(SoundEffect::Error);
+                    cx.notify();
+                    return;
+                }
+            }
+
+            self.listening = true;
+            self.voice_error = None;
             self.state = AgentState::Listening;
             self.play_sound_feedback(SoundEffect::Select);
-        } else if self.state == AgentState::Listening {
-            self.state = AgentState::Idle;
+            cx.notify();
         }
-        cx.notify();
     }
 
     pub fn close(&mut self, _: &CloseAssistant, window: &mut Window, cx: &mut Context<Self>) {
@@ -787,8 +933,14 @@ impl Render for AssistantView {
                 // COMPACT FLOATING BAR (When mic is active)
                 // ==========================================
                 let is_placeholder = self.input_buffer.is_empty();
-                let display_text = if is_placeholder {
-                    "Ask Function... (Alt+Space to focus, Tab to expand)".to_string()
+                let display_text = if self.listening {
+                    "Listening... Speak clearly (Press Ctrl+M or click REC to finish)".to_string()
+                } else if self.is_transcribing {
+                    "Transcribing speech with Whisper...".to_string()
+                } else if let Some(ref err) = self.voice_error {
+                    format!("Speech note: {} (Type request)", err)
+                } else if is_placeholder {
+                    "Ask Function... (Alt+Space to focus, Tab to expand, Ctrl+M for voice)".to_string()
                 } else {
                     self.input_buffer.clone()
                 };
@@ -881,6 +1033,11 @@ impl Render for AssistantView {
                                     .px_2()
                                     .py_1()
                                     .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|s| s.opacity(0.85))
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        this.toggle_voice(&ToggleVoice, window, cx);
+                                    }))
                                     .bg(if is_listening {
                                         theme.status_listening
                                     } else {
@@ -922,8 +1079,14 @@ impl Render for AssistantView {
                 // EXPANDED WORKSPACE VIEW (520px)
                 // ==========================================
                 let is_placeholder = self.input_buffer.is_empty();
-                let display_text = if is_placeholder {
-                    "Type a task or instruction for Function...".to_string()
+                let display_text = if self.listening {
+                    "Listening... Speak clearly (Press Ctrl+M to transcribe)".to_string()
+                } else if self.is_transcribing {
+                    "Transcribing speech with Whisper...".to_string()
+                } else if let Some(ref err) = self.voice_error {
+                    format!("Note: {} (Type request)", err)
+                } else if is_placeholder {
+                    "Type a task or press Ctrl+M for voice...".to_string()
                 } else {
                     self.input_buffer.clone()
                 };
