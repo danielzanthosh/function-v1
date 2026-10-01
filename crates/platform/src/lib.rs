@@ -452,8 +452,11 @@ pub mod macos {
 
             tracing::info!(shortcut, "Registering macOS global hotkey");
 
-            // Ensure Function is configured as an accessory application (not shown in Dock)
-            set_macos_activation_policy_accessory();
+            // Do not touch NSApplication here. GPUI must create its `GPUIApplication`
+            // subclass before any code asks AppKit for the shared application; otherwise
+            // AppKit creates a plain NSApplication and GPUI cannot store its platform
+            // state on its subclass. The accessory activation policy is applied from
+            // the GPUI launch callback in `function-app` instead.
 
             #[repr(C)]
             #[derive(Copy, Clone)]
