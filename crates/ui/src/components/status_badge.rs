@@ -1,7 +1,7 @@
 //! Status badge component displaying agent state with colored dot and label.
 
 use crate::theme::Theme;
-use assistant_agent::AgentState;
+use function_agent::AgentState;
 use gpui::prelude::*;
 use gpui::{div, px, IntoElement};
 

@@ -1,4 +1,4 @@
-//! Main assistant view supporting Compact, Spotlight, Expanded, and Settings modes.
+//! Main Function view supporting Compact, Spotlight, Expanded, and Settings modes.
 //!
 //! Recreates Flow Launcher features:
 //! - Curved borderless window with no title bar (16px corner radius)
@@ -10,7 +10,7 @@
 //! - In-app AI provider and API key configuration (`Ctrl+,` or `settings`)
 
 use crate::actions::{
-    CancelTask, ClearInput, CloseAssistant, SubmitRequest, ToggleExpanded, ToggleSpotlight,
+    CancelTask, ClearInput, CloseFunction, SubmitRequest, ToggleExpanded, ToggleSpotlight,
     ToggleTheme, ToggleVoice,
 };
 use crate::components::spotlight_bar::{get_launcher_items, LauncherAction};
@@ -20,9 +20,9 @@ use crate::components::{
 };
 use crate::theme::Theme;
 use crate::views::render_settings_view;
-use assistant_agent::AgentState;
-use assistant_config::AppConfig;
-use assistant_platform::{copy_to_clipboard, open_url, play_sound, SoundEffect};
+use function_agent::AgentState;
+use function_config::AppConfig;
+use function_platform::{copy_to_clipboard, open_url, play_sound, SoundEffect};
 use gpui::prelude::*;
 use gpui::{
     div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Size, Task,
@@ -30,9 +30,9 @@ use gpui::{
 };
 use std::time::Duration;
 
-/// Display mode for the assistant window.
+/// Display mode for the function window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssistantMode {
+pub enum FunctionMode {
     /// Compact floating bar with voice capability.
     Compact,
     /// Spotlight-like command bar (opened when mic is unconfigured or unavailable).
@@ -43,8 +43,11 @@ pub enum AssistantMode {
     Settings,
 }
 
-pub struct AssistantView {
-    pub mode: AssistantMode,
+// Aliases for backwards compatibility
+pub type AssistantMode = FunctionMode;
+
+pub struct FunctionView {
+    pub mode: FunctionMode,
     pub mic_configured: bool,
     pub mic_available: bool,
     pub input_buffer: String,
@@ -53,13 +56,13 @@ pub struct AssistantView {
     pub activities: Vec<ActivityEntry>,
     pub latest_result: Option<String>,
     pub listening: bool,
-    pub audio_capture: Option<std::sync::Arc<dyn assistant_platform::AudioCapture>>,
-    pub stt_provider: Option<std::sync::Arc<dyn assistant_providers::SpeechToTextProvider>>,
+    pub audio_capture: Option<std::sync::Arc<dyn function_platform::AudioCapture>>,
+    pub stt_provider: Option<std::sync::Arc<dyn function_providers::SpeechToTextProvider>>,
     pub is_transcribing: bool,
     pub voice_error: Option<String>,
     pub theme: Theme,
     pub focus_handle: FocusHandle,
-    pub agent: Option<std::sync::Arc<assistant_agent::Agent>>,
+    pub agent: Option<std::sync::Arc<function_agent::Agent>>,
     pub cursor_visible: bool,
     pub selected_index: usize,
     pub current_time: String,
@@ -76,14 +79,16 @@ pub struct AssistantView {
     pub settings_status_message: Option<String>,
 }
 
-impl AssistantView {
+pub type AssistantView = FunctionView;
+
+impl FunctionView {
     pub fn new(cx: &mut Context<Self>, mic_configured: bool, mic_available: bool) -> Self {
         let focus_handle = cx.focus_handle();
         // If microphone is not configured or unavailable, automatically launch in Spotlight mode
         let initial_mode = if !mic_configured || !mic_available {
-            AssistantMode::Spotlight
+            FunctionMode::Spotlight
         } else {
-            AssistantMode::Compact
+            FunctionMode::Compact
         };
 
         let config = AppConfig::load();
@@ -147,7 +152,7 @@ impl AssistantView {
 
     pub fn with_agent(
         mut self,
-        agent: std::sync::Arc<assistant_agent::Agent>,
+        agent: std::sync::Arc<function_agent::Agent>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut rx = agent.subscribe_state();
@@ -193,6 +198,15 @@ impl AssistantView {
                                     }
                                     view.play_sound_feedback(SoundEffect::Error);
                                 }
+                                AgentState::WaitingForConfirmation { action, .. } => {
+                                    view.state = state_clone.clone();
+                                    view.activities.push(ActivityEntry {
+                                        step: view.activities.len() + 1,
+                                        description: format!("Confirmation required for {}", action),
+                                        status: ActivityStatus::Running,
+                                    });
+                                    view.play_sound_feedback(SoundEffect::Error);
+                                }
                                 _ => {
                                     view.state = state_clone.clone();
                                 }
@@ -221,12 +235,12 @@ impl AssistantView {
         self
     }
 
-    pub fn with_audio_capture(mut self, capture: std::sync::Arc<dyn assistant_platform::AudioCapture>) -> Self {
+    pub fn with_audio_capture(mut self, capture: std::sync::Arc<dyn function_platform::AudioCapture>) -> Self {
         self.audio_capture = Some(capture);
         self
     }
 
-    pub fn with_stt_provider(mut self, stt: std::sync::Arc<dyn assistant_providers::SpeechToTextProvider>) -> Self {
+    pub fn with_stt_provider(mut self, stt: std::sync::Arc<dyn function_providers::SpeechToTextProvider>) -> Self {
         self.stt_provider = Some(stt);
         self
     }
@@ -244,19 +258,19 @@ impl AssistantView {
 
     pub fn target_window_size(&self) -> Size<gpui::Pixels> {
         match self.mode {
-            AssistantMode::Compact => Size {
+            FunctionMode::Compact => Size {
                 width: px(680.0),
                 height: px(56.0),
             },
-            AssistantMode::Spotlight => Size {
+            FunctionMode::Spotlight => Size {
                 width: px(620.0),
                 height: px(356.0),
             },
-            AssistantMode::Expanded => Size {
+            FunctionMode::Expanded => Size {
                 width: px(680.0),
                 height: px(520.0),
             },
-            AssistantMode::Settings => Size {
+            FunctionMode::Settings => Size {
                 width: px(620.0),
                 height: px(460.0),
             },
@@ -266,14 +280,14 @@ impl AssistantView {
     pub fn toggle_expanded(&mut self, _: &ToggleExpanded, window: &mut Window, cx: &mut Context<Self>) {
         self.play_sound_feedback(SoundEffect::Select);
         self.mode = match self.mode {
-            AssistantMode::Expanded => {
+            FunctionMode::Expanded => {
                 if !self.mic_configured || !self.mic_available {
-                    AssistantMode::Spotlight
+                    FunctionMode::Spotlight
                 } else {
-                    AssistantMode::Compact
+                    FunctionMode::Compact
                 }
             }
-            _ => AssistantMode::Expanded,
+            _ => FunctionMode::Expanded,
         };
         window.resize(self.target_window_size());
         cx.notify();
@@ -282,8 +296,8 @@ impl AssistantView {
     pub fn toggle_spotlight(&mut self, _: &ToggleSpotlight, window: &mut Window, cx: &mut Context<Self>) {
         self.play_sound_feedback(SoundEffect::Select);
         self.mode = match self.mode {
-            AssistantMode::Spotlight => AssistantMode::Compact,
-            _ => AssistantMode::Spotlight,
+            FunctionMode::Spotlight => FunctionMode::Compact,
+            _ => FunctionMode::Spotlight,
         };
         window.resize(self.target_window_size());
         cx.notify();
@@ -292,14 +306,14 @@ impl AssistantView {
     pub fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.play_sound_feedback(SoundEffect::Select);
         self.mode = match self.mode {
-            AssistantMode::Settings => {
+            FunctionMode::Settings => {
                 if !self.mic_configured || !self.mic_available {
-                    AssistantMode::Spotlight
+                    FunctionMode::Spotlight
                 } else {
-                    AssistantMode::Compact
+                    FunctionMode::Compact
                 }
             }
-            _ => AssistantMode::Settings,
+            _ => FunctionMode::Settings,
         };
         window.resize(self.target_window_size());
         cx.notify();
@@ -342,7 +356,7 @@ impl AssistantView {
                                 let result = if let Some(stt) = stt {
                                     stt.transcribe_audio(&wav_bytes, 16000).await
                                 } else {
-                                    Err(assistant_providers::ProviderError::NotConfigured(
+                                    Err(function_providers::ProviderError::NotConfigured(
                                         "Speech-to-text provider not configured".to_string(),
                                     ))
                                 };
@@ -359,7 +373,7 @@ impl AssistantView {
                                                     if let Some(agent_arc) = agent {
                                                         view.active_task = Some(text.clone());
                                                         view.input_buffer.clear();
-                                                        view.mode = AssistantMode::Expanded;
+                                                        view.mode = FunctionMode::Expanded;
                                                         view.activities.clear();
                                                         view.activities.push(ActivityEntry {
                                                             step: 1,
@@ -454,12 +468,12 @@ impl AssistantView {
         }
     }
 
-    pub fn close(&mut self, _: &CloseAssistant, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == AssistantMode::Expanded || self.mode == AssistantMode::Settings {
+    pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == FunctionMode::Expanded || self.mode == FunctionMode::Settings {
             self.mode = if !self.mic_configured || !self.mic_available {
-                AssistantMode::Spotlight
+                FunctionMode::Spotlight
             } else {
-                AssistantMode::Compact
+                FunctionMode::Compact
             };
             window.resize(self.target_window_size());
             self.play_sound_feedback(SoundEffect::Select);
@@ -470,11 +484,11 @@ impl AssistantView {
     pub fn cancel(&mut self, _: &CancelTask, window: &mut Window, cx: &mut Context<Self>) {
         if !self.input_buffer.is_empty() {
             self.input_buffer.clear();
-        } else if self.mode == AssistantMode::Expanded || self.mode == AssistantMode::Settings {
+        } else if self.mode == FunctionMode::Expanded || self.mode == FunctionMode::Settings {
             self.mode = if !self.mic_configured || !self.mic_available {
-                AssistantMode::Spotlight
+                FunctionMode::Spotlight
             } else {
-                AssistantMode::Compact
+                FunctionMode::Compact
             };
             window.resize(self.target_window_size());
         }
@@ -521,7 +535,7 @@ impl AssistantView {
                 });
                 self.input_buffer.clear();
                 self.active_task = Some(format!("Shell: {}", cmd));
-                self.mode = AssistantMode::Expanded;
+                self.mode = FunctionMode::Expanded;
                 window.resize(self.target_window_size());
 
                 self.activities.clear();
@@ -546,7 +560,7 @@ impl AssistantView {
                 cx.notify();
             }
             LauncherAction::OpenSettings => {
-                self.mode = AssistantMode::Settings;
+                self.mode = FunctionMode::Settings;
                 window.resize(self.target_window_size());
                 self.play_sound_feedback(SoundEffect::Select);
                 cx.notify();
@@ -570,7 +584,7 @@ impl AssistantView {
         self.cursor_visible = true;
 
         // Switch to expanded workspace to show execution progress
-        self.mode = AssistantMode::Expanded;
+        self.mode = FunctionMode::Expanded;
         window.resize(self.target_window_size());
 
         self.activities.clear();
@@ -633,15 +647,41 @@ impl AssistantView {
         let modifiers = event.keystroke.modifiers;
 
         // ==========================================
+        // SECURITY CONFIRMATION INTERCEPTOR
+        // ==========================================
+        if let AgentState::WaitingForConfirmation { action, .. } = &self.state {
+            match key {
+                "enter" | "y" => {
+                    self.play_sound_feedback(SoundEffect::Execute);
+                    let action_name = action.clone();
+                    self.state = AgentState::Acting {
+                        action_description: format!("Approved: {}", action_name),
+                    };
+                    self.latest_result = Some(format!("Action '{}' approved by user. Proceeding.", action_name));
+                    cx.notify();
+                    return;
+                }
+                "escape" | "n" => {
+                    self.play_sound_feedback(SoundEffect::Select);
+                    self.state = AgentState::Idle;
+                    self.latest_result = Some("Action denied by user. Operation canceled.".into());
+                    cx.notify();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // ==========================================
         // SETTINGS MODE KEY HANDLING
         // ==========================================
-        if self.mode == AssistantMode::Settings {
+        if self.mode == FunctionMode::Settings {
             match key {
                 "escape" => {
                     self.mode = if !self.mic_configured || !self.mic_available {
-                        AssistantMode::Spotlight
+                        FunctionMode::Spotlight
                     } else {
-                        AssistantMode::Compact
+                        FunctionMode::Compact
                     };
                     window.resize(self.target_window_size());
                     self.play_sound_feedback(SoundEffect::Select);
@@ -672,11 +712,11 @@ impl AssistantView {
                                 Some("Preferences saved to ~/.function/config.json".into());
                             self.play_sound_feedback(SoundEffect::Success);
                             let sz = self.target_window_size();
-                            assistant_platform::center_window_by_title(
+                            function_platform::center_window_by_title(
                                 "Function",
                                 f32::from(sz.width) as i32,
                                 f32::from(sz.height) as i32,
-                                self.config.window_position == assistant_config::WindowPositionMode::UpperThird,
+                                self.config.window_position == function_config::WindowPositionMode::UpperThird,
                             );
                         }
                         Err(e) => {
@@ -689,10 +729,10 @@ impl AssistantView {
                 }
                 "t" if modifiers.control => {
                     self.config.theme_style = match self.config.theme_style {
-                        assistant_config::ThemeStyle::CarbonDark => assistant_config::ThemeStyle::ObsidianOled,
-                        assistant_config::ThemeStyle::ObsidianOled => assistant_config::ThemeStyle::SlateMidnight,
-                        assistant_config::ThemeStyle::SlateMidnight => assistant_config::ThemeStyle::StudioLight,
-                        assistant_config::ThemeStyle::StudioLight => assistant_config::ThemeStyle::CarbonDark,
+                        function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
+                        function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
+                        function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
+                        function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::CarbonDark,
                     };
                     self.theme = Theme::from_config(&self.config);
                     self.play_sound_feedback(SoundEffect::Navigate);
@@ -701,11 +741,11 @@ impl AssistantView {
                 }
                 "a" if modifiers.control => {
                     self.config.accent_color = match self.config.accent_color {
-                        assistant_config::AccentColor::White => assistant_config::AccentColor::Cyan,
-                        assistant_config::AccentColor::Cyan => assistant_config::AccentColor::Emerald,
-                        assistant_config::AccentColor::Emerald => assistant_config::AccentColor::Violet,
-                        assistant_config::AccentColor::Violet => assistant_config::AccentColor::Amber,
-                        assistant_config::AccentColor::Amber => assistant_config::AccentColor::White,
+                        function_config::AccentColor::White => function_config::AccentColor::Cyan,
+                        function_config::AccentColor::Cyan => function_config::AccentColor::Emerald,
+                        function_config::AccentColor::Emerald => function_config::AccentColor::Violet,
+                        function_config::AccentColor::Violet => function_config::AccentColor::Amber,
+                        function_config::AccentColor::Amber => function_config::AccentColor::White,
                     };
                     self.theme = Theme::from_config(&self.config);
                     self.play_sound_feedback(SoundEffect::Navigate);
@@ -714,15 +754,15 @@ impl AssistantView {
                 }
                 "p" if modifiers.control => {
                     self.config.window_position = match self.config.window_position {
-                        assistant_config::WindowPositionMode::Center => assistant_config::WindowPositionMode::UpperThird,
-                        assistant_config::WindowPositionMode::UpperThird => assistant_config::WindowPositionMode::Center,
+                        function_config::WindowPositionMode::Center => function_config::WindowPositionMode::UpperThird,
+                        function_config::WindowPositionMode::UpperThird => function_config::WindowPositionMode::Center,
                     };
                     let sz = self.target_window_size();
-                    assistant_platform::center_window_by_title(
+                    function_platform::center_window_by_title(
                         "Function",
                         f32::from(sz.width) as i32,
                         f32::from(sz.height) as i32,
-                        self.config.window_position == assistant_config::WindowPositionMode::UpperThird,
+                        self.config.window_position == function_config::WindowPositionMode::UpperThird,
                     );
                     self.play_sound_feedback(SoundEffect::Navigate);
                     cx.notify();
@@ -759,7 +799,7 @@ impl AssistantView {
                     cx.notify();
                     return;
                 }
-                "m" if modifiers.control => {
+                "m" | "s" if modifiers.control => {
                     self.settings_sound_enabled = !self.settings_sound_enabled;
                     self.config.sound_enabled = self.settings_sound_enabled;
                     cx.notify();
@@ -870,14 +910,14 @@ impl AssistantView {
     }
 }
 
-impl Render for AssistantView {
+impl Render for FunctionView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let is_listening = self.listening;
         let mic_active = self.mic_configured && self.mic_available;
 
         match self.mode {
-            AssistantMode::Spotlight => {
+            FunctionMode::Spotlight => {
                 // ==========================================
                 // SPOTLIGHT COMMAND BAR (Flow Launcher Style)
                 // ==========================================
@@ -886,7 +926,7 @@ impl Render for AssistantView {
                     .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseAssistant, window, cx| this.close(a, window, cx)))
+                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
                     .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -902,7 +942,7 @@ impl Render for AssistantView {
                         &self.current_time,
                     ))
             }
-            AssistantMode::Settings => {
+            FunctionMode::Settings => {
                 // ==========================================
                 // SETTINGS VIEW (API Key & Provider Config)
                 // ==========================================
@@ -928,7 +968,7 @@ impl Render for AssistantView {
                         &theme,
                     ))
             }
-            AssistantMode::Compact => {
+            FunctionMode::Compact => {
                 // ==========================================
                 // COMPACT FLOATING BAR (When mic is active)
                 // ==========================================
@@ -950,7 +990,7 @@ impl Render for AssistantView {
                     .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseAssistant, window, cx| this.close(a, window, cx)))
+                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
                     .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)))
@@ -984,7 +1024,7 @@ impl Render for AssistantView {
                                     .flex_1()
                                     .child(
                                         div()
-                                            .text_sm()
+                                             .text_sm()
                                             .text_color(theme.text_primary)
                                             .child(display_text),
                                     )
@@ -1074,7 +1114,7 @@ impl Render for AssistantView {
                             ),
                     )
             }
-            AssistantMode::Expanded => {
+            FunctionMode::Expanded => {
                 // ==========================================
                 // EXPANDED WORKSPACE VIEW (520px)
                 // ==========================================
@@ -1096,7 +1136,7 @@ impl Render for AssistantView {
                     .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseAssistant, window, cx| this.close(a, window, cx)))
+                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
                     .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
                     .on_action(cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)))
@@ -1225,6 +1265,49 @@ impl Render for AssistantView {
                                     )
                                     .child(render_activity_list(&self.activities, &theme)),
                             )
+                            // Security Confirmation Alert (when action requires approval)
+                            .when(matches!(self.state, AgentState::WaitingForConfirmation { .. }), |parent| {
+                                if let AgentState::WaitingForConfirmation { action, details } = &self.state {
+                                    parent.child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(theme.surface_elevated)
+                                            .border_1()
+                                            .border_color(theme.status_error)
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::BOLD)
+                                                            .text_color(theme.status_error)
+                                                            .child(format!("CONFIRMATION REQUIRED: {}", action)),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(theme.text_muted)
+                                                            .child("Press Enter to approve, Esc to reject"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.text_secondary)
+                                                    .child(details.clone()),
+                                            ),
+                                    )
+                                } else {
+                                    parent
+                                }
+                            })
                             // Result Container Section
                             .child(
                                 div()

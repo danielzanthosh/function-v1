@@ -81,6 +81,12 @@ pub fn render_activity_list(activities: &[ActivityEntry], theme: &Theme) -> impl
                 )
                 .child(
                     div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_sm()
+                        .bg(theme.surface_base)
+                        .border_1()
+                        .border_color(theme.border_subtle)
                         .text_xs()
                         .text_color(status_color)
                         .child(status_text),

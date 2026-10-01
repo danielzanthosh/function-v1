@@ -1,4 +1,4 @@
-use assistant_config::{AccentColor, AppConfig, ThemeStyle};
+use function_config::{AccentColor, AppConfig, ThemeStyle};
 use gpui::{rgb, Rgba};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +42,15 @@ pub struct Theme {
 
 impl Theme {
     pub fn from_config(config: &AppConfig) -> Self {
+        let is_light = config.theme_style == ThemeStyle::StudioLight;
         let accent = match config.accent_color {
-            AccentColor::White => rgb(0xffffff),
+            AccentColor::White => {
+                if is_light {
+                    rgb(0x111111)
+                } else {
+                    rgb(0xffffff)
+                }
+            }
             AccentColor::Cyan => rgb(0x0ea5e9),
             AccentColor::Emerald => rgb(0x10b981),
             AccentColor::Violet => rgb(0x8b5cf6),

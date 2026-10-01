@@ -29,8 +29,8 @@ Use GPUI actions for keyboard-first interaction.
 
 Important actions may include:
 
-- OpenAssistant
-- CloseAssistant
+- OpenFunction (alias OpenAssistant)
+- CloseFunction (alias CloseAssistant)
 - SubmitRequest
 - CancelTask
 - ToggleExpanded

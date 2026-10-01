@@ -10,12 +10,26 @@ impl TerminalTool {
         Self
     }
 
+    fn is_restricted_command(cmd: &str) -> bool {
+        let lower = cmd.to_lowercase();
+        lower.contains("format ")
+            || lower.contains("diskpart")
+            || lower.contains("rm -rf /")
+            || lower.contains("rmdir /s /q c:\\")
+            || lower.contains(":(){ :|:& };:")
+    }
+
     fn is_destructive_command(cmd: &str) -> bool {
         let lower = cmd.to_lowercase();
         lower.contains("rmdir")
             || lower.contains("rm -rf")
-            || lower.contains("format ")
-            || lower.contains("del /f")
+            || lower.contains("del ")
+            || lower.contains("remove-item")
+            || lower.contains("reg delete")
+            || lower.contains("shutdown")
+            || lower.contains("stop-computer")
+            || lower.contains("kill -9")
+            || lower.contains("taskkill /f")
             || lower.contains("drop database")
     }
 }
@@ -49,6 +63,15 @@ impl Tool for TerminalTool {
 
     fn requires_confirmation(&self) -> bool {
         true
+    }
+
+    fn permission_level(&self, params: &serde_json::Value) -> crate::ToolPermissionLevel {
+        let command = params.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        if Self::is_restricted_command(command) {
+            crate::ToolPermissionLevel::Restricted
+        } else {
+            crate::ToolPermissionLevel::Confirm
+        }
     }
 
     async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> Result<ToolResult, ToolError> {

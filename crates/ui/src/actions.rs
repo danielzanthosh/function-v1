@@ -1,12 +1,12 @@
-//! Keyboard-first action bindings for the assistant interface.
+//! Keyboard-first action bindings for the function interface.
 
 use gpui::actions;
 
 actions!(
-    assistant,
+    function,
     [
-        OpenAssistant,
-        CloseAssistant,
+        OpenFunction,
+        CloseFunction,
         SubmitRequest,
         CancelTask,
         ToggleExpanded,
@@ -17,3 +17,7 @@ actions!(
         ToggleSpotlight
     ]
 );
+
+// Backward-compatibility aliases
+pub type OpenAssistant = OpenFunction;
+pub type CloseAssistant = CloseFunction;

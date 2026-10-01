@@ -317,4 +317,45 @@ mod tests {
         assert!(!deserialized.sound_enabled);
         assert_eq!(deserialized.ai_provider.api_key.as_deref(), Some("test-key"));
     }
+
+    #[test]
+    fn test_redact_secrets() {
+        let input = "Calling OpenAI API with Authorization: Bearer sk-abcdef1234567890xyz and token test";
+        let redacted = redact_secrets(input);
+        assert!(!redacted.contains("sk-abcdef1234567890xyz"));
+        assert!(redacted.contains("[REDACTED_API_KEY]"));
+    }
 }
+
+/// Redact sensitive API keys, authorization tokens, and credentials from text strings before logging.
+pub fn redact_secrets(input: &str) -> String {
+    let mut output = input.to_string();
+
+    // Redact sk-... OpenAI keys
+    let mut idx = 0;
+    while let Some(start) = output[idx..].find("sk-") {
+        let actual_start = idx + start;
+        let mut end = actual_start + 3;
+        while end < output.len() {
+            let b = output.as_bytes()[end];
+            if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if end - actual_start >= 8 {
+            let key = output[actual_start..end].to_string();
+            output = output.replace(&key, "[REDACTED_API_KEY]");
+            idx = actual_start + "[REDACTED_API_KEY]".len();
+        } else {
+            idx = end;
+        }
+        if idx >= output.len() {
+            break;
+        }
+    }
+
+    output
+}
+

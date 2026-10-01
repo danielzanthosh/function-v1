@@ -31,11 +31,11 @@ cpal = "0.18.2"
 hound = "3.5.1"
 
 # Internal workspace crates
-assistant-app = { path = "crates/app" }
-assistant-ui = { path = "crates/ui" }
-assistant-agent = { path = "crates/agent" }
-assistant-memory = { path = "crates/memory" }
-assistant-tools = { path = "crates/tools" }
-assistant-providers = { path = "crates/providers" }
-assistant-platform = { path = "crates/platform" }
-assistant-config = { path = "crates/config" }
+function-app = { path = "crates/app" }
+function-ui = { path = "crates/ui" }
+function-agent = { path = "crates/agent" }
+function-memory = { path = "crates/memory" }
+function-tools = { path = "crates/tools" }
+function-providers = { path = "crates/providers" }
+function-platform = { path = "crates/platform" }
+function-config = { path = "crates/config" }

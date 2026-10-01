@@ -1,11 +1,11 @@
 [package]
-name = "assistant-memory"
+name = "function-memory"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-assistant-config.workspace = true
+function-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

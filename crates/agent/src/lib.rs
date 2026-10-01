@@ -4,9 +4,9 @@
 //! into structured tool calls, observes real system feedback, and reports state
 //! changes cleanly to the UI layer without coupling to visual views.
 
-use assistant_memory::MemoryStore;
-use assistant_providers::{ChatMessage, CompletionRequest, LlmProvider, ToolDefinition};
-use assistant_tools::{ToolContext, ToolRegistry, ToolResult};
+use function_memory::MemoryStore;
+use function_providers::{ChatMessage, CompletionRequest, LlmProvider, ToolDefinition};
+use function_tools::{ToolContext, ToolRegistry, ToolResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -162,6 +162,16 @@ impl Agent {
 
                     let result = match self.tools.execute(&call.name, call.arguments.clone(), &ctx).await {
                         Ok(res) => res,
+                        Err(function_tools::ToolError::RequiresConfirmation) => {
+                            self.update_state(AgentState::WaitingForConfirmation {
+                                action: call.name.clone(),
+                                details: format!("{}", call.arguments),
+                            });
+                            ToolResult::failure(
+                                format!("Action '{}' requires user confirmation", call.name),
+                                "Action paused: Operation requires explicit user confirmation before executing.",
+                            )
+                        }
                         Err(e) => ToolResult::failure(format!("Failed to run {}", call.name), e.to_string()),
                     };
 
@@ -199,8 +209,8 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use assistant_memory::InMemoryMemoryStore;
-    use assistant_providers::MockLlmProvider;
+    use function_memory::InMemoryMemoryStore;
+    use function_providers::MockLlmProvider;
 
     #[tokio::test]
     async fn test_agent_execution() {

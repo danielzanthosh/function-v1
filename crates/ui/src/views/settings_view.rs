@@ -10,7 +10,7 @@
 
 use crate::components::render_logo;
 use crate::theme::Theme;
-use assistant_config::{AccentColor, ThemeStyle, WindowPositionMode};
+use function_config::{AccentColor, ThemeStyle, WindowPositionMode};
 use gpui::prelude::*;
 use gpui::{div, px, rgba, IntoElement};
 
@@ -156,13 +156,13 @@ pub fn render_settings_view(
                                         } else {
                                             text_secondary
                                         })
-                                        .child("AI PROVIDER API KEY (Press Tab to navigate)"),
+                                        .child("AI PROVIDER API KEY (Tab to switch field, Ctrl+H to mask/reveal)"),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(if show_key { accent_col } else { text_muted })
-                                        .child(if show_key { "[Mask Key]" } else { "[Show Key]" }),
+                                        .child(if show_key { "[Ctrl+H: Masked]" } else { "[Ctrl+H: Revealed]" }),
                                 ),
                         )
                         .child(
@@ -338,7 +338,7 @@ pub fn render_settings_view(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("Press T to cycle theme | Press A to cycle accent"),
+                                        .child("Ctrl+T: Cycle theme | Ctrl+A: Cycle accent"),
                                 ),
                         )
                         .child(
@@ -409,7 +409,7 @@ pub fn render_settings_view(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("Press P to toggle position | Press S to toggle audio"),
+                                        .child("Ctrl+P: Toggle position | Ctrl+S: Toggle sound"),
                                 ),
                         )
                         .child(

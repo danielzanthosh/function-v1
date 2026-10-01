@@ -1,5 +1,5 @@
 [package]
-name = "assistant-ui"
+name = "function-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,10 @@ test = false
 
 [dependencies]
 gpui.workspace = true
-assistant-agent.workspace = true
-assistant-config.workspace = true
-assistant-platform.workspace = true
-assistant-providers.workspace = true
+function-agent.workspace = true
+function-config.workspace = true
+function-platform.workspace = true
+function-providers.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

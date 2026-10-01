@@ -73,7 +73,7 @@ impl Tool for BrowserTool {
 
         match action {
             "open" | "navigate" => {
-                assistant_platform::open_url(&safe_url);
+                function_platform::open_url(&safe_url);
                 Ok(ToolResult::success(
                     format!("Opened URL: {}", safe_url),
                     json!({ "status": "opened", "url": safe_url }),

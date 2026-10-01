@@ -1,11 +1,11 @@
 [package]
-name = "assistant-platform"
+name = "function-platform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-assistant-config.workspace = true
+function-config.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

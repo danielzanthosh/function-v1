@@ -1,14 +1,14 @@
 [package]
-name = "assistant-agent"
+name = "function-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-assistant-config.workspace = true
-assistant-providers.workspace = true
-assistant-tools.workspace = true
-assistant-memory.workspace = true
+function-config.workspace = true
+function-providers.workspace = true
+function-tools.workspace = true
+function-memory.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

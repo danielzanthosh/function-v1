@@ -10,6 +10,15 @@ impl FileTool {
     pub fn new() -> Self {
         Self
     }
+    fn is_system_path(path_str: &str) -> bool {
+        let lower = path_str.to_lowercase();
+        lower.contains(r"windows\system32")
+            || lower.contains("/system32")
+            || lower.contains("/etc/")
+            || lower.contains("/bin/")
+            || lower.contains("/usr/bin")
+            || lower.contains(r"windows\regedit")
+    }
 }
 
 impl Default for FileTool {
@@ -25,7 +34,7 @@ impl Tool for FileTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect, read, write, or list local files and directories."
+        "Inspect, read, write, list, move, or delete local files and directories."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -34,18 +43,33 @@ impl Tool for FileTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "list", "exists"]
+                    "enum": ["read", "write", "list", "exists", "delete", "move"],
+                    "description": "File operation to perform"
                 },
                 "path": { "type": "string", "description": "Absolute or relative file path" },
-                "content": { "type": "string", "description": "Content to write when action is 'write'" }
+                "content": { "type": "string", "description": "Content to write when action is 'write'" },
+                "destination": { "type": "string", "description": "Target destination path when action is 'move'" }
             },
             "required": ["action", "path"]
         })
     }
 
     fn requires_confirmation(&self) -> bool {
-        // By default, writing files might require confirmation if not in temp/workspace
         false
+    }
+
+    fn permission_level(&self, params: &serde_json::Value) -> crate::ToolPermissionLevel {
+        let path_str = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if Self::is_system_path(path_str) {
+            return crate::ToolPermissionLevel::Restricted;
+        }
+
+        let action = params.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        if action == "delete" || action == "move" {
+            crate::ToolPermissionLevel::Confirm
+        } else {
+            crate::ToolPermissionLevel::Safe
+        }
     }
 
     async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
@@ -63,6 +87,13 @@ impl Tool for FileTool {
             }
         })?;
 
+        if Self::is_system_path(path_str) {
+            return Err(ToolError::ExecutionFailed {
+                tool: self.name().into(),
+                details: format!("Access to critical system path '{}' is restricted.", path_str),
+            });
+        }
+
         let target_path = Path::new(path_str);
 
         match action {
@@ -78,9 +109,6 @@ impl Tool for FileTool {
                 ))
             }
             "write" => {
-                if !ctx.allow_sensitive && target_path.exists() {
-                    // Check if overwrite might be sensitive
-                }
                 let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 if let Some(parent) = target_path.parent() {
                     let _ = fs::create_dir_all(parent);
@@ -115,6 +143,46 @@ impl Tool for FileTool {
                 Ok(ToolResult::success(
                     format!("Path '{}' exists: {}", path_str, exists),
                     json!({ "path": path_str, "exists": exists }),
+                ))
+            }
+            "delete" => {
+                if !ctx.allow_sensitive {
+                    return Err(ToolError::RequiresConfirmation);
+                }
+                if target_path.is_dir() {
+                    fs::remove_dir_all(target_path).map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: format!("Failed to delete directory '{}': {}", path_str, e),
+                    })?;
+                } else {
+                    fs::remove_file(target_path).map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: format!("Failed to delete file '{}': {}", path_str, e),
+                    })?;
+                }
+                Ok(ToolResult::success(
+                    format!("Deleted '{}'", path_str),
+                    json!({ "path": path_str, "status": "deleted" }),
+                ))
+            }
+            "move" => {
+                if !ctx.allow_sensitive {
+                    return Err(ToolError::RequiresConfirmation);
+                }
+                let dest_str = params.get("destination").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::InvalidParameters {
+                        tool: self.name().into(),
+                        details: "Missing 'destination' parameter for action 'move'".into(),
+                    }
+                })?;
+                let dest_path = Path::new(dest_str);
+                fs::rename(target_path, dest_path).map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: format!("Failed to move '{}' to '{}': {}", path_str, dest_str, e),
+                })?;
+                Ok(ToolResult::success(
+                    format!("Moved '{}' to '{}'", path_str, dest_str),
+                    json!({ "source": path_str, "destination": dest_str }),
                 ))
             }
             other => Err(ToolError::InvalidParameters {

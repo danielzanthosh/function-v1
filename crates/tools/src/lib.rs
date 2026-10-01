@@ -62,6 +62,18 @@ pub struct ToolContext {
     pub allow_sensitive: bool,
 }
 
+/// Tool permission category per docs/10-TOOLS.md and docs/16-SECURITY.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ToolPermissionLevel {
+    /// Safe to execute without user intervention.
+    #[default]
+    Safe,
+    /// Potentially sensitive action requiring explicit user confirmation.
+    Confirm,
+    /// Restricted action completely prohibited from automated execution.
+    Restricted,
+}
+
 /// Core trait implemented by all controlled computer tools.
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -77,6 +89,15 @@ pub trait Tool: Send + Sync {
     /// Whether this tool modifies critical state and requires explicit user confirmation.
     fn requires_confirmation(&self) -> bool {
         false
+    }
+
+    /// Return the permission level for this specific invocation.
+    fn permission_level(&self, _params: &serde_json::Value) -> ToolPermissionLevel {
+        if self.requires_confirmation() {
+            ToolPermissionLevel::Confirm
+        } else {
+            ToolPermissionLevel::Safe
+        }
     }
 
     /// Execute the tool action with the supplied parameters.
@@ -111,7 +132,7 @@ impl ToolRegistry {
         self.tools.values().cloned().collect()
     }
 
-    /// Execute a tool by name with parameters.
+    /// Execute a tool by name with parameters and permission enforcement.
     pub async fn execute(
         &self,
         name: &str,
@@ -119,7 +140,14 @@ impl ToolRegistry {
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
         let tool = self.get(name).ok_or_else(|| ToolError::NotFound(name.to_string()))?;
-        if tool.requires_confirmation() && !ctx.allow_sensitive {
+        let level = tool.permission_level(&params);
+        if level == ToolPermissionLevel::Restricted {
+            return Err(ToolError::ExecutionFailed {
+                tool: name.to_string(),
+                details: "Action is classified as RESTRICTED and prohibited from automated execution.".into(),
+            });
+        }
+        if (level == ToolPermissionLevel::Confirm || tool.requires_confirmation()) && !ctx.allow_sensitive {
             return Err(ToolError::RequiresConfirmation);
         }
         tool.execute(params, ctx).await
@@ -189,5 +217,44 @@ mod tests {
             .await
             .unwrap();
         assert!(res.success);
+    }
+
+    #[tokio::test]
+    async fn test_security_permission_levels() {
+        let mut registry = ToolRegistry::new();
+        register_default_tools(&mut registry);
+
+        // 1. Restricted command must be blocked immediately
+        let restricted_res = registry
+            .execute(
+                "computer_terminal",
+                serde_json::json!({ "command": "format c: /fs:ntfs" }),
+                &ToolContext { session_id: "s1".into(), allow_sensitive: true },
+            )
+            .await;
+        assert!(restricted_res.is_err());
+        assert!(matches!(restricted_res.unwrap_err(), ToolError::ExecutionFailed { .. }));
+
+        // 2. Sensitive command requires confirmation
+        let confirm_res = registry
+            .execute(
+                "computer_terminal",
+                serde_json::json!({ "command": "dir" }),
+                &ToolContext { session_id: "s1".into(), allow_sensitive: false },
+            )
+            .await;
+        assert!(confirm_res.is_err());
+        assert!(matches!(confirm_res.unwrap_err(), ToolError::RequiresConfirmation));
+
+        // 3. File delete requires confirmation
+        let del_res = registry
+            .execute(
+                "computer_files",
+                serde_json::json!({ "action": "delete", "path": "test.tmp" }),
+                &ToolContext { session_id: "s1".into(), allow_sensitive: false },
+            )
+            .await;
+        assert!(del_res.is_err());
+        assert!(matches!(del_res.unwrap_err(), ToolError::RequiresConfirmation));
     }
 }

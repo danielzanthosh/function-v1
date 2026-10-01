@@ -10,7 +10,7 @@ pub mod views;
 pub use actions::*;
 pub use components::*;
 pub use theme::{Theme, ThemeMode};
-pub use views::{AssistantMode, AssistantView};
+pub use views::{AssistantMode, AssistantView, FunctionMode, FunctionView};
 
 use std::sync::OnceLock;
 

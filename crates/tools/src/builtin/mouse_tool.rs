@@ -1,5 +1,5 @@
 use crate::{Tool, ToolContext, ToolError, ToolResult};
-use assistant_platform::{create_computer_control, ComputerControl, MouseButton};
+use function_platform::{create_computer_control, ComputerControl, MouseButton};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;

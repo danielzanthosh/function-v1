@@ -141,118 +141,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "assistant-agent"
-version = "0.1.0"
-dependencies = [
- "assistant-config",
- "assistant-memory",
- "assistant-providers",
- "assistant-tools",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "assistant-app"
-version = "0.1.0"
-dependencies = [
- "assistant-agent",
- "assistant-config",
- "assistant-memory",
- "assistant-platform",
- "assistant-providers",
- "assistant-tools",
- "assistant-ui",
- "gpui",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "assistant-config"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "assistant-memory"
-version = "0.1.0"
-dependencies = [
- "assistant-config",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "assistant-platform"
-version = "0.1.0"
-dependencies = [
- "assistant-config",
- "async-trait",
- "cpal",
- "hound",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "assistant-providers"
-version = "0.1.0"
-dependencies = [
- "assistant-config",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "assistant-tools"
-version = "0.1.0"
-dependencies = [
- "assistant-config",
- "assistant-platform",
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "assistant-ui"
-version = "0.1.0"
-dependencies = [
- "assistant-agent",
- "assistant-config",
- "assistant-platform",
- "assistant-providers",
- "gpui",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1697,6 +1585,118 @@ dependencies = [
  "cc",
  "libc",
  "pkg-config",
+]
+
+[[package]]
+name = "function-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "function-config",
+ "function-memory",
+ "function-providers",
+ "function-tools",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "function-app"
+version = "0.1.0"
+dependencies = [
+ "function-agent",
+ "function-config",
+ "function-memory",
+ "function-platform",
+ "function-providers",
+ "function-tools",
+ "function-ui",
+ "gpui",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "function-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "function-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "function-config",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "function-platform"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cpal",
+ "function-config",
+ "hound",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "function-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "function-config",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "function-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "function-config",
+ "function-platform",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "function-ui"
+version = "0.1.0"
+dependencies = [
+ "function-agent",
+ "function-config",
+ "function-platform",
+ "function-providers",
+ "gpui",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
