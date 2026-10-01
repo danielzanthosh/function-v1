@@ -73,6 +73,7 @@ pub struct FunctionView {
     pub current_time: String,
     pub _cursor_task: Option<Task<()>>,
     pub _agent_sub_task: Option<Task<()>>,
+    pub _activation_sub: Option<gpui::Subscription>,
     // Configuration & Settings State
     pub config: AppConfig,
     pub settings_api_key: String,
@@ -142,6 +143,7 @@ impl FunctionView {
             current_time: get_current_time_string(),
             _cursor_task: Some(cursor_task),
             _agent_sub_task: None,
+            _activation_sub: None,
             config,
             settings_api_key,
             settings_model,
@@ -151,6 +153,19 @@ impl FunctionView {
             settings_focused_field: 0,
             settings_status_message: None,
         }
+    }
+
+    pub fn observe_activation(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut activated_once = false;
+        let _sub = cx.observe_window_activation(window, move |this, window, cx| {
+            if window.is_window_active() {
+                activated_once = true;
+            } else if activated_once && this.is_visible {
+                this.dismiss(window, cx);
+            }
+        });
+        self._activation_sub = Some(_sub);
+        self
     }
 
     pub fn with_agent(
@@ -506,42 +521,11 @@ impl FunctionView {
     }
 
     pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == FunctionMode::Settings {
-            self.mode = FunctionMode::Command;
-            window.resize(self.target_window_size());
-            self.play_sound_feedback(SoundEffect::Select);
-            cx.notify();
-        } else if !self.input_buffer.is_empty() {
-            self.input_buffer.clear();
-            self.selected_index = 0;
-            window.resize(self.target_window_size());
-            cx.notify();
-        } else if self.latest_result.is_some() || self.active_task.is_some() {
-            self.latest_result = None;
-            self.active_task = None;
-            self.state = AgentState::Idle;
-            window.resize(self.target_window_size());
-            cx.notify();
-        } else {
-            self.dismiss(window, cx);
-        }
+        self.dismiss(window, cx);
     }
 
     pub fn cancel(&mut self, _: &CancelTask, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.input_buffer.is_empty() {
-            self.input_buffer.clear();
-        }
-        if self.mode == FunctionMode::Settings {
-            self.mode = FunctionMode::Command;
-        }
-        self.state = AgentState::Idle;
-        self.listening = false;
-        self.cursor_visible = true;
-        self.latest_result = None;
-        self.active_task = None;
-        self.play_sound_feedback(SoundEffect::Select);
-        window.resize(self.target_window_size());
-        cx.notify();
+        self.dismiss(window, cx);
     }
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {

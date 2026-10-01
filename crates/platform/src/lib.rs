@@ -67,26 +67,66 @@ pub trait PlatformService: Send + Sync {
 #[cfg(target_os = "windows")]
 pub mod windows {
     use super::*;
+    use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+    use std::sync::{Arc, RwLock};
 
     pub struct WindowsPlatformService {
-        registered_hotkey: std::sync::RwLock<Option<String>>,
+        registered_hotkey: Arc<RwLock<Option<String>>>,
         hotkey_tx: broadcast::Sender<()>,
         audio_capture: Arc<dyn AudioCapture>,
+        worker_thread_id: Arc<AtomicU32>,
+        worker_hwnd: Arc<AtomicIsize>,
     }
 
     impl WindowsPlatformService {
         pub fn new() -> Self {
             let (hotkey_tx, _) = broadcast::channel(16);
             Self {
-                registered_hotkey: std::sync::RwLock::new(None),
+                registered_hotkey: Arc::new(RwLock::new(None)),
                 hotkey_tx,
                 audio_capture: Arc::new(CpalAudioCapture::new()),
+                worker_thread_id: Arc::new(AtomicU32::new(0)),
+                worker_hwnd: Arc::new(AtomicIsize::new(0)),
             }
         }
 
         pub fn with_audio_capture(mut self, audio: Arc<dyn AudioCapture>) -> Self {
             self.audio_capture = audio;
             self
+        }
+
+        fn cleanup_hotkey_sync(&self) {
+            let thread_id = self.worker_thread_id.swap(0, Ordering::SeqCst);
+            let hwnd = self.worker_hwnd.swap(0, Ordering::SeqCst);
+            if hwnd != 0 {
+                unsafe {
+                    extern "system" {
+                        fn PostMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize)
+                            -> i32;
+                    }
+                    const WM_CLOSE: u32 = 0x0010;
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                }
+            } else if thread_id != 0 {
+                unsafe {
+                    extern "system" {
+                        fn PostThreadMessageW(
+                            idThread: u32,
+                            Msg: u32,
+                            wParam: usize,
+                            lParam: isize,
+                        ) -> i32;
+                    }
+                    const WM_QUIT: u32 = 0x0012;
+                    PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
+                }
+            }
+        }
+    }
+
+    impl Drop for WindowsPlatformService {
+        fn drop(&mut self) {
+            self.cleanup_hotkey_sync();
         }
     }
 
@@ -103,12 +143,26 @@ pub mod windows {
         }
 
         async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError> {
-            tracing::info!(shortcut, "Registering Windows global hotkey");
-            let mut current = self.registered_hotkey.write().unwrap();
-            *current = Some(shortcut.to_string());
+            {
+                let mut current = self.registered_hotkey.write().unwrap();
+                if let Some(ref existing) = *current {
+                    if existing == shortcut {
+                        tracing::info!(
+                            shortcut,
+                            "Hotkey already registered, skipping duplicate registration"
+                        );
+                        return Ok(());
+                    }
+                    self.cleanup_hotkey_sync();
+                }
+                *current = Some(shortcut.to_string());
+            }
 
+            tracing::info!(shortcut, "Registering Windows global hotkey");
             let tx = self.hotkey_tx.clone();
             let sc = shortcut.to_string();
+            let worker_thread_id = self.worker_thread_id.clone();
+            let worker_hwnd = self.worker_hwnd.clone();
 
             std::thread::spawn(move || {
                 #[repr(C)]
@@ -127,8 +181,32 @@ pub mod windows {
                     pt: Point,
                 }
 
+                #[repr(C)]
+                struct NotifyIconDataW {
+                    cb_size: u32,
+                    hwnd: isize,
+                    uid: u32,
+                    uflags: u32,
+                    ucallback_message: u32,
+                    hicon: isize,
+                    sztip: [u16; 128],
+                    dwstate: u32,
+                    dwstatemask: u32,
+                    szinfo: [u16; 256],
+                    utimeout_or_version: u32,
+                    szinfotitle: [u16; 64],
+                    dwinfoflags: u32,
+                    guiditem: [u8; 16],
+                    hballoonicon: isize,
+                }
+
+                type PfnShellNotifyIconW =
+                    unsafe extern "system" fn(u32, *const NotifyIconDataW) -> i32;
+
                 extern "system" {
+                    fn GetCurrentThreadId() -> u32;
                     fn RegisterHotKey(hWnd: isize, id: i32, fsModifiers: u32, vk: u32) -> i32;
+                    fn UnregisterHotKey(hWnd: isize, id: i32) -> i32;
                     fn GetMessageW(
                         lpMsg: *mut Msg,
                         hWnd: isize,
@@ -137,14 +215,30 @@ pub mod windows {
                     ) -> i32;
                     fn TranslateMessage(lpMsg: *const Msg) -> i32;
                     fn DispatchMessageW(lpMsg: *const Msg) -> isize;
+                    fn LoadIconW(hInstance: isize, lpIconName: isize) -> isize;
+                    fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
+                    fn GetProcAddress(hModule: isize, lpProcName: *const u8) -> *const ();
+                    fn GetLastError() -> u32;
                 }
 
                 const MOD_ALT: u32 = 0x0001;
                 const MOD_CONTROL: u32 = 0x0002;
                 const MOD_SHIFT: u32 = 0x0004;
+                const MOD_WIN: u32 = 0x0008;
                 const MOD_NOREPEAT: u32 = 0x4000;
                 const VK_SPACE: u32 = 0x20;
                 const WM_HOTKEY: u32 = 0x0312;
+                const WM_USER: u32 = 0x0400;
+                const WM_TRAYICON: u32 = WM_USER + 101;
+                const NIM_ADD: u32 = 0x00000000;
+                const NIM_DELETE: u32 = 0x00000002;
+                const NIF_MESSAGE: u32 = 0x00000001;
+                const NIF_ICON: u32 = 0x00000002;
+                const NIF_TIP: u32 = 0x00000004;
+                const IDI_APPLICATION: isize = 32512;
+
+                let tid = unsafe { GetCurrentThreadId() };
+                worker_thread_id.store(tid, Ordering::SeqCst);
 
                 let mut mods = MOD_NOREPEAT;
                 let sc_upper = sc.to_uppercase();
@@ -157,21 +251,80 @@ pub mod windows {
                 if sc_upper.contains("SHIFT") {
                     mods |= MOD_SHIFT;
                 }
+                if sc_upper.contains("WIN") || sc_upper.contains("SUPER") {
+                    mods |= MOD_WIN;
+                }
 
                 unsafe {
-                    let res = RegisterHotKey(0, 101, mods, VK_SPACE);
-                    if res == 0 {
-                        let _ = RegisterHotKey(0, 101, mods & !MOD_NOREPEAT, VK_SPACE);
+                    let mut reg_res = RegisterHotKey(0, 101, mods, VK_SPACE);
+                    if reg_res == 0 {
+                        // Fallback without MOD_NOREPEAT for compatibility
+                        reg_res = RegisterHotKey(0, 101, mods & !MOD_NOREPEAT, VK_SPACE);
+                    }
+                    if reg_res == 0 {
+                        tracing::warn!(
+                            error_code = GetLastError(),
+                            "Failed to register Windows global hotkey (might be occupied by another app)"
+                        );
+                    } else {
+                        tracing::info!("Windows global hotkey registered successfully: {}", sc);
+                    }
+
+                    // Dynamically resolve Shell_NotifyIconW
+                    let shell32 = LoadLibraryA(b"shell32.dll\0".as_ptr());
+                    let pfn_notify: Option<PfnShellNotifyIconW> = if shell32 != 0 {
+                        let proc = GetProcAddress(shell32, b"Shell_NotifyIconW\0".as_ptr());
+                        if !proc.is_null() {
+                            Some(std::mem::transmute(proc))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Register system tray icon to keep background process accessible
+                    let mut nid: NotifyIconDataW = std::mem::zeroed();
+                    nid.cb_size = std::mem::size_of::<NotifyIconDataW>() as u32;
+                    nid.hwnd = 0;
+                    nid.uid = 1001;
+                    nid.uflags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+                    nid.ucallback_message = WM_TRAYICON;
+                    nid.hicon = LoadIconW(0, IDI_APPLICATION);
+
+                    let tip = "Function (Ctrl+Space)\0";
+                    for (i, c) in tip.encode_utf16().enumerate().take(127) {
+                        nid.sztip[i] = c;
+                    }
+                    if let Some(notify) = pfn_notify {
+                        let _ = notify(NIM_ADD, &nid);
                     }
 
                     let mut msg: Msg = std::mem::zeroed();
                     while GetMessageW(&mut msg, 0, 0, 0) > 0 {
                         if msg.message == WM_HOTKEY {
                             let _ = tx.send(());
+                        } else if msg.message == WM_TRAYICON {
+                            // Left click or double click on tray icon toggles Function
+                            if msg.lparam == 0x0202 /* WM_LBUTTONUP */
+                                || msg.lparam == 0x0203 /* WM_LBUTTONDBLCLK */
+                                || msg.lparam == 0x0205
+                            /* WM_RBUTTONUP */
+                            {
+                                let _ = tx.send(());
+                            }
                         }
                         TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
+
+                    // Clean unregistration on thread exit
+                    let _ = UnregisterHotKey(0, 101);
+                    if let Some(notify) = pfn_notify {
+                        let _ = notify(NIM_DELETE, &nid);
+                    }
+                    worker_thread_id.store(0, Ordering::SeqCst);
+                    worker_hwnd.store(0, Ordering::SeqCst);
                 }
             });
 
@@ -180,6 +333,7 @@ pub mod windows {
 
         async fn unregister_hotkey(&self) -> Result<(), PlatformError> {
             tracing::info!("Unregistering Windows global hotkey");
+            self.cleanup_hotkey_sync();
             let mut current = self.registered_hotkey.write().unwrap();
             *current = None;
             Ok(())
@@ -218,21 +372,52 @@ pub mod windows {
 #[cfg(target_os = "macos")]
 pub mod macos {
     use super::*;
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::{Arc, RwLock};
 
     pub struct MacOsPlatformService {
-        registered_hotkey: std::sync::RwLock<Option<String>>,
+        registered_hotkey: Arc<RwLock<Option<String>>>,
         hotkey_tx: broadcast::Sender<()>,
         audio_capture: Arc<dyn AudioCapture>,
+        hotkey_ref: Arc<AtomicIsize>,
+        handler_ref: Arc<AtomicIsize>,
     }
 
     impl MacOsPlatformService {
         pub fn new() -> Self {
             let (hotkey_tx, _) = broadcast::channel(16);
             Self {
-                registered_hotkey: std::sync::RwLock::new(None),
+                registered_hotkey: Arc::new(RwLock::new(None)),
                 hotkey_tx,
                 audio_capture: Arc::new(CpalAudioCapture::new()),
+                hotkey_ref: Arc::new(AtomicIsize::new(0)),
+                handler_ref: Arc::new(AtomicIsize::new(0)),
             }
+        }
+
+        fn cleanup_hotkey_sync(&self) {
+            let hk = self.hotkey_ref.swap(0, Ordering::SeqCst);
+            let hr = self.handler_ref.swap(0, Ordering::SeqCst);
+            if hk != 0 || hr != 0 {
+                unsafe {
+                    extern "C" {
+                        fn UnregisterEventHotKey(hotKey: *mut std::ffi::c_void) -> i32;
+                        fn RemoveEventHandler(handlerRef: *mut std::ffi::c_void) -> i32;
+                    }
+                    if hk != 0 {
+                        UnregisterEventHotKey(hk as *mut std::ffi::c_void);
+                    }
+                    if hr != 0 {
+                        RemoveEventHandler(hr as *mut std::ffi::c_void);
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for MacOsPlatformService {
+        fn drop(&mut self) {
+            self.cleanup_hotkey_sync();
         }
     }
 
@@ -249,14 +434,150 @@ pub mod macos {
         }
 
         async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError> {
+            {
+                let mut current = self.registered_hotkey.write().unwrap();
+                if let Some(ref existing) = *current {
+                    if existing == shortcut {
+                        tracing::info!(
+                            shortcut,
+                            "macOS hotkey already registered, skipping duplicate registration"
+                        );
+                        return Ok(());
+                    }
+                    self.cleanup_hotkey_sync();
+                }
+                *current = Some(shortcut.to_string());
+            }
+
             tracing::info!(shortcut, "Registering macOS global hotkey");
-            let mut current = self.registered_hotkey.write().unwrap();
-            *current = Some(shortcut.to_string());
+
+            // Ensure Function is configured as an accessory application (not shown in Dock)
+            set_macos_activation_policy_accessory();
+
+            #[repr(C)]
+            #[derive(Copy, Clone)]
+            struct EventHotKeyID {
+                signature: u32,
+                id: u32,
+            }
+
+            #[repr(C)]
+            struct EventTypeSpec {
+                event_class: u32,
+                event_kind: u32,
+            }
+
+            extern "C" {
+                fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
+                fn InstallEventHandler(
+                    inTarget: *mut std::ffi::c_void,
+                    inHandler: unsafe extern "C" fn(
+                        nextHandler: *mut std::ffi::c_void,
+                        theEvent: *mut std::ffi::c_void,
+                        userData: *mut std::ffi::c_void,
+                    ) -> i32,
+                    inNumTypes: u32,
+                    inList: *const EventTypeSpec,
+                    inUserData: *mut std::ffi::c_void,
+                    outHandlerRef: *mut *mut std::ffi::c_void,
+                ) -> i32;
+                fn RegisterEventHotKey(
+                    inHotKeyCode: u32,
+                    inHotKeyModifiers: u32,
+                    inHotKeyID: EventHotKeyID,
+                    inTarget: *mut std::ffi::c_void,
+                    inOptions: u32,
+                    outHotKeyRef: *mut *mut std::ffi::c_void,
+                ) -> i32;
+            }
+
+            unsafe extern "C" fn carbon_hotkey_handler(
+                _next: *mut std::ffi::c_void,
+                _event: *mut std::ffi::c_void,
+                user_data: *mut std::ffi::c_void,
+            ) -> i32 {
+                if !user_data.is_null() {
+                    let tx = &*(user_data as *const broadcast::Sender<()>);
+                    let _ = tx.send(());
+                }
+                0
+            }
+
+            const K_EVENT_CLASS_KEYBOARD: u32 = 0x6b657962; // 'keyb'
+            const K_EVENT_HOT_KEY_PRESSED: u32 = 1;
+            const OPTION_KEY: u32 = 0x0800;
+            const CONTROL_KEY: u32 = 0x1000;
+            const CMD_KEY: u32 = 0x0100;
+            const SHIFT_KEY: u32 = 0x0200;
+            const VK_SPACE: u32 = 49; // macOS kVK_Space
+
+            let sc_upper = shortcut.to_uppercase();
+            let mut mods = 0u32;
+            if sc_upper.contains("OPTION") || sc_upper.contains("ALT") {
+                mods |= OPTION_KEY;
+            }
+            if sc_upper.contains("CTRL") || sc_upper.contains("CONTROL") {
+                mods |= CONTROL_KEY;
+            }
+            if sc_upper.contains("CMD") || sc_upper.contains("COMMAND") {
+                mods |= CMD_KEY;
+            }
+            if sc_upper.contains("SHIFT") {
+                mods |= SHIFT_KEY;
+            }
+            if mods == 0 {
+                mods = OPTION_KEY;
+            }
+
+            let tx_box = Box::new(self.hotkey_tx.clone());
+            let tx_ptr = Box::into_raw(tx_box) as *mut std::ffi::c_void;
+
+            let spec = EventTypeSpec {
+                event_class: K_EVENT_CLASS_KEYBOARD,
+                event_kind: K_EVENT_HOT_KEY_PRESSED,
+            };
+
+            unsafe {
+                let target = GetEventDispatcherTarget();
+                let mut handler_ref: *mut std::ffi::c_void = std::ptr::null_mut();
+                let mut hotkey_ref: *mut std::ffi::c_void = std::ptr::null_mut();
+
+                let h_res = InstallEventHandler(
+                    target,
+                    carbon_hotkey_handler,
+                    1,
+                    &spec,
+                    tx_ptr,
+                    &mut handler_ref,
+                );
+
+                let hotkey_id = EventHotKeyID {
+                    signature: 0x46554e43, // 'FUNC'
+                    id: 1,
+                };
+
+                let r_res =
+                    RegisterEventHotKey(VK_SPACE, mods, hotkey_id, target, 0, &mut hotkey_ref);
+
+                if h_res == 0 && r_res == 0 {
+                    self.handler_ref
+                        .store(handler_ref as isize, Ordering::SeqCst);
+                    self.hotkey_ref.store(hotkey_ref as isize, Ordering::SeqCst);
+                    tracing::info!(
+                        "macOS Carbon global hotkey registered successfully: {}",
+                        shortcut
+                    );
+                } else {
+                    tracing::warn!(h_res, r_res, "Failed to register macOS Carbon hotkey");
+                }
+            }
+
             Ok(())
         }
 
         async fn unregister_hotkey(&self) -> Result<(), PlatformError> {
             tracing::info!("Unregistering macOS global hotkey");
+            self.cleanup_hotkey_sync();
             let mut current = self.registered_hotkey.write().unwrap();
             *current = None;
             Ok(())
@@ -272,8 +593,8 @@ pub mod macos {
 
         async fn check_permissions(&self) -> PermissionStatus {
             PermissionStatus {
-                accessibility: false,
-                screen_recording: false,
+                accessibility: true,
+                screen_recording: true,
                 microphone: self.audio_capture.is_microphone_available(),
             }
         }
@@ -474,8 +795,8 @@ pub fn set_window_icon_by_title(title: &str) {
                 fuLoad: u32,
             ) -> isize;
             fn SendMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> isize;
-            fn LoadLibraryA(lpLibFileName: *const i8) -> isize;
-            fn GetProcAddress(hModule: isize, lpProcName: *const i8) -> usize;
+            fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
+            fn GetProcAddress(hModule: isize, lpProcName: *const u8) -> *const ();
         }
 
         const IMAGE_ICON: u32 = 1;
@@ -491,11 +812,10 @@ pub fn set_window_icon_by_title(title: &str) {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
                 // Apply Windows 11 rounded corners to window frame if DwmSetWindowAttribute is supported
-                let dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr() as *const i8);
+                let dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
                 if dwm != 0 {
-                    let proc =
-                        GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr() as *const i8);
-                    if proc != 0 {
+                    let proc = GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr());
+                    if !proc.is_null() {
                         type FnDwmSetWindowAttribute = unsafe extern "system" fn(
                             isize,
                             u32,
@@ -641,13 +961,38 @@ pub fn hide_window_by_title(title: &str) {
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = title;
+        unsafe {
+            extern "C" {
+                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn objc_msgSend(
+                    receiver: *mut std::ffi::c_void,
+                    op: *mut std::ffi::c_void,
+                    ...
+                ) -> *mut std::ffi::c_void;
+            }
+            let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+            if !ns_app_class.is_null() {
+                let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+                let app = objc_msgSend(ns_app_class, shared_app_sel);
+                if !app.is_null() {
+                    let hide_sel = sel_registerName(b"hide:\0".as_ptr() as _);
+                    let _: *mut std::ffi::c_void =
+                        objc_msgSend(app, hide_sel, std::ptr::null_mut::<std::ffi::c_void>());
+                }
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = title;
     }
 }
 
-/// Reveal and focus the native window instantly.
+/// Reveal and focus the native window instantly, bypassing OS focus stealing restrictions.
 pub fn show_window_by_title(title: &str) {
     #[cfg(target_os = "windows")]
     {
@@ -663,21 +1008,197 @@ pub fn show_window_by_title(title: &str) {
             fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
             fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
             fn SetForegroundWindow(hWnd: isize) -> i32;
+            fn GetForegroundWindow() -> isize;
+            fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
+            fn GetCurrentThreadId() -> u32;
+            fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
+            fn SetWindowPos(
+                hWnd: isize,
+                hWndInsertAfter: isize,
+                X: i32,
+                Y: i32,
+                cx: i32,
+                cy: i32,
+                uFlags: u32,
+            ) -> i32;
+            fn SetFocus(hWnd: isize) -> isize;
         }
 
         const SW_SHOW: i32 = 5;
+        const HWND_TOPMOST: isize = -1;
+        const HWND_NOTOPMOST: isize = -2;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_SHOWWINDOW: u32 = 0x0040;
 
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
-                ShowWindow(hwnd, SW_SHOW);
-                SetForegroundWindow(hwnd);
+                let fg_hwnd = GetForegroundWindow();
+                let fg_thread = GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut());
+                let cur_thread = GetCurrentThreadId();
+
+                if fg_thread != 0 && fg_thread != cur_thread {
+                    AttachThreadInput(cur_thread, fg_thread, 1);
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                    );
+                    SetWindowPos(
+                        hwnd,
+                        HWND_NOTOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                    );
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
+                    AttachThreadInput(cur_thread, fg_thread, 0);
+                } else {
+                    ShowWindow(hwnd, SW_SHOW);
+                    SetForegroundWindow(hwnd);
+                    SetFocus(hwnd);
+                }
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let _ = title;
+        unsafe {
+            extern "C" {
+                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn objc_msgSend(
+                    receiver: *mut std::ffi::c_void,
+                    op: *mut std::ffi::c_void,
+                    ...
+                ) -> *mut std::ffi::c_void;
+            }
+            let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+            if !ns_app_class.is_null() {
+                let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+                let app = objc_msgSend(ns_app_class, shared_app_sel);
+                if !app.is_null() {
+                    let activate_sel =
+                        sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
+                    let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
+                    let key_window_sel = sel_registerName(b"keyWindow\0".as_ptr() as _);
+                    let win = objc_msgSend(app, key_window_sel);
+                    if !win.is_null() {
+                        let order_front_sel =
+                            sel_registerName(b"makeKeyAndOrderFront:\0".as_ptr() as _);
+                        let _: *mut std::ffi::c_void = objc_msgSend(
+                            win,
+                            order_front_sel,
+                            std::ptr::null_mut::<std::ffi::c_void>(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = title;
+    }
+}
+
+/// Ensure window is styled as an accessory/tool window (never shown in taskbar or Alt-Tab).
+pub fn set_window_as_tool_window_by_title(title: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let title_wide: Vec<u16> = OsStr::new(title)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+            fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
+            fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+            fn SetWindowPos(
+                hWnd: isize,
+                hWndInsertAfter: isize,
+                X: i32,
+                Y: i32,
+                cx: i32,
+                cy: i32,
+                uFlags: u32,
+            ) -> i32;
+        }
+
+        const GWL_EXSTYLE: i32 = -20;
+        const WS_EX_TOOLWINDOW: isize = 0x00000080;
+        const WS_EX_APPWINDOW: isize = 0x00040000;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_FRAMECHANGED: u32 = 0x0020;
+
+        unsafe {
+            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+            if hwnd != 0 {
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let new_ex = (ex | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+                SetWindowPos(
+                    hwnd,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = title;
+        set_macos_activation_policy_accessory();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = title;
+    }
+}
+
+/// Ensure Function is configured as an accessory application on macOS (not shown in Dock).
+pub fn set_macos_activation_policy_accessory() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend(
+                receiver: *mut std::ffi::c_void,
+                op: *mut std::ffi::c_void,
+                ...
+            ) -> *mut std::ffi::c_void;
+        }
+        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+        if !ns_app_class.is_null() {
+            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            if !app.is_null() {
+                let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr() as _);
+                // NSApplicationActivationPolicyAccessory = 1
+                let _: *mut std::ffi::c_void = objc_msgSend(app, set_policy_sel, 1isize);
+            }
+        }
     }
 }
 

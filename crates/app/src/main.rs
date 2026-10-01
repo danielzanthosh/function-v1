@@ -208,13 +208,14 @@ fn main() {
         let config_clone = config.clone();
         let audio_capture_clone = audio_capture.clone();
         let stt_provider_clone = stt_provider.clone();
-        let _window = cx.open_window(window_options, move |_window, cx| {
+        let _window = cx.open_window(window_options, move |window, cx| {
             cx.new(|cx| {
                 FunctionView::new(cx, mic_configured, mic_available)
                     .with_agent(agent_clone, cx)
                     .with_config(config_clone)
                     .with_audio_capture(audio_capture_clone)
                     .with_stt_provider(stt_provider_clone)
+                    .observe_activation(window, cx)
             })
         });
         if let Ok(window_handle) = _window {
@@ -235,13 +236,18 @@ fn main() {
             .detach();
         }
 
-        // Ensure small and large native icons and centering are set on the Win32 window
+        // On macOS, configure accessory policy so Function doesn't appear in the Dock
+        #[cfg(target_os = "macos")]
+        function_platform::set_macos_activation_policy_accessory();
+
+        // Ensure small and large native icons, tool window styling (no taskbar presence), and centering on Win32
         let init_w = init_w_f32 as i32;
         let init_h = init_h_f32 as i32;
         std::thread::spawn(move || {
             for _ in 0..10 {
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 function_platform::set_window_icon_by_title("Function");
+                function_platform::set_window_as_tool_window_by_title("Function");
                 function_platform::center_window_by_title(
                     "Function",
                     init_w,

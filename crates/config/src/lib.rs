@@ -129,7 +129,11 @@ fn default_sound_enabled() -> bool {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            hotkey: "Ctrl+Space".to_string(),
+            hotkey: if cfg!(target_os = "macos") {
+                "Option+Space".to_string()
+            } else {
+                "Ctrl+Space".to_string()
+            },
             theme: ThemePreference::System,
             theme_style: ThemeStyle::CarbonDark,
             accent_color: AccentColor::White,
