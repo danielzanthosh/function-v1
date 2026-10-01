@@ -39,7 +39,7 @@ pub trait PlatformService: Send + Sync {
     /// Return the OS name / identifier.
     fn platform_name(&self) -> &'static str;
 
-    /// Register the global activation hotkey (e.g. "Alt+Space" on Windows, "Option+Space" on macOS).
+    /// Register the global activation hotkey (e.g. "Ctrl+Space" on Windows, "Command+;" on macOS).
     async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError>;
 
     /// Unregister any previously registered hotkey.
@@ -428,6 +428,43 @@ pub mod macos {
         }
     }
 
+    fn parse_hotkey(shortcut: &str) -> Result<(u32, u32), PlatformError> {
+        const OPTION_KEY: u32 = 0x0800;
+        const CONTROL_KEY: u32 = 0x1000;
+        const CMD_KEY: u32 = 0x0100;
+        const SHIFT_KEY: u32 = 0x0200;
+
+        let mut modifiers = 0;
+        let mut key_code = None;
+        for part in shortcut.split('+').map(|part| part.trim().to_uppercase()) {
+            match part.as_str() {
+                "OPTION" | "ALT" => modifiers |= OPTION_KEY,
+                "CTRL" | "CONTROL" => modifiers |= CONTROL_KEY,
+                "CMD" | "COMMAND" => modifiers |= CMD_KEY,
+                "SHIFT" => modifiers |= SHIFT_KEY,
+                "SPACE" => key_code = Some(49),           // kVK_Space
+                ";" | "SEMICOLON" => key_code = Some(41), // kVK_ANSI_Semicolon
+                "" => {}
+                key => {
+                    return Err(PlatformError::Unsupported(format!(
+                        "Unsupported macOS hotkey key: {key}"
+                    )));
+                }
+            }
+        }
+
+        if modifiers == 0 {
+            modifiers = OPTION_KEY;
+        }
+
+        Ok((
+            key_code.ok_or_else(|| {
+                PlatformError::Unsupported("macOS hotkey must include a key".to_string())
+            })?,
+            modifiers,
+        ))
+    }
+
     #[async_trait]
     impl PlatformService for MacOsPlatformService {
         fn platform_name(&self) -> &'static str {
@@ -435,6 +472,7 @@ pub mod macos {
         }
 
         async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError> {
+            let (key_code, modifiers) = parse_hotkey(shortcut)?;
             {
                 let mut current = self.registered_hotkey.write().unwrap();
                 if let Some(ref existing) = *current {
@@ -452,8 +490,11 @@ pub mod macos {
 
             tracing::info!(shortcut, "Registering macOS global hotkey");
 
-            // Ensure Function is configured as an accessory application (not shown in Dock)
-            set_macos_activation_policy_accessory();
+            // Do not touch NSApplication here. GPUI must create its `GPUIApplication`
+            // subclass before any code asks AppKit for the shared application; otherwise
+            // AppKit creates a plain NSApplication and GPUI cannot store its platform
+            // state on its subclass. The accessory activation policy is applied from
+            // the GPUI launch callback in `function-app` instead.
 
             #[repr(C)]
             #[derive(Copy, Clone)]
@@ -508,30 +549,6 @@ pub mod macos {
 
             const K_EVENT_CLASS_KEYBOARD: u32 = 0x6b657962; // 'keyb'
             const K_EVENT_HOT_KEY_PRESSED: u32 = 1;
-            const OPTION_KEY: u32 = 0x0800;
-            const CONTROL_KEY: u32 = 0x1000;
-            const CMD_KEY: u32 = 0x0100;
-            const SHIFT_KEY: u32 = 0x0200;
-            const VK_SPACE: u32 = 49; // macOS kVK_Space
-
-            let sc_upper = shortcut.to_uppercase();
-            let mut mods = 0u32;
-            if sc_upper.contains("OPTION") || sc_upper.contains("ALT") {
-                mods |= OPTION_KEY;
-            }
-            if sc_upper.contains("CTRL") || sc_upper.contains("CONTROL") {
-                mods |= CONTROL_KEY;
-            }
-            if sc_upper.contains("CMD") || sc_upper.contains("COMMAND") {
-                mods |= CMD_KEY;
-            }
-            if sc_upper.contains("SHIFT") {
-                mods |= SHIFT_KEY;
-            }
-            if mods == 0 {
-                mods = OPTION_KEY;
-            }
-
             let tx_box = Box::new(self.hotkey_tx.clone());
             let tx_ptr = Box::into_raw(tx_box) as *mut std::ffi::c_void;
 
@@ -560,7 +577,7 @@ pub mod macos {
                 };
 
                 let r_res =
-                    RegisterEventHotKey(VK_SPACE, mods, hotkey_id, target, 0, &mut hotkey_ref);
+                    RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
 
                 if h_res == 0 && r_res == 0 {
                     self.handler_ref
@@ -980,32 +997,7 @@ pub fn hide_window_by_title(title: &str) {
             }
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = title;
-        unsafe {
-            extern "C" {
-                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-                fn objc_msgSend(
-                    receiver: *mut std::ffi::c_void,
-                    op: *mut std::ffi::c_void,
-                    ...
-                ) -> *mut std::ffi::c_void;
-            }
-            let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
-            if !ns_app_class.is_null() {
-                let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
-                let app = objc_msgSend(ns_app_class, shared_app_sel);
-                if !app.is_null() {
-                    let hide_sel = sel_registerName(b"hide:\0".as_ptr() as _);
-                    let _: *mut std::ffi::c_void =
-                        objc_msgSend(app, hide_sel, std::ptr::null_mut::<std::ffi::c_void>());
-                }
-            }
-        }
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = title;
     }
@@ -1089,43 +1081,7 @@ pub fn show_window_by_title(title: &str) {
             }
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = title;
-        unsafe {
-            extern "C" {
-                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-                fn objc_msgSend(
-                    receiver: *mut std::ffi::c_void,
-                    op: *mut std::ffi::c_void,
-                    ...
-                ) -> *mut std::ffi::c_void;
-            }
-            let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
-            if !ns_app_class.is_null() {
-                let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
-                let app = objc_msgSend(ns_app_class, shared_app_sel);
-                if !app.is_null() {
-                    let activate_sel =
-                        sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
-                    let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
-                    let key_window_sel = sel_registerName(b"keyWindow\0".as_ptr() as _);
-                    let win = objc_msgSend(app, key_window_sel);
-                    if !win.is_null() {
-                        let order_front_sel =
-                            sel_registerName(b"makeKeyAndOrderFront:\0".as_ptr() as _);
-                        let _: *mut std::ffi::c_void = objc_msgSend(
-                            win,
-                            order_front_sel,
-                            std::ptr::null_mut::<std::ffi::c_void>(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = title;
     }
@@ -1258,22 +1214,22 @@ pub fn register_macos_login_item() {
                         as unsafe extern "C" fn(
                             *mut std::ffi::c_void,
                             *mut std::ffi::c_void,
-                            ...,
+                            ...
                         ) -> *mut std::ffi::c_void,
                 );
                 // SMAppServiceStatusEnabled = 1
                 let status = msg_send_status(service, status_sel);
                 if status != 1 {
-                    let register_sel =
-                        sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
+                    let register_sel = sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
                     let mut err: *mut std::ffi::c_void = std::ptr::null_mut();
                     let msg_send_register: MsgSendRegister = std::mem::transmute(
                         objc_msgSend
                             as unsafe extern "C" fn(
                                 *mut std::ffi::c_void,
                                 *mut std::ffi::c_void,
-                                ...,
-                            ) -> *mut std::ffi::c_void,
+                                ...
+                            )
+                                -> *mut std::ffi::c_void,
                     );
                     let res: ObjcBool = msg_send_register(
                         service,
@@ -1282,7 +1238,9 @@ pub fn register_macos_login_item() {
                     );
                     let success: bool = res != 0;
                     if success {
-                        tracing::info!("Registered Function as modern macOS SMAppService Login Item");
+                        tracing::info!(
+                            "Registered Function as modern macOS SMAppService Login Item"
+                        );
                     } else {
                         tracing::warn!(
                             "Failed to register Function as macOS Login Item (status: {})",

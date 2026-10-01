@@ -9,7 +9,7 @@ Implement global assistant activation.
 
 macOS:
 
-Option + Space
+Command + ;
 
 Windows:
 

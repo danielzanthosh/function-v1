@@ -5,7 +5,7 @@
 User presses:
 
 macOS:
-Option + Space
+Command + ;
 
 Windows:
 Alt + Space

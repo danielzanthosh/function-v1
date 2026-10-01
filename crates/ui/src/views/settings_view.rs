@@ -157,7 +157,7 @@ pub fn render_settings_view(
                                         } else {
                                             text_secondary
                                         })
-                                        .child("AI PROVIDER API KEY (Tab to switch field, Ctrl+H to mask/reveal)"),
+                                        .child("AI PROVIDER API KEY (Tab to switch field, Cmd/Ctrl+V to paste)"),
                                 )
                                 .child(
                                     div()
