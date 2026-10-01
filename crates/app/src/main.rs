@@ -236,9 +236,16 @@ fn main() {
             .detach();
         }
 
-        // On macOS, configure accessory policy so Function doesn't appear in the Dock
+        // On macOS, configure accessory policy so Function doesn't appear in the Dock,
+        // and register as modern SMAppService login item for auto-start.
         #[cfg(target_os = "macos")]
-        function_platform::set_macos_activation_policy_accessory();
+        {
+            function_platform::set_macos_activation_policy_accessory();
+            function_platform::register_macos_login_item();
+        }
+
+        let start_hidden =
+            config.start_hidden && !std::env::args().any(|arg| arg == "--show" || arg == "-s");
 
         // Ensure small and large native icons, tool window styling (no taskbar presence), and centering on Win32
         let init_w = init_w_f32 as i32;
@@ -254,6 +261,9 @@ fn main() {
                     init_h,
                     is_upper_third,
                 );
+                if start_hidden {
+                    function_platform::hide_window_by_title("Function");
+                }
             }
         });
 

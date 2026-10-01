@@ -1,4 +1,4 @@
-name: macOS Build
+name: macOS Build & Distribution
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   build-macos:
-    name: Build macOS Release
+    name: Build & Package macOS App
     runs-on: macos-latest
 
     steps:
@@ -36,9 +36,76 @@ jobs:
           ls -lh target/release/function
           file target/release/function
 
-      - name: Upload macOS Build Artifact
+      - name: Package Function.app Bundle
+        run: |
+          # 1. Create macOS App bundle structure
+          mkdir -p Function.app/Contents/MacOS
+          mkdir -p Function.app/Contents/Resources
+
+          # 2. Copy binary and set executable permissions
+          cp target/release/function Function.app/Contents/MacOS/function
+          chmod +x Function.app/Contents/MacOS/function
+
+          # 3. Copy application resources
+          cp assets/icon.ico Function.app/Contents/Resources/icon.ico
+          cp assets/icon.png Function.app/Contents/Resources/icon.png
+
+          # 4. Generate AppIcon.icns from brand icon
+          mkdir -p icon.iconset
+          sips -z 16 16     assets/icon.png --out icon.iconset/icon_16x16.png
+          sips -z 32 32     assets/icon.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     assets/icon.png --out icon.iconset/icon_32x32.png
+          sips -z 64 64     assets/icon.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   assets/icon.png --out icon.iconset/icon_128x128.png
+          sips -z 256 256   assets/icon.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   assets/icon.png --out icon.iconset/icon_256x256.png
+          sips -z 512 512   assets/icon.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 512 512   assets/icon.png --out icon.iconset/icon_512x512.png
+          sips -z 1024 1024 assets/icon.png --out icon.iconset/icon_512x512@2x.png
+          iconutil -c icns icon.iconset -o Function.app/Contents/Resources/AppIcon.icns
+          rm -rf icon.iconset
+
+          # 5. Generate Info.plist with LSUIElement (agent/background app, no Dock icon)
+          cat << 'EOF' > Function.app/Contents/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>function</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.function.desktop</string>
+              <key>CFBundleName</key>
+              <string>Function</string>
+              <key>CFBundleDisplayName</key>
+              <string>Function</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 6. Apply ad-hoc codesign to avoid Gatekeeper execution block
+          codesign --force --deep --sign - Function.app
+
+          # 7. Create distribution zip preserving macOS filesystem permissions
+          ditto -c -k --keepParent Function.app Function-macOS.zip
+
+      - name: Upload Function.app Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: function-macos
-          path: target/release/function
+          name: Function-macOS
+          path: Function-macOS.zip
           if-no-files-found: error

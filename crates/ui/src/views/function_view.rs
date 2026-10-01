@@ -20,7 +20,8 @@ use crate::components::launcher_icons::{
 use crate::components::spotlight_bar::{
     get_current_time_string, get_launcher_items, LauncherAction, LauncherIconType,
 };
-use crate::components::{render_logo, ActivityEntry, ActivityStatus};
+use crate::components::{render_brand_mark, render_logo, ActivityEntry, ActivityStatus};
+use crate::local_commands::{resolve_local_command, LocalCommand};
 use crate::theme::Theme;
 use crate::views::render_settings_view;
 use function_agent::AgentState;
@@ -119,9 +120,12 @@ impl FunctionView {
             }
         });
 
+        let start_hidden =
+            config.start_hidden && !std::env::args().any(|arg| arg == "--show" || arg == "-s");
+
         Self {
             mode: FunctionMode::Command,
-            is_visible: true,
+            is_visible: !start_hidden,
             animation_tick: 0,
             mic_configured,
             mic_available,
@@ -301,7 +305,7 @@ impl FunctionView {
         if self.latest_result.is_some() {
             Size {
                 width: px(640.0),
-                height: px(340.0),
+                height: px(320.0),
             }
         } else if matches!(
             self.state,
@@ -311,13 +315,13 @@ impl FunctionView {
         ) {
             Size {
                 width: px(640.0),
-                height: px(220.0),
+                height: px(230.0),
             }
         } else if !self.input_buffer.is_empty() {
             let items = get_launcher_items(&self.input_buffer);
             if !items.is_empty() {
                 let count = items.len().min(5);
-                let height = 64.0 + (count as f32 * 50.0) + 16.0;
+                let height = 112.0 + (count as f32 * 46.0) + 12.0;
                 Size {
                     width: px(640.0),
                     height: px(height),
@@ -325,14 +329,14 @@ impl FunctionView {
             } else {
                 Size {
                     width: px(640.0),
-                    height: px(64.0),
+                    height: px(112.0),
                 }
             }
         } else {
-            // Idle state: Clean, minimal floating command bar
+            // Idle state: Clean, minimal floating command layer with centered brand mark
             Size {
                 width: px(640.0),
-                height: px(64.0),
+                height: px(112.0),
             }
         }
     }
@@ -641,6 +645,21 @@ impl FunctionView {
         let prompt = self.input_buffer.trim().to_string();
         if prompt.is_empty() {
             return;
+        }
+
+        // Local command resolver - intercepts BEFORE AI agent and does NOT require API key
+        if let Some(cmd) = resolve_local_command(&prompt) {
+            match cmd {
+                LocalCommand::Configure => {
+                    self.input_buffer.clear();
+                    self.selected_index = 0;
+                    self.mode = FunctionMode::Settings;
+                    self.play_sound_feedback(SoundEffect::Select);
+                    window.resize(self.target_window_size());
+                    cx.notify();
+                    return;
+                }
+            }
         }
 
         self.play_sound_feedback(SoundEffect::Execute);
@@ -967,10 +986,25 @@ impl FunctionView {
                 }
             }
             "enter" => {
+                let prompt = self.input_buffer.trim().to_string();
+                if let Some(cmd) = resolve_local_command(&prompt) {
+                    match cmd {
+                        LocalCommand::Configure => {
+                            self.input_buffer.clear();
+                            self.selected_index = 0;
+                            self.mode = FunctionMode::Settings;
+                            self.play_sound_feedback(SoundEffect::Select);
+                            window.resize(self.target_window_size());
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+
                 let items = get_launcher_items(&self.input_buffer);
                 if let Some(item) = items.get(self.selected_index).cloned() {
                     self.execute_launcher_action(item.action, window, cx);
-                } else if !self.input_buffer.trim().is_empty() {
+                } else if !prompt.is_empty() {
                     self.submit(&SubmitRequest, window, cx);
                 }
             }
@@ -1109,6 +1143,8 @@ impl Render for FunctionView {
             .h_full()
             .bg(bg_surface)
             .rounded_2xl()
+            .border_1()
+            .border_color(rgba(0xf1f0ef1f))
             .shadow_xl()
             .overflow_hidden()
             // Upper area: conversational request, execution state, response
@@ -1119,7 +1155,7 @@ impl Render for FunctionView {
                         .flex_col()
                         .flex_1()
                         .overflow_hidden()
-                        // Conversational user request element
+                        // Conversational user request element (lightweight & secondary)
                         .when(has_task, |p| {
                             let task_str = self.active_task.as_deref().unwrap_or("").to_string();
                             p.child(
@@ -1127,66 +1163,67 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .gap_3()
-                                    .px_5()
+                                    .px_6()
                                     .pt_4()
                                     .pb_2()
                                     .child(
                                         div()
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(theme.accent_primary)
-                                            .child("ƒ"),
+                                            .text_color(theme.text_muted)
+                                            .child("User"),
                                     )
                                     .child(
                                         div()
                                             .text_sm()
-                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_secondary)
                                             .child(task_str),
                                     ),
                             )
                         })
-                        // Compact execution states
+                        // Compact Function-native execution state
                         .when(is_busy, |p| {
                             let status_text = match &self.state {
-                                AgentState::Processing { thought_summary } => {
-                                    thought_summary.clone().unwrap_or_else(|| {
-                                        "Thinking and orchestrating tools...".into()
-                                    })
-                                }
+                                AgentState::Processing { thought_summary } => thought_summary
+                                    .clone()
+                                    .unwrap_or_else(|| "Interpreting request".into()),
                                 AgentState::Acting { action_description } => {
-                                    action_description.clone()
+                                    format!("→ {}", action_description)
                                 }
                                 AgentState::WaitingForConfirmation { action, .. } => {
                                     format!("Confirmation needed: {}", action)
                                 }
-                                _ => "Executing".into(),
+                                AgentState::Completed { .. } => "→ Ready".into(),
+                                _ => "→ Ready".into(),
                             };
 
                             p.child(
                                 div()
                                     .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .px_5()
+                                    .flex_col()
+                                    .gap_1()
+                                    .px_6()
                                     .py_2()
-                                    .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(
-                                        if matches!(self.state, AgentState::Acting { .. }) {
-                                            theme.status_acting
-                                        } else if matches!(
-                                            self.state,
-                                            AgentState::WaitingForConfirmation { .. }
-                                        ) {
-                                            theme.status_error
-                                        } else {
-                                            theme.accent_primary
-                                        },
-                                    ))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(render_brand_mark(18.0))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_color(theme.text_muted)
+                                                    .child("FUNCTION"),
+                                            ),
+                                    )
                                     .child(
                                         div()
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_muted)
+                                            .text_color(theme.text_secondary)
                                             .child(status_text),
                                     ),
                             )
@@ -1203,7 +1240,7 @@ impl Render for FunctionView {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .mx_5()
+                                            .mx_6()
                                             .my_2()
                                             .p_3()
                                             .rounded_lg()
@@ -1221,7 +1258,7 @@ impl Render for FunctionView {
                                                             .font_weight(gpui::FontWeight::BOLD)
                                                             .text_color(theme.status_error)
                                                             .child(format!(
-                                                                "SECURITY CONFIRMATION: {}",
+                                                                "CONFIRMATION: {}",
                                                                 action
                                                             )),
                                                     )
@@ -1251,10 +1288,11 @@ impl Render for FunctionView {
                             let result_str =
                                 self.latest_result.as_deref().unwrap_or("").to_string();
                             p.child(
-                                div().flex_1().px_5().py_3().overflow_hidden().child(
+                                div().flex_1().px_6().py_3().overflow_hidden().child(
                                     div()
-                                        .text_sm()
-                                        .line_height(px(22.0))
+                                        .text_base()
+                                        .line_height(px(24.0))
+                                        .font_weight(gpui::FontWeight::NORMAL)
                                         .text_color(theme.text_primary)
                                         .child(result_str),
                                 ),
@@ -1264,30 +1302,39 @@ impl Render for FunctionView {
             })
             // Hairline separator before input if upper content exists
             .when(has_task || has_result || is_busy, |parent| {
-                parent.child(div().w_full().h(px(1.0)).bg(theme.surface_input))
+                parent.child(div().w_full().h(px(1.0)).bg(theme.border_subtle))
             })
-            // Refined command input surface
+            // Brand mark header when idle
+            .when(!has_task && !has_result && !is_busy, |parent| {
+                parent.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .pt_3()
+                        .pb_1()
+                        .child(render_function_motif(
+                            motif_state,
+                            &theme,
+                            self.animation_tick,
+                            48.0,
+                        )),
+                )
+            })
+            // Dominant refined command input surface
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(64.0))
-                    .px_5()
-                    // Left: Animated bespoke Function motif mark
+                    .h(px(56.0))
+                    .px_6()
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_4()
                             .flex_1()
-                            .child(render_function_motif(
-                                motif_state,
-                                &theme,
-                                self.animation_tick,
-                                28.0,
-                            ))
-                            // Center: Command input text or placeholder
                             .child(if has_query {
                                 div()
                                     .flex()
@@ -1295,14 +1342,14 @@ impl Render for FunctionView {
                                     .flex_1()
                                     .child(
                                         div()
-                                            .text_base()
+                                            .text_lg()
                                             .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_primary)
                                             .child(self.input_buffer.clone()),
                                     )
-                                    .child(div().w(px(2.0)).h(px(18.0)).bg(
+                                    .child(div().w(px(2.0)).h(px(20.0)).bg(
                                         if self.cursor_visible {
-                                            theme.accent_primary
+                                            theme.text_primary
                                         } else {
                                             rgba(0x00000000)
                                         },
@@ -1312,23 +1359,23 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .flex_1()
-                                    .child(div().w(px(2.0)).h(px(18.0)).bg(
+                                    .child(div().w(px(2.0)).h(px(20.0)).bg(
                                         if self.cursor_visible {
-                                            theme.accent_primary
+                                            theme.text_primary
                                         } else {
                                             rgba(0x00000000)
                                         },
                                     ))
                                     .child(
                                         div()
-                                            .text_base()
+                                            .text_lg()
                                             .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_muted)
                                             .child(placeholder),
                                     )
                             }),
                     )
-                    // Right: Contextual micro indicators
+                    // Right: Contextual micro triggers
                     .child(
                         div()
                             .flex()

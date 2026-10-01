@@ -400,6 +400,7 @@ pub mod macos {
             let hr = self.handler_ref.swap(0, Ordering::SeqCst);
             if hk != 0 || hr != 0 {
                 unsafe {
+                    #[link(name = "Carbon", kind = "framework")]
                     extern "C" {
                         fn UnregisterEventHotKey(hotKey: *mut std::ffi::c_void) -> i32;
                         fn RemoveEventHandler(handlerRef: *mut std::ffi::c_void) -> i32;
@@ -467,6 +468,7 @@ pub mod macos {
                 event_kind: u32,
             }
 
+            #[link(name = "Carbon", kind = "framework")]
             extern "C" {
                 fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
                 fn InstallEventHandler(
@@ -734,7 +736,23 @@ pub fn find_icon_path() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 3. Search directory hierarchy of the current running executable (up to 5 levels)
+    // 3. Search macOS bundle structure: Function.app/Contents/Resources/
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(macos_dir) = exe_path.parent() {
+            if let Some(contents_dir) = macos_dir.parent() {
+                let res_ico = contents_dir.join("Resources").join("icon.ico");
+                if res_ico.exists() {
+                    return Some(res_ico);
+                }
+                let res_png = contents_dir.join("Resources").join("icon.png");
+                if res_png.exists() {
+                    return Some(res_png);
+                }
+            }
+        }
+    }
+
+    // 4. Search directory hierarchy of the current running executable (up to 5 levels)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             for ancestor in exe_dir.ancestors().take(5) {
@@ -1197,6 +1215,43 @@ pub fn set_macos_activation_policy_accessory() {
                 let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr() as _);
                 // NSApplicationActivationPolicyAccessory = 1
                 let _: *mut std::ffi::c_void = objc_msgSend(app, set_policy_sel, 1isize);
+            }
+        }
+    }
+}
+
+/// Register Function to launch at macOS login/startup using modern SMAppService (macOS 13+).
+/// This ensures Function appears in System Settings -> General -> Login Items.
+pub fn register_macos_login_item() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend(
+                receiver: *mut std::ffi::c_void,
+                op: *mut std::ffi::c_void,
+                ...
+            ) -> *mut std::ffi::c_void;
+        }
+        let sm_app_service_class = objc_getClass(b"SMAppService\0".as_ptr() as _);
+        if !sm_app_service_class.is_null() {
+            let main_app_sel = sel_registerName(b"mainAppService\0".as_ptr() as _);
+            let service = objc_msgSend(sm_app_service_class, main_app_sel);
+            if !service.is_null() {
+                let status_sel = sel_registerName(b"status\0".as_ptr() as _);
+                // SMAppServiceStatusEnabled = 1
+                let status: isize = std::mem::transmute(objc_msgSend(service, status_sel));
+                if status != 1 {
+                    let register_sel = sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
+                    let mut err: *mut std::ffi::c_void = std::ptr::null_mut();
+                    let _: bool = std::mem::transmute(objc_msgSend(
+                        service,
+                        register_sel,
+                        &mut err as *mut *mut std::ffi::c_void,
+                    ));
+                    tracing::info!("Registered Function as modern macOS SMAppService Login Item");
+                }
             }
         }
     }

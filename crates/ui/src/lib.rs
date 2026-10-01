@@ -4,11 +4,13 @@
 
 pub mod actions;
 pub mod components;
+pub mod local_commands;
 pub mod theme;
 pub mod views;
 
 pub use actions::*;
 pub use components::*;
+pub use local_commands::*;
 pub use theme::{Theme, ThemeMode};
 pub use views::{AssistantMode, AssistantView, FunctionMode, FunctionView};
 

@@ -172,15 +172,16 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
 
     // 5. Settings & Customization query
     if lower == "settings"
+        || lower == "configure"
+        || lower == "preferences"
         || lower == "config"
         || lower == "theme"
         || lower == "api"
         || lower == "key"
     {
         return vec![LauncherItem {
-            keyword: "Function Preferences".to_string(),
-            description: "Customize theme, accent color, AI provider, API keys & window behavior"
-                .to_string(),
+            keyword: "Function Preferences & Configuration".to_string(),
+            description: "Configure API Key, Model, Sound & Appearance (Local Command)".to_string(),
             shortcut: "Enter".to_string(),
             icon_type: LauncherIconType::Settings,
             action: LauncherAction::OpenSettings,

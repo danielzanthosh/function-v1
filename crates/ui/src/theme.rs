@@ -46,80 +46,64 @@ impl Theme {
         let accent = match config.accent_color {
             AccentColor::White => {
                 if is_light {
-                    rgb(0x111111)
+                    rgb(0x14120a)
                 } else {
-                    rgb(0xffffff)
+                    rgb(0xf1f0ef)
                 }
             }
-            AccentColor::Cyan => rgb(0x0ea5e9),
-            AccentColor::Emerald => rgb(0x10b981),
-            AccentColor::Violet => rgb(0x8b5cf6),
-            AccentColor::Amber => rgb(0xf59e0b),
+            AccentColor::Cyan => rgb(0xd1cdc7),    // Warm stone
+            AccentColor::Emerald => rgb(0xc4bfb5), // Warm sand
+            AccentColor::Violet => rgb(0xa8a49c),  // Warm ash
+            AccentColor::Amber => rgb(0xdedad1),   // Warm parchment
         };
 
         match config.theme_style {
-            ThemeStyle::CarbonDark => Self {
+            ThemeStyle::CarbonDark | ThemeStyle::ObsidianOled => Self {
                 mode: ThemeMode::Dark,
-                surface_base: rgb(0x000000),     // Void (#000000)
-                surface_elevated: rgb(0x0a0a0a), // Carbon (#0A0A0A)
-                surface_floating: rgb(0x0f0f0f),
-                surface_active: rgb(0x181818), // Graphite elevated
-                surface_input: rgb(0x141414),  // Graphite (#141414)
-                border_subtle: rgb(0x242424),  // Ash (#2A2A2A)
+                surface_base: rgb(0x14120a), // Function Dark (#14120A)
+                surface_elevated: rgb(0x1c1a12), // Warm elevated
+                surface_floating: rgb(0x222017),
+                surface_active: rgb(0x28251d), // Warm active
+                surface_input: rgb(0x1c1a12),  // Warm input
+                border_subtle: rgb(0x2e2a20),  // Restrained hairline
                 border_focus: accent,
-                text_primary: rgb(0xffffff),   // White (#FFFFFF)
-                text_secondary: rgb(0xa3a3a3), // Silver (#A3A3A3)
-                text_muted: rgb(0x666666),     // Smoke (#666666)
+                text_primary: rgb(0xf1f0ef),   // Function Light (#F1F0EF)
+                text_secondary: rgb(0xa8a49c), // Warm gray
+                text_muted: rgb(0x6e6a62),     // Warm smoke
                 accent_primary: accent,
-                accent_hover: rgb(0xd4d4d8),
-                ..Self::dark()
-            },
-            ThemeStyle::ObsidianOled => Self {
-                mode: ThemeMode::Dark,
-                surface_base: rgb(0x000000),
-                surface_elevated: rgb(0x050505),
-                surface_floating: rgb(0x09090b),
-                surface_active: rgb(0x121212),
-                surface_input: rgb(0x0a0a0a),
-                border_subtle: rgb(0x1c1c1f),
-                border_focus: accent,
-                text_primary: rgb(0xffffff),
-                text_secondary: rgb(0xa1a1aa),
-                text_muted: rgb(0x52525b),
-                accent_primary: accent,
-                accent_hover: rgb(0xd4d4d8),
+                accent_hover: rgb(0xd1cdc7),
                 ..Self::dark()
             },
             ThemeStyle::SlateMidnight => Self {
                 mode: ThemeMode::Dark,
-                surface_base: rgb(0x080c14),
-                surface_elevated: rgb(0x0f172a),
-                surface_floating: rgb(0x131d34),
-                surface_active: rgb(0x1e293b),
-                surface_input: rgb(0x17223b),
-                border_subtle: rgb(0x293548),
+                surface_base: rgb(0x14120a),
+                surface_elevated: rgb(0x18160e),
+                surface_floating: rgb(0x1f1d14),
+                surface_active: rgb(0x252319),
+                surface_input: rgb(0x18160e),
+                border_subtle: rgb(0x2c281e),
                 border_focus: accent,
-                text_primary: rgb(0xf8fafc),
-                text_secondary: rgb(0x94a3b8),
-                text_muted: rgb(0x64748b),
+                text_primary: rgb(0xf1f0ef),
+                text_secondary: rgb(0xa8a49c),
+                text_muted: rgb(0x6e6a62),
                 accent_primary: accent,
-                accent_hover: rgb(0xcfd8e3),
+                accent_hover: rgb(0xd1cdc7),
                 ..Self::dark()
             },
             ThemeStyle::StudioLight => Self {
                 mode: ThemeMode::Light,
-                surface_base: rgb(0xf7f7f5),
+                surface_base: rgb(0xf7f6f4),
                 surface_elevated: rgb(0xffffff),
                 surface_floating: rgb(0xffffff),
-                surface_active: rgb(0xf0f0ee),
-                surface_input: rgb(0xf0f0ee),
-                border_subtle: rgb(0xd8d8d5),
-                border_focus: accent,
-                text_primary: rgb(0x111111),
-                text_secondary: rgb(0x666666),
-                text_muted: rgb(0x888888),
-                accent_primary: accent,
-                accent_hover: rgb(0x333333),
+                surface_active: rgb(0xeeebe6),
+                surface_input: rgb(0xeeebe6),
+                border_subtle: rgb(0xdad6cf),
+                border_focus: rgb(0x14120a),
+                text_primary: rgb(0x14120a),
+                text_secondary: rgb(0x6e6a62),
+                text_muted: rgb(0x948f86),
+                accent_primary: rgb(0x14120a),
+                accent_hover: rgb(0x2e2a20),
                 ..Self::light()
             },
         }
@@ -129,37 +113,32 @@ impl Theme {
         Self {
             mode: ThemeMode::Dark,
 
-            // Void (#000000)
-            surface_base: rgb(0x000000),
-            // Carbon (#0A0A0A)
-            surface_elevated: rgb(0x0a0a0a),
-            surface_floating: rgb(0x0a0a0a),
-            // Graphite (#141414)
-            surface_active: rgb(0x141414),
-            surface_input: rgb(0x141414),
+            // Function Warm Black (#14120A)
+            surface_base: rgb(0x14120a),
+            surface_elevated: rgb(0x1c1a12),
+            surface_floating: rgb(0x222017),
+            surface_active: rgb(0x28251d),
+            surface_input: rgb(0x1c1a12),
 
-            // Ash (#2A2A2A)
-            border_subtle: rgb(0x2a2a2a),
-            // White focus border
-            border_focus: rgb(0xffffff),
+            // Subtle warm hairline
+            border_subtle: rgb(0x2e2a20),
+            border_focus: rgb(0xf1f0ef),
 
-            // White (#FFFFFF)
-            text_primary: rgb(0xffffff),
-            // Silver (#A3A3A3)
-            text_secondary: rgb(0xa3a3a3),
-            // Smoke (#666666)
-            text_muted: rgb(0x666666),
+            // Function Off-White (#F1F0EF)
+            text_primary: rgb(0xf1f0ef),
+            text_secondary: rgb(0xa8a49c),
+            text_muted: rgb(0x6e6a62),
 
-            // Semantic status colors
-            status_idle: rgb(0x666666),
-            status_listening: rgb(0x60a5fa),  // Information
-            status_processing: rgb(0xfacc15), // Warning
-            status_acting: rgb(0xffffff),     // White convergence
-            status_success: rgb(0x4ade80),    // Success
-            status_error: rgb(0xf87171),      // Error
+            // Semantic status colors (warm, technical, restrained - no neon)
+            status_idle: rgb(0x6e6a62),
+            status_listening: rgb(0xf1f0ef),
+            status_processing: rgb(0xd1cdc7),
+            status_acting: rgb(0xf1f0ef),
+            status_success: rgb(0xe2dfd8),
+            status_error: rgb(0xd4756f),
 
-            accent_primary: rgb(0xffffff),
-            accent_hover: rgb(0xa3a3a3),
+            accent_primary: rgb(0xf1f0ef),
+            accent_hover: rgb(0xd1cdc7),
         }
     }
 
@@ -167,36 +146,28 @@ impl Theme {
         Self {
             mode: ThemeMode::Light,
 
-            // Primary background (#F7F7F5)
-            surface_base: rgb(0xf7f7f5),
-            // Primary surface (#FFFFFF)
+            surface_base: rgb(0xf7f6f4),
             surface_elevated: rgb(0xffffff),
             surface_floating: rgb(0xffffff),
-            // Secondary surface (#F0F0EE)
-            surface_active: rgb(0xf0f0ee),
-            surface_input: rgb(0xf0f0ee),
+            surface_active: rgb(0xeeebe6),
+            surface_input: rgb(0xeeebe6),
 
-            // Border (#D8D8D5)
-            border_subtle: rgb(0xd8d8d5),
-            border_focus: rgb(0x111111),
+            border_subtle: rgb(0xdad6cf),
+            border_focus: rgb(0x14120a),
 
-            // Primary text (#111111)
-            text_primary: rgb(0x111111),
-            // Secondary text (#666666)
-            text_secondary: rgb(0x666666),
-            // Smoke muted
-            text_muted: rgb(0x888888),
+            text_primary: rgb(0x14120a),
+            text_secondary: rgb(0x6e6a62),
+            text_muted: rgb(0x948f86),
 
-            // Semantic status colors
-            status_idle: rgb(0x888888),
-            status_listening: rgb(0x2563eb),
-            status_processing: rgb(0xd97706),
-            status_acting: rgb(0x111111),
-            status_success: rgb(0x16a34a),
-            status_error: rgb(0xdc2626),
+            status_idle: rgb(0x948f86),
+            status_listening: rgb(0x14120a),
+            status_processing: rgb(0x3e3a30),
+            status_acting: rgb(0x14120a),
+            status_success: rgb(0x2e2a20),
+            status_error: rgb(0xb84a44),
 
-            accent_primary: rgb(0x111111),
-            accent_hover: rgb(0x333333),
+            accent_primary: rgb(0x14120a),
+            accent_hover: rgb(0x2e2a20),
         }
     }
 

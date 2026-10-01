@@ -116,6 +116,8 @@ pub struct AppConfig {
     pub window_position: WindowPositionMode,
     #[serde(default = "default_sound_enabled")]
     pub sound_enabled: bool,
+    #[serde(default = "default_start_hidden")]
+    pub start_hidden: bool,
     pub ai_provider: AiProviderConfig,
     pub speech: SpeechConfig,
     pub search: SearchConfig,
@@ -123,6 +125,10 @@ pub struct AppConfig {
 }
 
 fn default_sound_enabled() -> bool {
+    true
+}
+
+fn default_start_hidden() -> bool {
     true
 }
 
@@ -139,6 +145,7 @@ impl Default for AppConfig {
             accent_color: AccentColor::White,
             window_position: WindowPositionMode::UpperThird,
             sound_enabled: true,
+            start_hidden: true,
             ai_provider: AiProviderConfig::default(),
             speech: SpeechConfig::default(),
             search: SearchConfig::default(),

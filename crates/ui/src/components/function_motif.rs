@@ -1,19 +1,17 @@
-//! Function Visual Motif (Geometric Mark).
+//! Function Visual Motif (Geometric Brand Mark).
 //!
-//! A custom, proprietary visual identity mark for Function.
-//! Replaces generic glowing orbs and spinning loaders with a technical,
-//! mathematical/computing mark derived from the Function [ƒ] identity.
-//!
-//! Dynamically morphs between four cognitive states:
-//! - Idle: Clean, steady, precision geometric mark.
-//! - Listening: Three rhythmic micro-bars breathing with audio input.
-//! - Thinking: A subtle synchronized quantum light pulse communicating intelligence.
-//! - Acting: A directional execution glyph indicating autonomous computer control.
+//! Renders the official Function monochrome geometric mark (semi-circle with
+//! dithered particles) and brings it alive across cognitive states:
+//! - Idle: Clean, steady, precision brand mark.
+//! - Listening: Subtle organic breath modulation inspired by particle frequency.
+//! - Thinking: Precision cognitive rhythm across the dithered horizon.
+//! - Acting: Understated directional execution transition.
 
+use super::logo::render_brand_mark;
 use crate::theme::Theme;
 use function_agent::AgentState;
 use gpui::prelude::*;
-use gpui::{div, px, IntoElement, Rgba};
+use gpui::{div, px, IntoElement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotifState {
@@ -38,171 +36,70 @@ impl MotifState {
     }
 }
 
-/// Render the animated Function geometric motif.
+/// Render the animated Function geometric motif using the actual brand asset.
 pub fn render_function_motif(
     motif_state: MotifState,
     theme: &Theme,
     tick: usize,
-    size: f32,
+    width: f32,
 ) -> impl IntoElement {
-    let accent = theme.accent_primary;
-    let muted = theme.text_muted;
-    let surface_bg = theme.surface_active;
-
-    let outer_size = size;
-    let inner_height = size * 0.55;
+    let text_sec = theme.text_secondary;
+    let height = width / 2.0;
 
     match motif_state {
-        MotifState::Idle => {
-            // Precision geometric mark: A technical bracket frame [ • ]
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(outer_size))
-                .h(px(outer_size))
-                .rounded_md()
-                .bg(surface_bg)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(2.5))
-                        // Left bracket stroke
-                        .child(
-                            div()
-                                .w(px(2.0))
-                                .h(px(inner_height))
-                                .rounded_full()
-                                .bg(muted),
-                        )
-                        // Central precision node
-                        .child(div().w(px(3.5)).h(px(3.5)).rounded_full().bg(accent))
-                        // Right bracket stroke
-                        .child(
-                            div()
-                                .w(px(2.0))
-                                .h(px(inner_height))
-                                .rounded_full()
-                                .bg(muted),
-                        ),
-                )
-        }
+        MotifState::Idle => div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(width))
+            .h(px(height))
+            .child(render_brand_mark(width)),
         MotifState::Listening => {
-            // Three rhythmic waveform bars breathing with audio cadence
-            let phase = tick % 4;
-            let h1 = match phase {
-                0 => 6.0,
-                1 => 12.0,
-                2 => 16.0,
-                _ => 10.0,
+            // Subtle rhythmic acoustic breath (shifts opacity slightly between 0.75 and 1.0)
+            let opacity = match tick % 4 {
+                0 => 0.75,
+                1 => 0.90,
+                2 => 1.00,
+                _ => 0.85,
             };
-            let h2 = match phase {
-                0 => 16.0,
-                1 => 8.0,
-                2 => 14.0,
-                _ => 18.0,
-            };
-            let h3 = match phase {
-                0 => 10.0,
-                1 => 16.0,
-                2 => 8.0,
-                _ => 12.0,
-            };
-
             div()
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(outer_size))
-                .h(px(outer_size))
-                .rounded_md()
-                .bg(surface_bg)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(2.5))
-                        .child(div().w(px(2.0)).h(px(h1)).rounded_full().bg(accent))
-                        .child(div().w(px(2.5)).h(px(h2)).rounded_full().bg(accent))
-                        .child(div().w(px(2.0)).h(px(h3)).rounded_full().bg(accent)),
-                )
+                .w(px(width))
+                .h(px(height))
+                .opacity(opacity)
+                .child(render_brand_mark(width))
         }
         MotifState::Thinking => {
-            // Technical cognitive pulse: synchronized energy gliding across brackets
-            let step = (tick / 2) % 3;
-            let (c1, c2, c3) = match step {
-                0 => (accent, muted, muted),
-                1 => (muted, accent, muted),
-                _ => (muted, muted, accent),
+            // Precision cognitive pulse across the particle horizon
+            let opacity = match (tick / 2) % 4 {
+                0 => 0.60,
+                1 => 0.80,
+                2 => 1.00,
+                _ => 0.75,
             };
-
             div()
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(outer_size))
-                .h(px(outer_size))
-                .rounded_md()
-                .bg(surface_bg)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(2.5))
-                        .child(div().w(px(2.0)).h(px(inner_height)).rounded_full().bg(c1))
-                        .child(div().w(px(3.5)).h(px(3.5)).rounded_full().bg(c2))
-                        .child(div().w(px(2.0)).h(px(inner_height)).rounded_full().bg(c3)),
-                )
+                .w(px(width))
+                .h(px(height))
+                .opacity(opacity)
+                .child(render_brand_mark(width))
         }
-        MotifState::Acting => {
-            // Autonomous computer execution: forward action glyph [ > ]
-            let pulse_color = if (tick / 2) % 2 == 0 {
-                accent
-            } else {
-                Rgba { a: 0.7, ..accent }
-            };
-
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(outer_size))
-                .h(px(outer_size))
-                .rounded_md()
-                .bg(surface_bg)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(2.0))
-                        // Directional execution mark
-                        .child(
-                            div()
-                                .w(px(2.0))
-                                .h(px(inner_height * 0.8))
-                                .rounded_full()
-                                .bg(muted),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(pulse_color)
-                                .child("›"),
-                        )
-                        .child(
-                            div()
-                                .w(px(2.0))
-                                .h(px(inner_height * 0.8))
-                                .rounded_full()
-                                .bg(muted),
-                        ),
-                )
-        }
+        MotifState::Acting => div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .child(render_brand_mark(width * 0.85))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(text_sec)
+                    .child("→"),
+            ),
     }
 }

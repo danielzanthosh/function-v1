@@ -1,16 +1,59 @@
-//! Function brand logo component.
+//! Function brand logo and mark components.
 //!
-//! Renders the official Function monochrome geometric icon.
+//! Renders the official Function monochrome geometric mark and lockup
+//! based on the new visual identity:
+//! - Background / deep dark: #14120A
+//! - Primary light / text: #F1F0EF
 
 use gpui::prelude::*;
 use gpui::{img, px, Image, ImageFormat, IntoElement};
 use std::sync::Arc;
 
-/// Embedded icon bytes from workspace assets
-const ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
+const BRAND_MARK_BYTES: &[u8] = include_bytes!("../../../../assets/brand/brand_mark.png");
+const BRAND_LOCKUP_BYTES: &[u8] = include_bytes!("../../../../assets/brand/brand_lockup.png");
+const BRAND_LOCKUP_SMALL_BYTES: &[u8] =
+    include_bytes!("../../../../assets/brand/brand_lockup_small.png");
+const APP_ICON_BYTES: &[u8] = include_bytes!("../../../../assets/icon.png");
 
-/// Render the official Function geometric brand mark.
+/// Render the official Function semi-circular geometric mark with dithered particles.
+/// Aspect ratio is 2:1 (width:height = 2:1).
+pub fn render_brand_mark(width: f32) -> impl IntoElement {
+    let height = (width / 2.0).round();
+    let image = Arc::new(Image::from_bytes(
+        ImageFormat::Png,
+        BRAND_MARK_BYTES.to_vec(),
+    ));
+    img(image).w(px(width)).h(px(height))
+}
+
+/// Render the official Function logo lockup (mark + FUNCTION wordmark).
+/// Aspect ratio is approximately 1.51:1 (width:height).
+pub fn render_brand_lockup(width: f32) -> impl IntoElement {
+    let height = (width / 1.51).round();
+    let image = Arc::new(Image::from_bytes(
+        ImageFormat::Png,
+        BRAND_LOCKUP_BYTES.to_vec(),
+    ));
+    img(image).w(px(width)).h(px(height))
+}
+
+/// Render the compact brand lockup (mark + FUNCTION wordmark).
+pub fn render_brand_lockup_small(width: f32) -> impl IntoElement {
+    let height = (width / 1.51).round();
+    let image = Arc::new(Image::from_bytes(
+        ImageFormat::Png,
+        BRAND_LOCKUP_SMALL_BYTES.to_vec(),
+    ));
+    img(image).w(px(width)).h(px(height))
+}
+
+/// Render the official Function geometric brand mark for general UI use.
 pub fn render_logo(size: f32) -> impl IntoElement {
-    let image = Arc::new(Image::from_bytes(ImageFormat::Png, ICON_BYTES.to_vec()));
-    img(image).w(px(size)).h(px(size)).rounded_sm()
+    render_brand_mark(size)
+}
+
+/// Render the square application icon.
+pub fn render_app_icon(size: f32) -> impl IntoElement {
+    let image = Arc::new(Image::from_bytes(ImageFormat::Png, APP_ICON_BYTES.to_vec()));
+    img(image).w(px(size)).h(px(size)).rounded_md()
 }
