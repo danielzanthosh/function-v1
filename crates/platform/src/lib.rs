@@ -469,6 +469,7 @@ pub mod macos {
             }
 
             #[link(name = "Carbon", kind = "framework")]
+            #[allow(non_snake_case)]
             extern "C" {
                 fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
                 fn InstallEventHandler(
@@ -1225,6 +1226,17 @@ pub fn set_macos_activation_policy_accessory() {
 pub fn register_macos_login_item() {
     #[cfg(target_os = "macos")]
     unsafe {
+        // Objective-C BOOL is signed char (i8) on Apple platforms: 0 is NO, non-zero is YES.
+        type ObjcBool = std::os::raw::c_schar;
+
+        type MsgSendStatus =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize;
+        type MsgSendRegister = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut *mut std::ffi::c_void,
+        ) -> ObjcBool;
+
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -1234,23 +1246,49 @@ pub fn register_macos_login_item() {
                 ...
             ) -> *mut std::ffi::c_void;
         }
+
         let sm_app_service_class = objc_getClass(b"SMAppService\0".as_ptr() as _);
         if !sm_app_service_class.is_null() {
             let main_app_sel = sel_registerName(b"mainAppService\0".as_ptr() as _);
             let service = objc_msgSend(sm_app_service_class, main_app_sel);
             if !service.is_null() {
                 let status_sel = sel_registerName(b"status\0".as_ptr() as _);
+                let msg_send_status: MsgSendStatus = std::mem::transmute(
+                    objc_msgSend
+                        as unsafe extern "C" fn(
+                            *mut std::ffi::c_void,
+                            *mut std::ffi::c_void,
+                            ...,
+                        ) -> *mut std::ffi::c_void,
+                );
                 // SMAppServiceStatusEnabled = 1
-                let status: isize = std::mem::transmute(objc_msgSend(service, status_sel));
+                let status = msg_send_status(service, status_sel);
                 if status != 1 {
-                    let register_sel = sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
+                    let register_sel =
+                        sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
                     let mut err: *mut std::ffi::c_void = std::ptr::null_mut();
-                    let _: bool = std::mem::transmute(objc_msgSend(
+                    let msg_send_register: MsgSendRegister = std::mem::transmute(
+                        objc_msgSend
+                            as unsafe extern "C" fn(
+                                *mut std::ffi::c_void,
+                                *mut std::ffi::c_void,
+                                ...,
+                            ) -> *mut std::ffi::c_void,
+                    );
+                    let res: ObjcBool = msg_send_register(
                         service,
                         register_sel,
                         &mut err as *mut *mut std::ffi::c_void,
-                    ));
-                    tracing::info!("Registered Function as modern macOS SMAppService Login Item");
+                    );
+                    let success: bool = res != 0;
+                    if success {
+                        tracing::info!("Registered Function as modern macOS SMAppService Login Item");
+                    } else {
+                        tracing::warn!(
+                            "Failed to register Function as macOS Login Item (status: {})",
+                            status
+                        );
+                    }
                 }
             }
         }
