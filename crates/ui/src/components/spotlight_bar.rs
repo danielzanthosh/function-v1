@@ -265,7 +265,6 @@ pub fn render_spotlight_bar(
     };
 
     let bg_surface = theme.surface_elevated;
-    let border_color_val = theme.border_subtle;
     let divider_color = theme.surface_input;
     let selected_bg = theme.surface_active;
     let hover_bg = theme.surface_input;
@@ -281,8 +280,6 @@ pub fn render_spotlight_bar(
         .w_full()
         .h_full()
         .bg(bg_surface)
-        .border_1()
-        .border_color(border_color_val)
         .rounded_xl() // Function curved floating window
         .shadow_2xl()
         .overflow_hidden()
