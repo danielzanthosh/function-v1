@@ -97,7 +97,7 @@ Important actions should have shortcuts.
 
 Examples:
 
-Option + Space
+Command + ;
 Alt + Space
 
 Escape

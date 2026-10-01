@@ -535,6 +535,9 @@ impl FunctionView {
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.is_visible = false;
         self.play_sound_feedback(SoundEffect::Select);
+        #[cfg(target_os = "macos")]
+        window.minimize_window();
+        #[cfg(not(target_os = "macos"))]
         function_platform::hide_window_by_title("Function");
         window.resize(Size {
             width: px(0.0),
@@ -549,6 +552,9 @@ impl FunctionView {
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
         self.play_sound_feedback(SoundEffect::Select);
+        #[cfg(target_os = "macos")]
+        window.activate_window();
+        #[cfg(not(target_os = "macos"))]
         function_platform::show_window_by_title("Function");
         window.resize(self.target_window_size());
         self.focus_handle.focus(window);
@@ -872,6 +878,21 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
+                "v" if modifiers.secondary() => {
+                    if let Some(text) = cx
+                        .read_from_clipboard()
+                        .and_then(|clipboard| clipboard.text())
+                    {
+                        match self.settings_focused_field {
+                            0 => self.settings_api_key.push_str(&text),
+                            1 => self.settings_model.push_str(&text),
+                            2 => self.settings_base_url.push_str(&text),
+                            _ => {}
+                        }
+                        cx.notify();
+                    }
+                    return;
+                }
                 "backspace" => {
                     match self.settings_focused_field {
                         0 => {
@@ -927,6 +948,17 @@ impl FunctionView {
         // ==========================================
         // GLOBAL SETTINGS SHORTCUT (Ctrl+,)
         // ==========================================
+        if key == "v" && modifiers.secondary() {
+            if let Some(text) = cx
+                .read_from_clipboard()
+                .and_then(|clipboard| clipboard.text())
+            {
+                self.input_buffer.push_str(&text);
+                cx.notify();
+            }
+            return;
+        }
+
         if modifiers.control && (key == "," || key == "settings") {
             self.toggle_settings(window, cx);
             return;
@@ -1089,7 +1121,7 @@ impl Render for FunctionView {
         );
 
         let bg_surface = Rgba {
-            a: 0.95,
+            a: 1.0,
             ..theme.surface_base
         };
 

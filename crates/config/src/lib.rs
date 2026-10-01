@@ -136,7 +136,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             hotkey: if cfg!(target_os = "macos") {
-                "Option+Space".to_string()
+                "Command+;".to_string()
             } else {
                 "Ctrl+Space".to_string()
             },
@@ -179,7 +179,12 @@ impl AppConfig {
         let path = Self::config_path();
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(cfg) = serde_json::from_str::<Self>(&content) {
+                if let Ok(mut cfg) = serde_json::from_str::<Self>(&content) {
+                    // Preserve custom shortcuts while moving only the old shipped macOS
+                    // default away from Option+Space.
+                    if migrate_macos_default_hotkey(&mut cfg) {
+                        let _ = cfg.save();
+                    }
                     return cfg;
                 }
             }
@@ -197,6 +202,21 @@ impl AppConfig {
         std::fs::write(&path, serialized)?;
         Ok(())
     }
+}
+
+fn migrate_macos_default_hotkey(config: &mut AppConfig) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if config.hotkey == "Option+Space" {
+            config.hotkey = "Command+;".to_string();
+            return true;
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = config;
+
+    false
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -355,6 +375,25 @@ mod tests {
             deserialized.ai_provider.api_key.as_deref(),
             Some("test-key")
         );
+    }
+
+    #[test]
+    fn test_legacy_macos_hotkey_migration_only_changes_old_default() {
+        let mut config = AppConfig::default();
+        config.hotkey = "Option+Space".to_string();
+
+        let migrated = migrate_macos_default_hotkey(&mut config);
+
+        #[cfg(target_os = "macos")]
+        {
+            assert!(migrated);
+            assert_eq!(config.hotkey, "Command+;");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(!migrated);
+            assert_eq!(config.hotkey, "Option+Space");
+        }
     }
 
     #[test]

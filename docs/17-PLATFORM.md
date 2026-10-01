@@ -21,7 +21,7 @@ Target modern supported macOS versions.
 
 Global hotkey:
 
-Option + Space
+Command + ;
 
 ## Abstraction
 

@@ -12,7 +12,7 @@ The speech pipeline should use a Whisper-based service.
 
 macOS:
 
-Option + Space
+Command + ;
 
 Windows:
 

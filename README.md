@@ -6,7 +6,7 @@ A native AI computer assistant for Windows and macOS.
 
 Press:
 
-macOS: Option + Space
+macOS: Command + ;
 
 Windows: Alt + Space
 

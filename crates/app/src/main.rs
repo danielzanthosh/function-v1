@@ -161,7 +161,12 @@ fn main() {
         };
 
         // Platform-specific window configuration:
-        // macOS: Fully frameless (no titlebar, no traffic lights) with vibrancy
+        let start_hidden =
+            config.start_hidden && !std::env::args().any(|arg| arg == "--show" || arg == "-s");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let _ = start_hidden;
+
+        // macOS: Fully frameless (no titlebar, no traffic lights) with an opaque surface
         // Windows: Transparent titlebar with client-side decorations
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -185,14 +190,34 @@ fn main() {
                 }
             },
             is_resizable: false,
-            // macOS: Blurred gives subtle NSVisualEffectView vibrancy behind
-            // semi-transparent content, matching the native Spotlight aesthetic.
+            focus: {
+                #[cfg(target_os = "macos")]
+                {
+                    !start_hidden
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    true
+                }
+            },
+            show: {
+                #[cfg(target_os = "macos")]
+                {
+                    !start_hidden
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    true
+                }
+            },
+            // macOS: Opaque prevents the desktop wallpaper from bleeding through the
+            // Function surface.
             // Windows/other: Transparent removes the opaque native background
             // that would otherwise show through rounded corners.
             window_background: {
                 #[cfg(target_os = "macos")]
                 {
-                    WindowBackgroundAppearance::Blurred
+                    WindowBackgroundAppearance::Opaque
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -244,28 +269,28 @@ fn main() {
             function_platform::register_macos_login_item();
         }
 
-        let start_hidden =
-            config.start_hidden && !std::env::args().any(|arg| arg == "--show" || arg == "-s");
-
         // Ensure small and large native icons, tool window styling (no taskbar presence), and centering on Win32
-        let init_w = init_w_f32 as i32;
-        let init_h = init_h_f32 as i32;
-        std::thread::spawn(move || {
-            for _ in 0..10 {
-                std::thread::sleep(std::time::Duration::from_millis(60));
-                function_platform::set_window_icon_by_title("Function");
-                function_platform::set_window_as_tool_window_by_title("Function");
-                function_platform::center_window_by_title(
-                    "Function",
-                    init_w,
-                    init_h,
-                    is_upper_third,
-                );
-                if start_hidden {
-                    function_platform::hide_window_by_title("Function");
+        #[cfg(target_os = "windows")]
+        {
+            let init_w = init_w_f32 as i32;
+            let init_h = init_h_f32 as i32;
+            std::thread::spawn(move || {
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    function_platform::set_window_icon_by_title("Function");
+                    function_platform::set_window_as_tool_window_by_title("Function");
+                    function_platform::center_window_by_title(
+                        "Function",
+                        init_w,
+                        init_h,
+                        is_upper_third,
+                    );
+                    if start_hidden {
+                        function_platform::hide_window_by_title("Function");
+                    }
                 }
-            }
-        });
+            });
+        }
 
         tracing::info!("Function window launched");
     });

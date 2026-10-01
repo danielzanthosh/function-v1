@@ -12,7 +12,7 @@ It should feel like a serious desktop productivity tool rather than a traditiona
 
 The user presses a global shortcut:
 
-- macOS: Option + Space
+- macOS: Command + ;
 - Windows: Alt + Space
 
 A compact floating assistant appears.
