@@ -313,6 +313,66 @@ impl PlatformService for FallbackPlatformService {
     }
 }
 
+/// Locate the application icon file (`icon.ico`) across development,
+/// distribution, and execution contexts without relying on hardcoded absolute paths.
+pub fn find_icon_path() -> Option<std::path::PathBuf> {
+    // 1. Explicit environment variable override
+    if let Ok(env_path) = std::env::var("FUNCTION_ICON_PATH") {
+        let p = std::path::PathBuf::from(env_path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. Relative to current working directory
+    let cwd_candidates = [
+        std::path::PathBuf::from("assets/icon.ico"),
+        std::path::PathBuf::from("../assets/icon.ico"),
+        std::path::PathBuf::from("../../assets/icon.ico"),
+    ];
+    for candidate in &cwd_candidates {
+        if candidate.exists() {
+            return Some(candidate.clone());
+        }
+    }
+
+    // 3. Search directory hierarchy of the current running executable (up to 5 levels)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            for ancestor in exe_dir.ancestors().take(5) {
+                let candidate = ancestor.join("assets").join("icon.ico");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    // 4. Compile-time crate manifest directory fallback
+    if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
+        let manifest_path = std::path::PathBuf::from(manifest);
+        for ancestor in manifest_path.ancestors().take(4) {
+            let candidate = ancestor.join("assets").join("icon.ico");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    // 5. Runtime CARGO_MANIFEST_DIR environment variable
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let manifest_path = std::path::PathBuf::from(manifest);
+        for ancestor in manifest_path.ancestors().take(4) {
+            let candidate = ancestor.join("assets").join("icon.ico");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
 /// Helper to explicitly set the Win32 window icon (both small caption icon and large taskbar icon).
 pub fn set_window_icon_by_title(title: &str) {
     #[cfg(target_os = "windows")]
@@ -386,55 +446,31 @@ pub fn set_window_icon_by_title(title: &str) {
 
                 // If embedded resource 1 was not found, load directly from filesystem icon.ico
                 if hicon_sm == 0 || hicon_lg == 0 {
-                    let candidates = [
-                        std::path::PathBuf::from("assets/icon.ico"),
-                        std::path::PathBuf::from("../assets/icon.ico"),
-                        std::path::PathBuf::from("../../assets/icon.ico"),
-                        std::env::current_exe()
-                            .ok()
-                            .and_then(|p| p.parent().map(|p| p.join("assets/icon.ico")))
-                            .unwrap_or_default(),
-                        std::env::current_exe()
-                            .ok()
-                            .and_then(|p| {
-                                p.parent()
-                                    .and_then(|p| p.parent())
-                                    .map(|p| p.join("assets/icon.ico"))
-                            })
-                            .unwrap_or_default(),
-                        std::path::PathBuf::from(r"G:\Exhi\Version 1\assets\icon.ico"),
-                    ];
+                    if let Some(icon_path) = find_icon_path() {
+                        let icon_path_wide: Vec<u16> = OsStr::new(icon_path.as_os_str())
+                            .encode_wide()
+                            .chain(std::iter::once(0))
+                            .collect();
 
-                    for candidate in &candidates {
-                        if candidate.exists() {
-                            let icon_path_wide: Vec<u16> = OsStr::new(candidate.as_os_str())
-                                .encode_wide()
-                                .chain(std::iter::once(0))
-                                .collect();
-
-                            if hicon_sm == 0 {
-                                hicon_sm = LoadImageW(
-                                    0,
-                                    icon_path_wide.as_ptr() as usize,
-                                    IMAGE_ICON,
-                                    16,
-                                    16,
-                                    LR_LOADFROMFILE,
-                                );
-                            }
-                            if hicon_lg == 0 {
-                                hicon_lg = LoadImageW(
-                                    0,
-                                    icon_path_wide.as_ptr() as usize,
-                                    IMAGE_ICON,
-                                    32,
-                                    32,
-                                    LR_LOADFROMFILE,
-                                );
-                            }
-                            if hicon_sm != 0 && hicon_lg != 0 {
-                                break;
-                            }
+                        if hicon_sm == 0 {
+                            hicon_sm = LoadImageW(
+                                0,
+                                icon_path_wide.as_ptr() as usize,
+                                IMAGE_ICON,
+                                16,
+                                16,
+                                LR_LOADFROMFILE,
+                            );
+                        }
+                        if hicon_lg == 0 {
+                            hicon_lg = LoadImageW(
+                                0,
+                                icon_path_wide.as_ptr() as usize,
+                                IMAGE_ICON,
+                                32,
+                                32,
+                                LR_LOADFROMFILE,
+                            );
                         }
                     }
                 }
@@ -616,9 +652,19 @@ pub fn open_url(url: &str) {
             .args(["/c", "start", "", url])
             .spawn();
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = url;
+        use std::process::Command;
+        let _ = Command::new("open")
+            .arg(url)
+            .spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        use std::process::Command;
+        let _ = Command::new("xdg-open")
+            .arg(url)
+            .spawn();
     }
 }
 
@@ -641,6 +687,19 @@ pub fn create_native_platform_service() -> Box<dyn PlatformService> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_find_icon_path() {
+        let icon_path = find_icon_path();
+        assert!(icon_path.is_some(), "find_icon_path() should resolve icon.ico in workspace");
+        let path = icon_path.unwrap();
+        assert!(path.exists(), "Resolved icon path does not exist on disk: {:?}", path);
+        assert!(
+            path.ends_with("icon.ico"),
+            "Resolved path does not end with icon.ico: {:?}",
+            path
+        );
+    }
 
     #[tokio::test]
     async fn test_platform_service() {

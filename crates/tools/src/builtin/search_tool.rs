@@ -70,7 +70,8 @@ impl Tool for WebSearchTool {
                 encoded
             );
 
-            let mut cmd = Command::new("curl.exe");
+            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-L")
                 .arg("--max-time")

@@ -117,7 +117,8 @@ impl LlmProvider for OpenAiLlmProvider {
         let api_key = self.api_key.clone();
 
         let response_body = tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
-            let mut cmd = Command::new("curl.exe");
+            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-X")
                 .arg("POST")

@@ -138,13 +138,23 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Return standard config file path in `~/.function/config.json`.
-    pub fn config_path() -> std::path::PathBuf {
+    /// Return standard base directory `~/.function` across all platforms using a 3-tier cascade.
+    pub fn function_dir() -> std::path::PathBuf {
         let base_dir = std::env::var("USERPROFILE")
             .map(std::path::PathBuf::from)
             .or_else(|_| std::env::var("HOME").map(std::path::PathBuf::from))
             .unwrap_or_else(|_| std::env::temp_dir());
-        base_dir.join(".function").join("config.json")
+        base_dir.join(".function")
+    }
+
+    /// Return standard config file path in `~/.function/config.json`.
+    pub fn config_path() -> std::path::PathBuf {
+        Self::function_dir().join("config.json")
+    }
+
+    /// Return standard memory file path in `~/.function/memory.json`.
+    pub fn memory_path() -> std::path::PathBuf {
+        Self::function_dir().join("memory.json")
     }
 
     /// Load configuration from disk, falling back to default if file doesn't exist or is invalid.
@@ -325,6 +335,34 @@ mod tests {
         assert!(!redacted.contains("sk-abcdef1234567890xyz"));
         assert!(redacted.contains("[REDACTED_API_KEY]"));
     }
+
+    #[test]
+    fn test_function_paths_resolution() {
+        let dir = function_dir();
+        assert!(dir.ends_with(".function"));
+        let cfg_path = config_path();
+        assert_eq!(cfg_path, dir.join("config.json"));
+        let mem_path = memory_path();
+        assert_eq!(mem_path, dir.join("memory.json"));
+        assert_eq!(AppConfig::function_dir(), dir);
+        assert_eq!(AppConfig::config_path(), cfg_path);
+        assert_eq!(AppConfig::memory_path(), mem_path);
+    }
+}
+
+/// Return standard base directory `~/.function` across all platforms using a 3-tier cascade.
+pub fn function_dir() -> std::path::PathBuf {
+    AppConfig::function_dir()
+}
+
+/// Return standard config file path in `~/.function/config.json`.
+pub fn config_path() -> std::path::PathBuf {
+    AppConfig::config_path()
+}
+
+/// Return standard memory file path in `~/.function/memory.json`.
+pub fn memory_path() -> std::path::PathBuf {
+    AppConfig::memory_path()
 }
 
 /// Redact sensitive API keys, authorization tokens, and credentials from text strings before logging.

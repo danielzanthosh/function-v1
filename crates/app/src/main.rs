@@ -74,10 +74,7 @@ fn main() {
     function_tools::register_default_tools(&mut tools);
     tracing::info!("Registered {} default computer tools", tools.list().len());
 
-    let memory_dir = std::env::var("USERPROFILE")
-        .map(|p| std::path::PathBuf::from(p).join(".function"))
-        .unwrap_or_else(|_| std::env::temp_dir().join(".function"));
-    let memory_file = memory_dir.join("memory.json");
+    let memory_file = function_config::memory_path();
     let memory: std::sync::Arc<dyn function_memory::MemoryStore> =
         match function_memory::FileMemoryStore::new(&memory_file) {
             Ok(store) => {

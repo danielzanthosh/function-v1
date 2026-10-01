@@ -29,7 +29,8 @@ impl SearchProvider for DuckDuckGoSearchProvider {
             let encoded = urlencoding_simple(&q);
             let url = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1", encoded);
 
-            let mut cmd = Command::new("curl.exe");
+            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let mut cmd = Command::new(curl_bin);
             cmd.arg("-s").arg("-A").arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64)").arg(&url);
 
             let output = cmd.output().map_err(|e| ProviderError::Network(e.to_string()))?;
