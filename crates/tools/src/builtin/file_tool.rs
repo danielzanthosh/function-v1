@@ -72,13 +72,18 @@ impl Tool for FileTool {
         }
     }
 
-    async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'action' parameter".into(),
-            }
-        })?;
+            })?;
 
         let path_str = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
             ToolError::InvalidParameters {
@@ -90,7 +95,10 @@ impl Tool for FileTool {
         if Self::is_system_path(path_str) {
             return Err(ToolError::ExecutionFailed {
                 tool: self.name().into(),
-                details: format!("Access to critical system path '{}' is restricted.", path_str),
+                details: format!(
+                    "Access to critical system path '{}' is restricted.",
+                    path_str
+                ),
             });
         }
 
@@ -98,10 +106,11 @@ impl Tool for FileTool {
 
         match action {
             "read" => {
-                let content = fs::read_to_string(target_path).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: format!("Failed to read file '{}': {}", path_str, e),
-                })?;
+                let content =
+                    fs::read_to_string(target_path).map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: format!("Failed to read file '{}': {}", path_str, e),
+                    })?;
                 let char_len = content.chars().count();
                 Ok(ToolResult::success(
                     format!("Read {} characters from '{}'", char_len, path_str),
@@ -123,10 +132,11 @@ impl Tool for FileTool {
                 ))
             }
             "list" => {
-                let entries = fs::read_dir(target_path).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: format!("Failed to list directory '{}': {}", path_str, e),
-                })?;
+                let entries =
+                    fs::read_dir(target_path).map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: format!("Failed to list directory '{}': {}", path_str, e),
+                    })?;
                 let mut names = Vec::new();
                 for entry in entries.flatten() {
                     let file_name = entry.file_name().to_string_lossy().to_string();
@@ -169,12 +179,13 @@ impl Tool for FileTool {
                 if !ctx.allow_sensitive {
                     return Err(ToolError::RequiresConfirmation);
                 }
-                let dest_str = params.get("destination").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ToolError::InvalidParameters {
+                let dest_str = params
+                    .get("destination")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParameters {
                         tool: self.name().into(),
                         details: "Missing 'destination' parameter for action 'move'".into(),
-                    }
-                })?;
+                    })?;
                 let dest_path = Path::new(dest_str);
                 fs::rename(target_path, dest_path).map_err(|e| ToolError::ExecutionFailed {
                     tool: self.name().into(),

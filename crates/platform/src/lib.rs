@@ -106,6 +106,75 @@ pub mod windows {
             tracing::info!(shortcut, "Registering Windows global hotkey");
             let mut current = self.registered_hotkey.write().unwrap();
             *current = Some(shortcut.to_string());
+
+            let tx = self.hotkey_tx.clone();
+            let sc = shortcut.to_string();
+
+            std::thread::spawn(move || {
+                #[repr(C)]
+                struct Point {
+                    x: i32,
+                    y: i32,
+                }
+
+                #[repr(C)]
+                struct Msg {
+                    hwnd: isize,
+                    message: u32,
+                    wparam: usize,
+                    lparam: isize,
+                    time: u32,
+                    pt: Point,
+                }
+
+                extern "system" {
+                    fn RegisterHotKey(hWnd: isize, id: i32, fsModifiers: u32, vk: u32) -> i32;
+                    fn GetMessageW(
+                        lpMsg: *mut Msg,
+                        hWnd: isize,
+                        wMsgFilterMin: u32,
+                        wMsgFilterMax: u32,
+                    ) -> i32;
+                    fn TranslateMessage(lpMsg: *const Msg) -> i32;
+                    fn DispatchMessageW(lpMsg: *const Msg) -> isize;
+                }
+
+                const MOD_ALT: u32 = 0x0001;
+                const MOD_CONTROL: u32 = 0x0002;
+                const MOD_SHIFT: u32 = 0x0004;
+                const MOD_NOREPEAT: u32 = 0x4000;
+                const VK_SPACE: u32 = 0x20;
+                const WM_HOTKEY: u32 = 0x0312;
+
+                let mut mods = MOD_NOREPEAT;
+                let sc_upper = sc.to_uppercase();
+                if sc_upper.contains("CTRL") || sc_upper.contains("CONTROL") {
+                    mods |= MOD_CONTROL;
+                }
+                if sc_upper.contains("ALT") || sc_upper.contains("OPTION") {
+                    mods |= MOD_ALT;
+                }
+                if sc_upper.contains("SHIFT") {
+                    mods |= MOD_SHIFT;
+                }
+
+                unsafe {
+                    let res = RegisterHotKey(0, 101, mods, VK_SPACE);
+                    if res == 0 {
+                        let _ = RegisterHotKey(0, 101, mods & !MOD_NOREPEAT, VK_SPACE);
+                    }
+
+                    let mut msg: Msg = std::mem::zeroed();
+                    while GetMessageW(&mut msg, 0, 0, 0) > 0 {
+                        if msg.message == WM_HOTKEY {
+                            let _ = tx.send(());
+                        }
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            });
+
             Ok(())
         }
 
@@ -242,12 +311,20 @@ impl FallbackPlatformService {
         if !available {
             struct DisabledMic;
             impl AudioCapture for DisabledMic {
-                fn is_microphone_available(&self) -> bool { false }
-                fn start_recording(&self) -> Result<(), PlatformError> {
-                    Err(PlatformError::SystemApi("Microphone not available".to_string()))
+                fn is_microphone_available(&self) -> bool {
+                    false
                 }
-                fn stop_recording(&self) -> Result<Vec<u8>, PlatformError> { Ok(Vec::new()) }
-                fn is_recording(&self) -> bool { false }
+                fn start_recording(&self) -> Result<(), PlatformError> {
+                    Err(PlatformError::SystemApi(
+                        "Microphone not available".to_string(),
+                    ))
+                }
+                fn stop_recording(&self) -> Result<Vec<u8>, PlatformError> {
+                    Ok(Vec::new())
+                }
+                fn is_recording(&self) -> bool {
+                    false
+                }
             }
             self.audio_capture = Arc::new(DisabledMic);
         } else {
@@ -396,12 +473,7 @@ pub fn set_window_icon_by_title(title: &str) {
                 cy: i32,
                 fuLoad: u32,
             ) -> isize;
-            fn SendMessageW(
-                hWnd: isize,
-                Msg: u32,
-                wParam: usize,
-                lParam: isize,
-            ) -> isize;
+            fn SendMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> isize;
             fn LoadLibraryA(lpLibFileName: *const i8) -> isize;
             fn GetProcAddress(hModule: isize, lpProcName: *const i8) -> usize;
         }
@@ -421,14 +493,16 @@ pub fn set_window_icon_by_title(title: &str) {
                 // Apply Windows 11 rounded corners to window frame if DwmSetWindowAttribute is supported
                 let dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr() as *const i8);
                 if dwm != 0 {
-                    let proc = GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr() as *const i8);
+                    let proc =
+                        GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr() as *const i8);
                     if proc != 0 {
                         type FnDwmSetWindowAttribute = unsafe extern "system" fn(
                             isize,
                             u32,
                             *const std::ffi::c_void,
                             u32,
-                        ) -> i32;
+                        )
+                            -> i32;
                         let set_attr: FnDwmSetWindowAttribute = std::mem::transmute(proc);
                         let corner_pref = DWMWCP_ROUND;
                         let _ = set_attr(
@@ -541,6 +615,72 @@ pub fn center_window_by_title(title: &str, width: i32, height: i32, upper_third:
     }
 }
 
+/// Hide the native window completely from the desktop and taskbar.
+pub fn hide_window_by_title(title: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let title_wide: Vec<u16> = OsStr::new(title)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+            fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+        }
+
+        const SW_HIDE: i32 = 0;
+
+        unsafe {
+            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+            if hwnd != 0 {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title;
+    }
+}
+
+/// Reveal and focus the native window instantly.
+pub fn show_window_by_title(title: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let title_wide: Vec<u16> = OsStr::new(title)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+            fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+            fn SetForegroundWindow(hWnd: isize) -> i32;
+        }
+
+        const SW_SHOW: i32 = 5;
+
+        unsafe {
+            let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+            if hwnd != 0 {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title;
+    }
+}
+
 /// Sound effect types inspired by Flow Launcher feedback sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoundEffect {
@@ -648,23 +788,17 @@ pub fn open_url(url: &str) {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let _ = Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .spawn();
+        let _ = Command::new("cmd").args(["/c", "start", "", url]).spawn();
     }
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        let _ = Command::new("open")
-            .arg(url)
-            .spawn();
+        let _ = Command::new("open").arg(url).spawn();
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         use std::process::Command;
-        let _ = Command::new("xdg-open")
-            .arg(url)
-            .spawn();
+        let _ = Command::new("xdg-open").arg(url).spawn();
     }
 }
 
@@ -691,9 +825,16 @@ mod tests {
     #[test]
     fn test_find_icon_path() {
         let icon_path = find_icon_path();
-        assert!(icon_path.is_some(), "find_icon_path() should resolve icon.ico in workspace");
+        assert!(
+            icon_path.is_some(),
+            "find_icon_path() should resolve icon.ico in workspace"
+        );
         let path = icon_path.unwrap();
-        assert!(path.exists(), "Resolved icon path does not exist on disk: {:?}", path);
+        assert!(
+            path.exists(),
+            "Resolved icon path does not exist on disk: {:?}",
+            path
+        );
         assert!(
             path.ends_with("icon.ico"),
             "Resolved path does not end with icon.ico: {:?}",

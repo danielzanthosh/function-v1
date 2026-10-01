@@ -49,18 +49,27 @@ impl InMemoryCredentialStore {
 
 impl CredentialStore for InMemoryCredentialStore {
     fn get_secret(&self, key: &str) -> Result<Option<String>, CredentialError> {
-        let read = self.secrets.read().map_err(|e| CredentialError::BackendError(e.to_string()))?;
+        let read = self
+            .secrets
+            .read()
+            .map_err(|e| CredentialError::BackendError(e.to_string()))?;
         Ok(read.get(key).cloned())
     }
 
     fn set_secret(&self, key: &str, value: &str) -> Result<(), CredentialError> {
-        let mut write = self.secrets.write().map_err(|e| CredentialError::BackendError(e.to_string()))?;
+        let mut write = self
+            .secrets
+            .write()
+            .map_err(|e| CredentialError::BackendError(e.to_string()))?;
         write.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn delete_secret(&self, key: &str) -> Result<(), CredentialError> {
-        let mut write = self.secrets.write().map_err(|e| CredentialError::BackendError(e.to_string()))?;
+        let mut write = self
+            .secrets
+            .write()
+            .map_err(|e| CredentialError::BackendError(e.to_string()))?;
         write.remove(key);
         Ok(())
     }
@@ -120,14 +129,11 @@ fn default_sound_enabled() -> bool {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            #[cfg(target_os = "macos")]
-            hotkey: "Option+Space".to_string(),
-            #[cfg(not(target_os = "macos"))]
-            hotkey: "Alt+Space".to_string(),
+            hotkey: "Ctrl+Space".to_string(),
             theme: ThemePreference::System,
             theme_style: ThemeStyle::CarbonDark,
             accent_color: AccentColor::White,
-            window_position: WindowPositionMode::Center,
+            window_position: WindowPositionMode::UpperThird,
             sound_enabled: true,
             ai_provider: AiProviderConfig::default(),
             speech: SpeechConfig::default(),
@@ -220,7 +226,9 @@ impl AiProviderConfig {
                 return true;
             }
         }
-        std::env::var("OPENAI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false)
+        std::env::var("OPENAI_API_KEY")
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
     }
 
     pub fn resolve_api_key(&self, credentials: &dyn CredentialStore) -> Option<String> {
@@ -235,7 +243,10 @@ impl AiProviderConfig {
                 return Some(key);
             }
         }
-        credentials.get_secret(&self.api_key_reference).ok().flatten()
+        credentials
+            .get_secret(&self.api_key_reference)
+            .ok()
+            .flatten()
     }
 }
 
@@ -262,7 +273,11 @@ impl Default for SpeechConfig {
 
 impl SpeechConfig {
     pub fn is_configured(&self) -> bool {
-        self.enabled && self.api_key_reference.as_ref().map_or(false, |k| !k.is_empty())
+        self.enabled
+            && self
+                .api_key_reference
+                .as_ref()
+                .map_or(false, |k| !k.is_empty())
     }
 }
 
@@ -325,12 +340,16 @@ mod tests {
         let deserialized: AppConfig = serde_json::from_str(&json).unwrap();
 
         assert!(!deserialized.sound_enabled);
-        assert_eq!(deserialized.ai_provider.api_key.as_deref(), Some("test-key"));
+        assert_eq!(
+            deserialized.ai_provider.api_key.as_deref(),
+            Some("test-key")
+        );
     }
 
     #[test]
     fn test_redact_secrets() {
-        let input = "Calling OpenAI API with Authorization: Bearer sk-abcdef1234567890xyz and token test";
+        let input =
+            "Calling OpenAI API with Authorization: Bearer sk-abcdef1234567890xyz and token test";
         let redacted = redact_secrets(input);
         assert!(!redacted.contains("sk-abcdef1234567890xyz"));
         assert!(redacted.contains("[REDACTED_API_KEY]"));
@@ -396,4 +415,3 @@ pub fn redact_secrets(input: &str) -> String {
 
     output
 }
-

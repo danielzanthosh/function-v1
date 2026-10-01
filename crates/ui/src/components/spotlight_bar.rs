@@ -14,7 +14,7 @@ use crate::components::launcher_icons::{
 use crate::components::render_logo;
 use crate::theme::Theme;
 use gpui::prelude::*;
-use gpui::{div, px, rgba, IntoElement};
+use gpui::{div, px, rgba, IntoElement, Rgba};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherIconType {
@@ -91,7 +91,10 @@ pub fn get_current_time_string() -> String {
 pub fn get_local_ip_string() -> String {
     std::net::UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| s.connect("8.8.8.8:80").map(|_| s.local_addr()))
-        .map(|addr| addr.map(|a| a.ip().to_string()).unwrap_or_else(|_| "127.0.0.1".into()))
+        .map(|addr| {
+            addr.map(|a| a.ip().to_string())
+                .unwrap_or_else(|_| "127.0.0.1".into())
+        })
         .unwrap_or_else(|_| "127.0.0.1".into())
 }
 
@@ -168,10 +171,16 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
     }
 
     // 5. Settings & Customization query
-    if lower == "settings" || lower == "config" || lower == "theme" || lower == "api" || lower == "key" {
+    if lower == "settings"
+        || lower == "config"
+        || lower == "theme"
+        || lower == "api"
+        || lower == "key"
+    {
         return vec![LauncherItem {
             keyword: "Function Preferences".to_string(),
-            description: "Customize theme, accent color, AI provider, API keys & window behavior".to_string(),
+            description: "Customize theme, accent color, AI provider, API keys & window behavior"
+                .to_string(),
             shortcut: "Enter".to_string(),
             icon_type: LauncherIconType::Settings,
             action: LauncherAction::OpenSettings,
@@ -183,21 +192,26 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
         return vec![
             LauncherItem {
                 keyword: "Execute Computer Task".to_string(),
-                description: "Type an intent to orchestrate computer tools, analyze screen, or automate apps".to_string(),
+                description:
+                    "Type an intent to orchestrate computer tools, analyze screen, or automate apps"
+                        .to_string(),
                 shortcut: "Enter".to_string(),
                 icon_type: LauncherIconType::Function,
                 action: LauncherAction::RunTask(String::new()),
             },
             LauncherItem {
                 keyword: "Run Shell Command (>)".to_string(),
-                description: "Execute native PowerShell or command line instruction directly".to_string(),
+                description: "Execute native PowerShell or command line instruction directly"
+                    .to_string(),
                 shortcut: "Alt+1".to_string(),
                 icon_type: LauncherIconType::Terminal,
                 action: LauncherAction::FillPrefix("> ".to_string()),
             },
             LauncherItem {
                 keyword: "Evaluate Expression (=)".to_string(),
-                description: "Compute arithmetic formulas, unit conversions, or logical expressions".to_string(),
+                description:
+                    "Compute arithmetic formulas, unit conversions, or logical expressions"
+                        .to_string(),
                 shortcut: "Alt+2".to_string(),
                 icon_type: LauncherIconType::Calculator,
                 action: LauncherAction::FillPrefix("= ".to_string()),
@@ -211,7 +225,8 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
             },
             LauncherItem {
                 keyword: "Function Preferences".to_string(),
-                description: "Customize theme, accent, AI models, API keys & audio feedback".to_string(),
+                description: "Customize theme, accent, AI models, API keys & audio feedback"
+                    .to_string(),
                 shortcut: "Ctrl+,".to_string(),
                 icon_type: LauncherIconType::Settings,
                 action: LauncherAction::OpenSettings,
@@ -264,7 +279,13 @@ pub fn render_spotlight_bar(
         selected_index.min(items.len().saturating_sub(1))
     };
 
-    let bg_surface = theme.surface_elevated;
+    // Subtle Liquid Glass surface: mostly opaque (~95% opacity) to preserve high
+    // text contrast while allowing the native blurred backdrop on macOS to softly
+    // influence the palette.
+    let bg_surface = Rgba {
+        a: 0.95,
+        ..theme.surface_elevated
+    };
     let divider_color = theme.surface_input;
     let selected_bg = theme.surface_active;
     let hover_bg = theme.surface_input;
@@ -280,8 +301,8 @@ pub fn render_spotlight_bar(
         .w_full()
         .h_full()
         .bg(bg_surface)
-        .rounded_xl() // Function curved floating window
-        .shadow_2xl()
+        .rounded_2xl() // Function curved floating window (macOS Spotlight style)
+        .shadow_xl()
         .overflow_hidden()
         // ==========================================
         // Top Search Bar (Function Mark | Input | Shortcut Tag)
@@ -295,7 +316,6 @@ pub fn render_spotlight_bar(
                 .px_4()
                 .border_b_1()
                 .border_color(divider_color)
-                .bg(bg_surface)
                 // Left: Function Logo & Search input
                 .child(
                     div()
@@ -315,31 +335,21 @@ pub fn render_spotlight_bar(
                                         .text_color(text_light)
                                         .child(query.to_string()),
                                 )
-                                .child(
-                                    div()
-                                        .w(px(2.0))
-                                        .h(px(16.0))
-                                        .bg(if cursor_visible {
-                                            accent_color
-                                        } else {
-                                            rgba(0x00000000)
-                                        }),
-                                )
+                                .child(div().w(px(2.0)).h(px(16.0)).bg(if cursor_visible {
+                                    accent_color
+                                } else {
+                                    rgba(0x00000000)
+                                }))
                         } else {
                             div()
                                 .flex()
                                 .items_center()
                                 .flex_1()
-                                .child(
-                                    div()
-                                        .w(px(2.0))
-                                        .h(px(16.0))
-                                        .bg(if cursor_visible {
-                                            accent_color
-                                        } else {
-                                            rgba(0x00000000)
-                                        }),
-                                )
+                                .child(div().w(px(2.0)).h(px(16.0)).bg(if cursor_visible {
+                                    accent_color
+                                } else {
+                                    rgba(0x00000000)
+                                }))
                                 .child(
                                     div()
                                         .text_sm()
@@ -350,135 +360,125 @@ pub fn render_spotlight_bar(
                 )
                 // Right: Minimal technical badge
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .px_2()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(badge_bg)
-                                .border_1()
-                                .border_color(badge_border)
-                                .text_xs()
-                                .text_color(text_muted_val)
-                                .child("Alt+Space"),
-                        ),
+                    div().flex().items_center().gap_2().child(
+                        div()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(badge_bg)
+                            .border_1()
+                            .border_color(badge_border)
+                            .text_xs()
+                            .text_color(text_muted_val)
+                            .child("Alt+Space"),
+                    ),
                 ),
         )
         // ==========================================
         // Results List with Precise Monochrome Indicator & Badges
         // ==========================================
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .p_2()
-                .gap_1()
-                .children(
-                    items
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, item)| {
-                            let is_selected = idx == selected_index;
+            div().flex().flex_col().flex_1().p_2().gap_1().children(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, item)| {
+                        let is_selected = idx == selected_index;
 
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .h(px(54.0))
-                                .rounded_md()
-                                .bg(if is_selected {
-                                    selected_bg
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .h(px(54.0))
+                            .rounded_md()
+                            .bg(if is_selected {
+                                selected_bg
+                            } else {
+                                rgba(0x00000000)
+                            })
+                            .hover(move |s| {
+                                if is_selected {
+                                    s.bg(selected_bg)
                                 } else {
-                                    rgba(0x00000000)
-                                })
-                                .hover(move |s| {
-                                    if is_selected {
-                                        s.bg(selected_bg)
+                                    s.bg(hover_bg)
+                                }
+                            })
+                            // Left section: vertical indicator pill + icon + title/description
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .h_full()
+                                    // Left vertical indicator pill
+                                    .child(
+                                        div()
+                                            .w(px(3.0))
+                                            .h(px(24.0))
+                                            .rounded_full()
+                                            .bg(if is_selected {
+                                                accent_color
+                                            } else {
+                                                rgba(0x00000000)
+                                            })
+                                            .ml_1()
+                                            .mr_2p5(),
+                                    )
+                                    // Icon container
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .w(px(26.0))
+                                            .h(px(26.0))
+                                            .mr_3()
+                                            .child(render_item_icon(item.icon_type)),
+                                    )
+                                    // Title and Description
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(if is_selected {
+                                                        text_light
+                                                    } else {
+                                                        theme.text_secondary
+                                                    })
+                                                    .child(item.keyword),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(text_muted_val)
+                                                    .child(item.description),
+                                            ),
+                                    ),
+                            )
+                            // Right section: shortcut badge
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .mr_3()
+                                    .rounded_sm()
+                                    .bg(badge_bg)
+                                    .border_1()
+                                    .border_color(badge_border)
+                                    .text_xs()
+                                    .text_color(if is_selected {
+                                        text_light
                                     } else {
-                                        s.bg(hover_bg)
-                                    }
-                                })
-                                // Left section: vertical indicator pill + icon + title/description
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .h_full()
-                                        // Left vertical indicator pill
-                                        .child(
-                                            div()
-                                                .w(px(3.0))
-                                                .h(px(24.0))
-                                                .rounded_full()
-                                                .bg(if is_selected {
-                                                    accent_color
-                                                } else {
-                                                    rgba(0x00000000)
-                                                })
-                                                .ml_1()
-                                                .mr_2p5(),
-                                        )
-                                        // Icon container
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .w(px(26.0))
-                                                .h(px(26.0))
-                                                .mr_3()
-                                                .child(render_item_icon(item.icon_type)),
-                                        )
-                                        // Title and Description
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .justify_center()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                                        .text_color(if is_selected {
-                                                            text_light
-                                                        } else {
-                                                            theme.text_secondary
-                                                        })
-                                                        .child(item.keyword),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(text_muted_val)
-                                                        .child(item.description),
-                                                ),
-                                        ),
-                                )
-                                // Right section: shortcut badge
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .mr_3()
-                                        .rounded_sm()
-                                        .bg(badge_bg)
-                                        .border_1()
-                                        .border_color(badge_border)
-                                        .text_xs()
-                                        .text_color(if is_selected {
-                                            text_light
-                                        } else {
-                                            text_muted_val
-                                        })
-                                        .child(item.shortcut),
-                                )
-                        })
-                        .collect::<Vec<_>>(),
-                ),
+                                        text_muted_val
+                                    })
+                                    .child(item.shortcut),
+                            )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         )
 }

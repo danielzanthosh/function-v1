@@ -74,13 +74,18 @@ impl Tool for TerminalTool {
         }
     }
 
-    async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let command = params.get("command").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let command = params
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'command' parameter".into(),
-            }
-        })?;
+            })?;
 
         if Self::is_destructive_command(command) && !ctx.allow_sensitive {
             return Err(ToolError::RequiresConfirmation);

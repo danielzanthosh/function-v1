@@ -97,7 +97,9 @@ impl<'a> Lexer<'a> {
                 Some(Ok(Token::Number(val)))
             }
             b's' | b'S' => {
-                if self.input[self.pos..].starts_with(b"sqrt") || self.input[self.pos..].starts_with(b"SQRT") {
+                if self.input[self.pos..].starts_with(b"sqrt")
+                    || self.input[self.pos..].starts_with(b"SQRT")
+                {
                     self.pos += 4;
                     Some(Ok(Token::Sqrt))
                 } else {
@@ -105,7 +107,9 @@ impl<'a> Lexer<'a> {
                 }
             }
             b'a' | b'A' => {
-                if self.input[self.pos..].starts_with(b"abs") || self.input[self.pos..].starts_with(b"ABS") {
+                if self.input[self.pos..].starts_with(b"abs")
+                    || self.input[self.pos..].starts_with(b"ABS")
+                {
                     self.pos += 3;
                     Some(Ok(Token::Abs))
                 } else {
@@ -265,7 +269,9 @@ pub fn evaluate_calculation(input: &str) -> Option<f64> {
     }
 
     // Require at least one math operator or function to prevent interpreting standalone numbers
-    let has_operator = trimmed.chars().any(|c| matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | 'x' | 'X'))
+    let has_operator = trimmed
+        .chars()
+        .any(|c| matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | 'x' | 'X'))
         || trimmed.to_lowercase().contains("sqrt")
         || trimmed.to_lowercase().contains("abs");
 

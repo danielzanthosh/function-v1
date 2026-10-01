@@ -12,7 +12,7 @@ use crate::components::render_logo;
 use crate::theme::Theme;
 use function_config::{AccentColor, ThemeStyle, WindowPositionMode};
 use gpui::prelude::*;
-use gpui::{div, px, rgba, IntoElement};
+use gpui::{div, px, rgba, IntoElement, Rgba};
 
 pub fn render_settings_view(
     api_key: &str,
@@ -63,11 +63,12 @@ pub fn render_settings_view(
         .flex_col()
         .w_full()
         .h_full()
-        .bg(bg_surface)
-        .border_1()
-        .border_color(border_color_val)
-        .rounded_xl() // Curved frameless window
-        .shadow_2xl()
+        .bg(Rgba {
+            a: 0.95,
+            ..bg_surface
+        })
+        .rounded_2xl() // Curved frameless window
+        .shadow_xl()
         .overflow_hidden()
         // ==========================================
         // Top Header

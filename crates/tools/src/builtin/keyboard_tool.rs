@@ -1,6 +1,6 @@
 use crate::{Tool, ToolContext, ToolError, ToolResult};
-use function_platform::{create_computer_control, ComputerControl};
 use async_trait::async_trait;
+use function_platform::{create_computer_control, ComputerControl};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -52,13 +52,18 @@ impl Tool for KeyboardTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'action' parameter".into(),
-            }
-        })?;
+            })?;
 
         match action {
             "type" => {
@@ -68,11 +73,16 @@ impl Tool for KeyboardTool {
                         details: "Missing 'text' parameter".into(),
                     }
                 })?;
-                self.control.keyboard_type(text).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
-                Ok(ToolResult::success(format!("Typed {} characters", text.len()), json!({ "typed_length": text.len() })))
+                self.control
+                    .keyboard_type(text)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
+                Ok(ToolResult::success(
+                    format!("Typed {} characters", text.len()),
+                    json!({ "typed_length": text.len() }),
+                ))
             }
             "press" => {
                 let key = params.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
@@ -81,26 +91,37 @@ impl Tool for KeyboardTool {
                         details: "Missing 'key' parameter".into(),
                     }
                 })?;
-                self.control.keyboard_press(key).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
-                Ok(ToolResult::success(format!("Pressed key '{}'", key), json!({ "key": key })))
+                self.control
+                    .keyboard_press(key)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
+                Ok(ToolResult::success(
+                    format!("Pressed key '{}'", key),
+                    json!({ "key": key }),
+                ))
             }
             "shortcut" => {
-                let keys_arr = params.get("keys").and_then(|v| v.as_array()).ok_or_else(|| {
-                    ToolError::InvalidParameters {
+                let keys_arr = params
+                    .get("keys")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| ToolError::InvalidParameters {
                         tool: self.name().into(),
                         details: "Missing 'keys' array parameter".into(),
-                    }
-                })?;
+                    })?;
                 let keys: Vec<&str> = keys_arr.iter().filter_map(|k| k.as_str()).collect();
-                self.control.keyboard_shortcut(&keys).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
+                self.control
+                    .keyboard_shortcut(&keys)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
                 let combo = keys.join("+");
-                Ok(ToolResult::success(format!("Sent shortcut '{}'", combo), json!({ "shortcut": combo })))
+                Ok(ToolResult::success(
+                    format!("Sent shortcut '{}'", combo),
+                    json!({ "shortcut": combo }),
+                ))
             }
             other => Err(ToolError::InvalidParameters {
                 tool: self.name().into(),

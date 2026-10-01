@@ -51,7 +51,12 @@ pub trait MemoryStore: Send + Sync {
     async fn remember(&self, item: MemoryItem) -> Result<(), MemoryError>;
 
     /// Retrieve items relevant to a query text or category.
-    async fn recall(&self, query: &str, category: Option<MemoryCategory>, limit: usize) -> Result<Vec<MemoryItem>, MemoryError>;
+    async fn recall(
+        &self,
+        query: &str,
+        category: Option<MemoryCategory>,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, MemoryError>;
 
     /// Delete a memory item by ID.
     async fn forget(&self, id: &str) -> Result<(), MemoryError>;
@@ -75,13 +80,24 @@ impl InMemoryMemoryStore {
 #[async_trait]
 impl MemoryStore for InMemoryMemoryStore {
     async fn remember(&self, item: MemoryItem) -> Result<(), MemoryError> {
-        let mut write = self.items.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+        let mut write = self
+            .items
+            .write()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         write.insert(item.id.clone(), item);
         Ok(())
     }
 
-    async fn recall(&self, query: &str, category: Option<MemoryCategory>, limit: usize) -> Result<Vec<MemoryItem>, MemoryError> {
-        let read = self.items.read().map_err(|e| MemoryError::Database(e.to_string()))?;
+    async fn recall(
+        &self,
+        query: &str,
+        category: Option<MemoryCategory>,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, MemoryError> {
+        let read = self
+            .items
+            .read()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         let query_lower = query.to_lowercase();
 
         let mut matches: Vec<MemoryItem> = read
@@ -95,7 +111,8 @@ impl MemoryStore for InMemoryMemoryStore {
                 if query_lower.is_empty() {
                     return true;
                 }
-                item.key.to_lowercase().contains(&query_lower) || item.value.to_lowercase().contains(&query_lower)
+                item.key.to_lowercase().contains(&query_lower)
+                    || item.value.to_lowercase().contains(&query_lower)
             })
             .cloned()
             .collect();
@@ -105,13 +122,19 @@ impl MemoryStore for InMemoryMemoryStore {
     }
 
     async fn forget(&self, id: &str) -> Result<(), MemoryError> {
-        let mut write = self.items.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+        let mut write = self
+            .items
+            .write()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         write.remove(id);
         Ok(())
     }
 
     async fn clear_category(&self, category: MemoryCategory) -> Result<(), MemoryError> {
-        let mut write = self.items.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+        let mut write = self
+            .items
+            .write()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         write.retain(|_, v| v.category != category);
         Ok(())
     }
@@ -145,7 +168,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_memory_store() {
-        let temp_dir = std::env::temp_dir().join(format!("function_test_{}", std::time::SystemTime::now().elapsed().unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "function_test_{}",
+            std::time::SystemTime::now().elapsed().unwrap().as_nanos()
+        ));
         let file_path = temp_dir.join("memory.json");
 
         let store = FileMemoryStore::new(&file_path).unwrap();
@@ -164,7 +190,10 @@ mod tests {
 
         // Re-open from disk
         let store2 = FileMemoryStore::new(&file_path).unwrap();
-        let results = store2.recall("Rust", Some(MemoryCategory::TaskSummary), 10).await.unwrap();
+        let results = store2
+            .recall("Rust", Some(MemoryCategory::TaskSummary), 10)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].key, "last_search");
 

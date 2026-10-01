@@ -15,7 +15,11 @@ pub struct OpenAiLlmProvider {
 }
 
 impl OpenAiLlmProvider {
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>, default_model: impl Into<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        default_model: impl Into<String>,
+    ) -> Self {
         let mut url = base_url.into();
         if url.ends_with('/') {
             url.pop();
@@ -116,36 +120,43 @@ impl LlmProvider for OpenAiLlmProvider {
         let base_url = endpoint.clone();
         let api_key = self.api_key.clone();
 
-        let response_body = tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
-            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
-            let mut cmd = Command::new(curl_bin);
-            cmd.arg("-s")
-                .arg("-X")
-                .arg("POST")
-                .arg(&base_url)
-                .arg("-H")
-                .arg("Content-Type: application/json");
+        let response_body =
+            tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
+                let curl_bin = if cfg!(target_os = "windows") {
+                    "curl.exe"
+                } else {
+                    "curl"
+                };
+                let mut cmd = Command::new(curl_bin);
+                cmd.arg("-s")
+                    .arg("-X")
+                    .arg("POST")
+                    .arg(&base_url)
+                    .arg("-H")
+                    .arg("Content-Type: application/json");
 
-            if let Some(ref key) = api_key {
-                if !key.is_empty() {
-                    cmd.arg("-H").arg(format!("Authorization: Bearer {}", key));
+                if let Some(ref key) = api_key {
+                    if !key.is_empty() {
+                        cmd.arg("-H").arg(format!("Authorization: Bearer {}", key));
+                    }
                 }
-            }
 
-            cmd.arg("--data-raw").arg(&body_str);
+                cmd.arg("--data-raw").arg(&body_str);
 
-            let output = cmd.output().map_err(|e| ProviderError::Network(e.to_string()))?;
-            if !output.status.success() {
-                return Err(ProviderError::Network(format!(
-                    "curl exited with code {:?}",
-                    output.status.code()
-                )));
-            }
+                let output = cmd
+                    .output()
+                    .map_err(|e| ProviderError::Network(e.to_string()))?;
+                if !output.status.success() {
+                    return Err(ProviderError::Network(format!(
+                        "curl exited with code {:?}",
+                        output.status.code()
+                    )));
+                }
 
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
-        })
-        .await
-        .map_err(|e| ProviderError::Network(e.to_string()))??;
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            })
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))??;
 
         let parsed: serde_json::Value = serde_json::from_str(&response_body)?;
 
@@ -185,16 +196,32 @@ impl LlmProvider for OpenAiLlmProvider {
             .unwrap_or("")
             .to_string();
 
-        let tool_calls = if let Some(t_array) = msg_val.get("tool_calls").and_then(|t| t.as_array()) {
+        let tool_calls = if let Some(t_array) = msg_val.get("tool_calls").and_then(|t| t.as_array())
+        {
             let mut calls = Vec::new();
             for c in t_array {
-                let id = c.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                let id = c
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if let Some(func) = c.get("function") {
-                    let name = func.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                    let args_raw = func.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
+                    let name = func
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let args_raw = func
+                        .get("arguments")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}");
                     let arguments: serde_json::Value =
                         serde_json::from_str(args_raw).unwrap_or(json!({ "raw": args_raw }));
-                    calls.push(ToolCall { id, name, arguments });
+                    calls.push(ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    });
                 }
             }
             if calls.is_empty() {
@@ -242,7 +269,11 @@ impl SpeechToTextProvider for WhisperSttProvider {
         "whisper"
     }
 
-    async fn transcribe_audio(&self, audio_pcm: &[u8], _sample_rate: u32) -> Result<String, ProviderError> {
+    async fn transcribe_audio(
+        &self,
+        audio_pcm: &[u8],
+        _sample_rate: u32,
+    ) -> Result<String, ProviderError> {
         if audio_pcm.is_empty() {
             return Ok(String::new());
         }
@@ -256,11 +287,19 @@ impl SpeechToTextProvider for WhisperSttProvider {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let temp_file = std::env::temp_dir().join(format!("fn_audio_{}_{}.wav", std::process::id(), unique_id));
+            let temp_file = std::env::temp_dir().join(format!(
+                "fn_audio_{}_{}.wav",
+                std::process::id(),
+                unique_id
+            ));
             std::fs::write(&temp_file, &bytes)
                 .map_err(|e| ProviderError::Network(format!("Failed to write audio: {}", e)))?;
 
-            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let curl_bin = if cfg!(target_os = "windows") {
+                "curl.exe"
+            } else {
+                "curl"
+            };
             let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-X")
@@ -277,7 +316,9 @@ impl SpeechToTextProvider for WhisperSttProvider {
                 }
             }
 
-            let output = cmd.output().map_err(|e| ProviderError::Network(e.to_string()))?;
+            let output = cmd
+                .output()
+                .map_err(|e| ProviderError::Network(e.to_string()))?;
             let _ = std::fs::remove_file(&temp_file);
 
             if !output.status.success() {
@@ -291,7 +332,10 @@ impl SpeechToTextProvider for WhisperSttProvider {
             let parsed: serde_json::Value = serde_json::from_str(&stdout)?;
 
             if let Some(err_obj) = parsed.get("error") {
-                let msg = err_obj.get("message").and_then(|m| m.as_str()).unwrap_or("Whisper API error");
+                let msg = err_obj
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Whisper API error");
                 return Err(ProviderError::Api {
                     code: 400,
                     message: msg.to_string(),

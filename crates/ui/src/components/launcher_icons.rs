@@ -8,7 +8,10 @@ use gpui::{img, px, Image, ImageFormat, IntoElement};
 use std::sync::Arc;
 
 fn render_svg(svg_str: &'static str, size: f32) -> impl IntoElement {
-    let image = Arc::new(Image::from_bytes(ImageFormat::Svg, svg_str.as_bytes().to_vec()));
+    let image = Arc::new(Image::from_bytes(
+        ImageFormat::Svg,
+        svg_str.as_bytes().to_vec(),
+    ));
     img(image).w(px(size)).h(px(size))
 }
 

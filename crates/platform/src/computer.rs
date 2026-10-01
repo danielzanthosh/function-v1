@@ -30,7 +30,13 @@ pub trait ComputerControl: Send + Sync {
     fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError>;
     fn mouse_double_click(&self, button: MouseButton) -> Result<(), PlatformError>;
     fn mouse_scroll(&self, delta: i32) -> Result<(), PlatformError>;
-    fn mouse_drag(&self, start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<(), PlatformError>;
+    fn mouse_drag(
+        &self,
+        start_x: i32,
+        start_y: i32,
+        end_x: i32,
+        end_y: i32,
+    ) -> Result<(), PlatformError>;
     fn keyboard_type(&self, text: &str) -> Result<(), PlatformError>;
     fn keyboard_press(&self, key: &str) -> Result<(), PlatformError>;
     fn keyboard_shortcut(&self, keys: &[&str]) -> Result<(), PlatformError>;
@@ -147,7 +153,9 @@ pub mod windows {
             unsafe {
                 let res = SetCursorPos(x, y);
                 if res == 0 {
-                    Err(PlatformError::SystemApi("Failed to set cursor position".into()))
+                    Err(PlatformError::SystemApi(
+                        "Failed to set cursor position".into(),
+                    ))
                 } else {
                     Ok(())
                 }
@@ -188,7 +196,13 @@ pub mod windows {
             }
         }
 
-        fn mouse_drag(&self, start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<(), PlatformError> {
+        fn mouse_drag(
+            &self,
+            start_x: i32,
+            start_y: i32,
+            end_x: i32,
+            end_y: i32,
+        ) -> Result<(), PlatformError> {
             self.mouse_move(start_x, start_y)?;
             unsafe {
                 mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
@@ -247,7 +261,10 @@ pub mod windows {
             // CREATE_NO_WINDOW if background, or normal spawn
             match cmd.spawn() {
                 Ok(child) => Ok(child.id()),
-                Err(e) => Err(PlatformError::SystemApi(format!("Failed to launch {}: {}", app_path, e))),
+                Err(e) => Err(PlatformError::SystemApi(format!(
+                    "Failed to launch {}: {}",
+                    app_path, e
+                ))),
             }
         }
 
@@ -286,7 +303,10 @@ pub mod windows {
         fn focus_window(&self, title_substring: &str) -> Result<bool, PlatformError> {
             let windows = self.list_windows();
             let needle = title_substring.to_lowercase();
-            if let Some(w) = windows.iter().find(|w| w.title.to_lowercase().contains(&needle)) {
+            if let Some(w) = windows
+                .iter()
+                .find(|w| w.title.to_lowercase().contains(&needle))
+            {
                 unsafe {
                     SetForegroundWindow(w.id);
                 }
@@ -302,20 +322,47 @@ pub struct FallbackComputerControl;
 
 impl ComputerControl for FallbackComputerControl {
     fn get_screen_dimensions(&self) -> ScreenDimensions {
-        ScreenDimensions { width: 1920, height: 1080 }
+        ScreenDimensions {
+            width: 1920,
+            height: 1080,
+        }
     }
-    fn get_cursor_position(&self) -> (i32, i32) { (0, 0) }
-    fn mouse_move(&self, _x: i32, _y: i32) -> Result<(), PlatformError> { Ok(()) }
-    fn mouse_click(&self, _b: MouseButton) -> Result<(), PlatformError> { Ok(()) }
-    fn mouse_double_click(&self, _b: MouseButton) -> Result<(), PlatformError> { Ok(()) }
-    fn mouse_scroll(&self, _d: i32) -> Result<(), PlatformError> { Ok(()) }
-    fn mouse_drag(&self, _sx: i32, _sy: i32, _ex: i32, _ey: i32) -> Result<(), PlatformError> { Ok(()) }
-    fn keyboard_type(&self, _t: &str) -> Result<(), PlatformError> { Ok(()) }
-    fn keyboard_press(&self, _k: &str) -> Result<(), PlatformError> { Ok(()) }
-    fn keyboard_shortcut(&self, _k: &[&str]) -> Result<(), PlatformError> { Ok(()) }
-    fn app_launch(&self, _p: &str, _a: &[&str]) -> Result<u32, PlatformError> { Ok(0) }
-    fn list_windows(&self) -> Vec<WindowInfo> { Vec::new() }
-    fn focus_window(&self, _t: &str) -> Result<bool, PlatformError> { Ok(false) }
+    fn get_cursor_position(&self) -> (i32, i32) {
+        (0, 0)
+    }
+    fn mouse_move(&self, _x: i32, _y: i32) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn mouse_click(&self, _b: MouseButton) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn mouse_double_click(&self, _b: MouseButton) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn mouse_scroll(&self, _d: i32) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn mouse_drag(&self, _sx: i32, _sy: i32, _ex: i32, _ey: i32) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn keyboard_type(&self, _t: &str) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn keyboard_press(&self, _k: &str) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn keyboard_shortcut(&self, _k: &[&str]) -> Result<(), PlatformError> {
+        Ok(())
+    }
+    fn app_launch(&self, _p: &str, _a: &[&str]) -> Result<u32, PlatformError> {
+        Ok(0)
+    }
+    fn list_windows(&self) -> Vec<WindowInfo> {
+        Vec::new()
+    }
+    fn focus_window(&self, _t: &str) -> Result<bool, PlatformError> {
+        Ok(false)
+    }
 }
 
 pub fn create_computer_control() -> Box<dyn ComputerControl> {

@@ -74,8 +74,18 @@ fn stress_test_userprofile_set() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&temp_root);
 
-    assert!(output.status.success(), "Process failed with status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
-    assert!(stdout.contains("OK case_userprofile"), "Expected confirmation in stdout: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Process failed with status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK case_userprofile"),
+        "Expected confirmation in stdout: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -101,8 +111,18 @@ fn stress_test_home_set_userprofile_unset() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&temp_root);
 
-    assert!(output.status.success(), "Process failed with status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
-    assert!(stdout.contains("OK case_home_only"), "Expected confirmation in stdout: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Process failed with status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK case_home_only"),
+        "Expected confirmation in stdout: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -124,8 +144,18 @@ fn stress_test_both_unset_temp_fallback() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "Process failed with status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
-    assert!(stdout.contains("OK case_temp_fallback"), "Expected confirmation in stdout: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Process failed with status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK case_temp_fallback"),
+        "Expected confirmation in stdout: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -153,6 +183,16 @@ fn stress_test_userprofile_precedence_over_home() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&temp_root);
 
-    assert!(output.status.success(), "Process failed with status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
-    assert!(stdout.contains("OK case_userprofile_precedence"), "Expected confirmation in stdout: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Process failed with status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK case_userprofile_precedence"),
+        "Expected confirmation in stdout: {}",
+        stdout
+    );
 }

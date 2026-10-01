@@ -81,7 +81,9 @@ impl Agent {
 
     /// Execute a task given a user prompt.
     pub async fn execute_task(&self, user_prompt: &str) -> Result<String, AgentError> {
-        self.update_state(AgentState::Processing { thought_summary: None });
+        self.update_state(AgentState::Processing {
+            thought_summary: None,
+        });
 
         // Retrieve relevant memory items
         let context_items = self
@@ -127,17 +129,13 @@ impl Agent {
                 temperature: Some(0.2),
             };
 
-            let response = self
-                .provider
-                .complete(req)
-                .await
-                .map_err(|e| {
-                    let err = AgentError::Provider(e.to_string());
-                    self.update_state(AgentState::Error {
-                        message: err.to_string(),
-                    });
-                    err
-                })?;
+            let response = self.provider.complete(req).await.map_err(|e| {
+                let err = AgentError::Provider(e.to_string());
+                self.update_state(AgentState::Error {
+                    message: err.to_string(),
+                });
+                err
+            })?;
 
             let response_msg = response.message;
 
@@ -160,7 +158,11 @@ impl Agent {
                         allow_sensitive: false,
                     };
 
-                    let result = match self.tools.execute(&call.name, call.arguments.clone(), &ctx).await {
+                    let result = match self
+                        .tools
+                        .execute(&call.name, call.arguments.clone(), &ctx)
+                        .await
+                    {
                         Ok(res) => res,
                         Err(function_tools::ToolError::RequiresConfirmation) => {
                             self.update_state(AgentState::WaitingForConfirmation {
@@ -172,7 +174,10 @@ impl Agent {
                                 "Action paused: Operation requires explicit user confirmation before executing.",
                             )
                         }
-                        Err(e) => ToolResult::failure(format!("Failed to run {}", call.name), e.to_string()),
+                        Err(e) => ToolResult::failure(
+                            format!("Failed to run {}", call.name),
+                            e.to_string(),
+                        ),
                     };
 
                     messages.push(ChatMessage::tool(

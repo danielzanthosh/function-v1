@@ -137,13 +137,26 @@ fn test_tool_registry_default_tools_registered() {
     let tools = registry.list();
 
     // Should have multiple built-in computer tools
-    assert!(tools.len() >= 5, "Expected at least 5 default tools, found {}", tools.len());
+    assert!(
+        tools.len() >= 5,
+        "Expected at least 5 default tools, found {}",
+        tools.len()
+    );
 
     // Verify key tool names are present
     let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
-    assert!(names.contains(&"computer_screen".to_string()), "Missing computer_screen tool");
-    assert!(names.contains(&"computer_terminal".to_string()), "Missing computer_terminal tool");
-    assert!(names.contains(&"computer_files".to_string()), "Missing computer_files tool");
+    assert!(
+        names.contains(&"computer_screen".to_string()),
+        "Missing computer_screen tool"
+    );
+    assert!(
+        names.contains(&"computer_terminal".to_string()),
+        "Missing computer_terminal tool"
+    );
+    assert!(
+        names.contains(&"computer_files".to_string()),
+        "Missing computer_files tool"
+    );
 }
 
 #[test]
@@ -159,7 +172,12 @@ fn test_tool_permission_levels_enforced() {
     for tool in registry.list() {
         let level = tool.permission_level(&dummy_params);
         assert!(
-            matches!(level, ToolPermissionLevel::Safe | ToolPermissionLevel::Confirm | ToolPermissionLevel::Restricted),
+            matches!(
+                level,
+                ToolPermissionLevel::Safe
+                    | ToolPermissionLevel::Confirm
+                    | ToolPermissionLevel::Restricted
+            ),
             "Tool '{}' has unexpected permission level",
             tool.name()
         );
@@ -249,8 +267,14 @@ fn test_config_and_memory_paths_are_inside_function_dir() {
     let cfg = function_config::config_path();
     let mem = function_config::memory_path();
 
-    assert!(cfg.starts_with(&dir), "config_path should be inside function_dir");
-    assert!(mem.starts_with(&dir), "memory_path should be inside function_dir");
+    assert!(
+        cfg.starts_with(&dir),
+        "config_path should be inside function_dir"
+    );
+    assert!(
+        mem.starts_with(&dir),
+        "memory_path should be inside function_dir"
+    );
     assert!(cfg.ends_with("config.json"));
     assert!(mem.ends_with("memory.json"));
 }

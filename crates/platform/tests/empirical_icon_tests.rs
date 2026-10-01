@@ -9,14 +9,23 @@ fn icon_test_harness_entry() {
         match case_name.as_str() {
             "case_resolve_icon" => {
                 let icon_opt = function_platform::find_icon_path();
-                assert!(icon_opt.is_some(), "Expected find_icon_path() to find icon in CWD: {:?}", std::env::current_dir());
+                assert!(
+                    icon_opt.is_some(),
+                    "Expected find_icon_path() to find icon in CWD: {:?}",
+                    std::env::current_dir()
+                );
                 let icon_path = icon_opt.unwrap();
-                assert!(icon_path.exists(), "Resolved icon does not exist: {:?}", icon_path);
+                assert!(
+                    icon_path.exists(),
+                    "Resolved icon does not exist: {:?}",
+                    icon_path
+                );
                 assert!(icon_path.to_string_lossy().ends_with("icon.ico"));
                 println!("OK case_resolve_icon: {}", icon_path.display());
             }
             "case_custom_override" => {
-                let expected = std::env::var("EXPECTED_ICON_PATH").expect("EXPECTED_ICON_PATH missing");
+                let expected =
+                    std::env::var("EXPECTED_ICON_PATH").expect("EXPECTED_ICON_PATH missing");
                 let icon_opt = function_platform::find_icon_path();
                 assert!(icon_opt.is_some(), "Expected icon override to be found");
                 let icon_path = icon_opt.unwrap();
@@ -56,7 +65,13 @@ fn stress_test_icon_from_workspace_root() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "Failed from workspace root: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed from workspace root: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_resolve_icon"));
 }
 
@@ -79,7 +94,13 @@ fn stress_test_icon_from_crates_app() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "Failed from crates/app: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed from crates/app: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_resolve_icon"));
 }
 
@@ -102,7 +123,13 @@ fn stress_test_icon_from_crates_app_src() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "Failed from crates/app/src: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed from crates/app/src: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_resolve_icon"));
 }
 
@@ -124,7 +151,13 @@ fn stress_test_icon_from_temp_directory() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "Failed from temp directory: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed from temp directory: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_resolve_icon"));
 }
 
@@ -152,7 +185,13 @@ fn stress_test_icon_custom_env_override() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let _ = std::fs::remove_dir_all(&temp_root);
 
-    assert!(output.status.success(), "Failed custom override: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed custom override: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_custom_override"));
 }
 
@@ -175,6 +214,12 @@ fn stress_test_icon_nonexistent_override_fallback() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "Failed nonexistent override fallback: status {:?}\nStdout: {}\nStderr: {}", output.status, stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Failed nonexistent override fallback: status {:?}\nStdout: {}\nStderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
     assert!(stdout.contains("OK case_invalid_override_fallback"));
 }

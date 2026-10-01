@@ -101,7 +101,11 @@ pub trait Tool: Send + Sync {
     }
 
     /// Execute the tool action with the supplied parameters.
-    async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> Result<ToolResult, ToolError>;
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError>;
 }
 
 /// Registry of available tools for discovery and dispatching.
@@ -139,15 +143,21 @@ impl ToolRegistry {
         params: serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let tool = self.get(name).ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        let tool = self
+            .get(name)
+            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
         let level = tool.permission_level(&params);
         if level == ToolPermissionLevel::Restricted {
             return Err(ToolError::ExecutionFailed {
                 tool: name.to_string(),
-                details: "Action is classified as RESTRICTED and prohibited from automated execution.".into(),
+                details:
+                    "Action is classified as RESTRICTED and prohibited from automated execution."
+                        .into(),
             });
         }
-        if (level == ToolPermissionLevel::Confirm || tool.requires_confirmation()) && !ctx.allow_sensitive {
+        if (level == ToolPermissionLevel::Confirm || tool.requires_confirmation())
+            && !ctx.allow_sensitive
+        {
             return Err(ToolError::RequiresConfirmation);
         }
         tool.execute(params, ctx).await
@@ -180,9 +190,16 @@ mod tests {
             })
         }
 
-        async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
+        async fn execute(
+            &self,
+            params: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolResult, ToolError> {
             let text = params.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            Ok(ToolResult::success(format!("Echoed: {}", text), serde_json::json!({ "result": text })))
+            Ok(ToolResult::success(
+                format!("Echoed: {}", text),
+                serde_json::json!({ "result": text }),
+            ))
         }
     }
 
@@ -192,7 +209,11 @@ mod tests {
         registry.register(EchoTool);
         assert!(registry.get("echo").is_some());
         let res = registry
-            .execute("echo", serde_json::json!({ "text": "hello" }), &ToolContext::default())
+            .execute(
+                "echo",
+                serde_json::json!({ "text": "hello" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(res.summary, "Echoed: hello");
@@ -213,7 +234,11 @@ mod tests {
 
         // Test screen dimension execution
         let res = registry
-            .execute("computer_screen", serde_json::json!({ "action": "dimensions" }), &ToolContext::default())
+            .execute(
+                "computer_screen",
+                serde_json::json!({ "action": "dimensions" }),
+                &ToolContext::default(),
+            )
             .await
             .unwrap();
         assert!(res.success);
@@ -229,32 +254,50 @@ mod tests {
             .execute(
                 "computer_terminal",
                 serde_json::json!({ "command": "format c: /fs:ntfs" }),
-                &ToolContext { session_id: "s1".into(), allow_sensitive: true },
+                &ToolContext {
+                    session_id: "s1".into(),
+                    allow_sensitive: true,
+                },
             )
             .await;
         assert!(restricted_res.is_err());
-        assert!(matches!(restricted_res.unwrap_err(), ToolError::ExecutionFailed { .. }));
+        assert!(matches!(
+            restricted_res.unwrap_err(),
+            ToolError::ExecutionFailed { .. }
+        ));
 
         // 2. Sensitive command requires confirmation
         let confirm_res = registry
             .execute(
                 "computer_terminal",
                 serde_json::json!({ "command": "dir" }),
-                &ToolContext { session_id: "s1".into(), allow_sensitive: false },
+                &ToolContext {
+                    session_id: "s1".into(),
+                    allow_sensitive: false,
+                },
             )
             .await;
         assert!(confirm_res.is_err());
-        assert!(matches!(confirm_res.unwrap_err(), ToolError::RequiresConfirmation));
+        assert!(matches!(
+            confirm_res.unwrap_err(),
+            ToolError::RequiresConfirmation
+        ));
 
         // 3. File delete requires confirmation
         let del_res = registry
             .execute(
                 "computer_files",
                 serde_json::json!({ "action": "delete", "path": "test.tmp" }),
-                &ToolContext { session_id: "s1".into(), allow_sensitive: false },
+                &ToolContext {
+                    session_id: "s1".into(),
+                    allow_sensitive: false,
+                },
             )
             .await;
         assert!(del_res.is_err());
-        assert!(matches!(del_res.unwrap_err(), ToolError::RequiresConfirmation));
+        assert!(matches!(
+            del_res.unwrap_err(),
+            ToolError::RequiresConfirmation
+        ));
     }
 }

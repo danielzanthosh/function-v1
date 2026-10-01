@@ -62,19 +62,21 @@ impl AudioCapture for CpalAudioCapture {
 
     fn start_recording(&self) -> Result<(), PlatformError> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| PlatformError::SystemApi("No audio input device detected".to_string()))?;
+        let device = host.default_input_device().ok_or_else(|| {
+            PlatformError::SystemApi("No audio input device detected".to_string())
+        })?;
 
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| PlatformError::SystemApi(format!("Failed to get default input config: {}", e)))?;
+        let supported_config = device.default_input_config().map_err(|e| {
+            PlatformError::SystemApi(format!("Failed to get default input config: {}", e))
+        })?;
 
         let sample_rate = supported_config.sample_rate();
         let channels = supported_config.channels();
         let sample_format = supported_config.sample_format();
 
-        let samples_buf = Arc::new(Mutex::new(Vec::<f32>::with_capacity(sample_rate as usize * 10)));
+        let samples_buf = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
+            sample_rate as usize * 10,
+        )));
         let samples_clone = samples_buf.clone();
 
         let err_fn = |err| {
@@ -95,7 +97,9 @@ impl AudioCapture for CpalAudioCapture {
                     err_fn,
                     None,
                 )
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to build f32 input stream: {}", e)))?,
+                .map_err(|e| {
+                    PlatformError::SystemApi(format!("Failed to build f32 input stream: {}", e))
+                })?,
             SampleFormat::I16 => device
                 .build_input_stream(
                     stream_config,
@@ -107,7 +111,9 @@ impl AudioCapture for CpalAudioCapture {
                     err_fn,
                     None,
                 )
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to build i16 input stream: {}", e)))?,
+                .map_err(|e| {
+                    PlatformError::SystemApi(format!("Failed to build i16 input stream: {}", e))
+                })?,
             SampleFormat::U16 => device
                 .build_input_stream(
                     stream_config,
@@ -119,7 +125,9 @@ impl AudioCapture for CpalAudioCapture {
                     err_fn,
                     None,
                 )
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to build u16 input stream: {}", e)))?,
+                .map_err(|e| {
+                    PlatformError::SystemApi(format!("Failed to build u16 input stream: {}", e))
+                })?,
             _ => {
                 return Err(PlatformError::Unsupported(format!(
                     "Unsupported audio format: {:?}",
@@ -128,9 +136,9 @@ impl AudioCapture for CpalAudioCapture {
             }
         };
 
-        stream
-            .play()
-            .map_err(|e| PlatformError::SystemApi(format!("Failed to start audio stream: {}", e)))?;
+        stream.play().map_err(|e| {
+            PlatformError::SystemApi(format!("Failed to start audio stream: {}", e))
+        })?;
 
         let mut lock = self.active_stream.lock().unwrap();
         *lock = Some(ActiveStream {
@@ -247,14 +255,14 @@ pub fn encode_to_16k_mono_wav(
             // Convert f32 [-1.0, 1.0] to i16
             let clamped = sample.clamp(-1.0, 1.0);
             let s16 = (clamped * 32767.0).round() as i16;
-            writer
-                .write_sample(s16)
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to write WAV sample: {}", e)))?;
+            writer.write_sample(s16).map_err(|e| {
+                PlatformError::SystemApi(format!("Failed to write WAV sample: {}", e))
+            })?;
         }
 
-        writer
-            .finalize()
-            .map_err(|e| PlatformError::SystemApi(format!("Failed to finalize WAV audio: {}", e)))?;
+        writer.finalize().map_err(|e| {
+            PlatformError::SystemApi(format!("Failed to finalize WAV audio: {}", e))
+        })?;
     }
 
     Ok(cursor.into_inner())

@@ -9,13 +9,16 @@
 use function_config::AppConfig;
 use function_platform::create_native_platform_service;
 use function_ui::{
-    FunctionView, CloseFunction, SubmitRequest, ToggleExpanded, ToggleSpotlight, ToggleTheme,
+    CloseFunction, FunctionView, SubmitRequest, ToggleExpanded, ToggleSpotlight, ToggleTheme,
     ToggleVoice,
 };
 use gpui::{
-    px, AppContext, Application, Bounds, KeyBinding, Point, Size, TitlebarOptions, WindowBounds,
-    WindowOptions,
+    px, AppContext, Application, Bounds, KeyBinding, Point, Size, WindowBackgroundAppearance,
+    WindowBounds, WindowDecorations, WindowKind, WindowOptions,
 };
+
+#[cfg(not(target_os = "macos"))]
+use gpui::TitlebarOptions;
 
 fn main() {
     // 1. Initialize structured logging
@@ -40,7 +43,10 @@ fn main() {
 
     // 3. Initialize native platform integration
     let platform = create_native_platform_service();
-    tracing::info!(platform = platform.platform_name(), "Platform service initialized");
+    tracing::info!(
+        platform = platform.platform_name(),
+        "Platform service initialized"
+    );
 
     // Initialize persistent multi-threaded Tokio runtime
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -61,13 +67,7 @@ fn main() {
         tracing::warn!(error = %e, "Failed to register global hotkey");
     }
 
-    let initial_size = if !mic_configured || !mic_available {
-        tracing::info!("Microphone unconfigured or unavailable: Opening Spotlight launcher.");
-        Size::new(px(620.0), px(356.0))
-    } else {
-        tracing::info!("Microphone ready: Opening Compact floating assistant bar.");
-        Size::new(px(680.0), px(56.0))
-    };
+    let initial_size = Size::new(px(640.0), px(64.0));
 
     // 4. Initialize Tools, Memory, Provider, and Agent
     let mut tools = function_tools::ToolRegistry::new();
@@ -90,7 +90,10 @@ fn main() {
     let credentials = function_config::InMemoryCredentialStore::new();
     let api_key = config.ai_provider.resolve_api_key(&credentials);
 
-    let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if config.ai_provider.is_configured() {
+    let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if config
+        .ai_provider
+        .is_configured()
+    {
         tracing::info!(model = %config.ai_provider.model, "Using configured OpenAI-compatible LLM provider");
         std::sync::Arc::new(function_providers::OpenAiLlmProvider::new(
             &config.ai_provider.base_url,
@@ -104,18 +107,19 @@ fn main() {
         ))
     };
 
-    let stt_provider: std::sync::Arc<dyn function_providers::SpeechToTextProvider> = if config.ai_provider.is_configured() {
-        tracing::info!("Using Whisper STT provider");
-        std::sync::Arc::new(function_providers::WhisperSttProvider::new(
-            &config.ai_provider.base_url,
-            api_key,
-        ))
-    } else {
-        tracing::info!("Using Mock STT provider (fallback)");
-        std::sync::Arc::new(function_providers::MockSttProvider::new(
-            "Open my browser and navigate to YouTube",
-        ))
-    };
+    let stt_provider: std::sync::Arc<dyn function_providers::SpeechToTextProvider> =
+        if config.ai_provider.is_configured() {
+            tracing::info!("Using Whisper STT provider");
+            std::sync::Arc::new(function_providers::WhisperSttProvider::new(
+                &config.ai_provider.base_url,
+                api_key,
+            ))
+        } else {
+            tracing::info!("Using Mock STT provider (fallback)");
+            std::sync::Arc::new(function_providers::MockSttProvider::new(
+                "Open my browser and navigate to YouTube",
+            ))
+        };
 
     let audio_capture = platform.audio_capture();
     let agent = std::sync::Arc::new(function_agent::Agent::new(provider, tools, memory));
@@ -145,7 +149,8 @@ fn main() {
             (1920.0, 1080.0)
         };
 
-        let is_upper_third = config.window_position == function_config::WindowPositionMode::UpperThird;
+        let is_upper_third =
+            config.window_position == function_config::WindowPositionMode::UpperThird;
         let init_w_f32 = f32::from(initial_size.width);
         let init_h_f32 = f32::from(initial_size.height);
         let origin_x = ((screen_w - init_w_f32) / 2.0).max(0.0);
@@ -155,17 +160,47 @@ fn main() {
             ((screen_h - init_h_f32) / 2.0).max(0.0)
         };
 
+        // Platform-specific window configuration:
+        // macOS: Fully frameless (no titlebar, no traffic lights) with vibrancy
+        // Windows: Transparent titlebar with client-side decorations
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
                 origin: Point::new(px(origin_x), px(origin_y)),
                 size: initial_size,
             })),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Function".into()),
-                appears_transparent: true,
-                traffic_light_position: None,
-            }),
+            // macOS: None removes the titlebar and traffic lights entirely.
+            // Windows: Transparent titlebar preserves window management without visible chrome.
+            titlebar: {
+                #[cfg(target_os = "macos")]
+                {
+                    None
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    Some(TitlebarOptions {
+                        title: Some("Function".into()),
+                        appears_transparent: true,
+                        traffic_light_position: None,
+                    })
+                }
+            },
             is_resizable: false,
+            // macOS: Blurred gives subtle NSVisualEffectView vibrancy behind
+            // semi-transparent content, matching the native Spotlight aesthetic.
+            // Windows/other: Transparent removes the opaque native background
+            // that would otherwise show through rounded corners.
+            window_background: {
+                #[cfg(target_os = "macos")]
+                {
+                    WindowBackgroundAppearance::Blurred
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    WindowBackgroundAppearance::Transparent
+                }
+            },
+            window_decorations: Some(WindowDecorations::Client),
+            kind: WindowKind::PopUp,
             ..Default::default()
         };
 
@@ -182,6 +217,23 @@ fn main() {
                     .with_stt_provider(stt_provider_clone)
             })
         });
+        if let Ok(window_handle) = _window {
+            let mut hotkey_rx = platform.subscribe_hotkey();
+            let handle_clone = window_handle.clone();
+            cx.spawn(move |cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    while let Ok(()) = hotkey_rx.recv().await {
+                        let _ = cx.update(|cx| {
+                            let _ = handle_clone.update(cx, |view, window, cx| {
+                                view.toggle_visibility(window, cx);
+                            });
+                        });
+                    }
+                }
+            })
+            .detach();
+        }
 
         // Ensure small and large native icons and centering are set on the Win32 window
         let init_w = init_w_f32 as i32;
@@ -190,7 +242,12 @@ fn main() {
             for _ in 0..10 {
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 function_platform::set_window_icon_by_title("Function");
-                function_platform::center_window_by_title("Function", init_w, init_h, is_upper_third);
+                function_platform::center_window_by_title(
+                    "Function",
+                    init_w,
+                    init_h,
+                    is_upper_third,
+                );
             }
         });
 

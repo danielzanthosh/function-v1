@@ -50,13 +50,18 @@ impl Tool for BrowserTool {
         false
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'action' parameter".into(),
-            }
-        })?;
+            })?;
 
         let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
             ToolError::InvalidParameters {

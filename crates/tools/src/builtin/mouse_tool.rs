@@ -1,6 +1,6 @@
 use crate::{Tool, ToolContext, ToolError, ToolResult};
-use function_platform::{create_computer_control, ComputerControl, MouseButton};
 use async_trait::async_trait;
+use function_platform::{create_computer_control, ComputerControl, MouseButton};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -52,68 +52,104 @@ impl Tool for MouseTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'action' parameter".into(),
-            }
-        })?;
+            })?;
 
         match action {
             "move" => {
-                let x = params.get("x").and_then(|v| v.as_i64()).ok_or_else(|| ToolError::InvalidParameters {
-                    tool: self.name().into(),
-                    details: "Missing 'x' coordinate".into(),
+                let x = params.get("x").and_then(|v| v.as_i64()).ok_or_else(|| {
+                    ToolError::InvalidParameters {
+                        tool: self.name().into(),
+                        details: "Missing 'x' coordinate".into(),
+                    }
                 })? as i32;
-                let y = params.get("y").and_then(|v| v.as_i64()).ok_or_else(|| ToolError::InvalidParameters {
-                    tool: self.name().into(),
-                    details: "Missing 'y' coordinate".into(),
+                let y = params.get("y").and_then(|v| v.as_i64()).ok_or_else(|| {
+                    ToolError::InvalidParameters {
+                        tool: self.name().into(),
+                        details: "Missing 'y' coordinate".into(),
+                    }
                 })? as i32;
 
-                self.control.mouse_move(x, y).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
-                Ok(ToolResult::success(format!("Moved mouse to ({}, {})", x, y), json!({ "x": x, "y": y })))
+                self.control
+                    .mouse_move(x, y)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
+                Ok(ToolResult::success(
+                    format!("Moved mouse to ({}, {})", x, y),
+                    json!({ "x": x, "y": y }),
+                ))
             }
             "click" => {
-                self.control.mouse_click(MouseButton::Left).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
+                self.control.mouse_click(MouseButton::Left).map_err(|e| {
+                    ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    }
                 })?;
-                Ok(ToolResult::success("Mouse clicked", json!({ "button": "left" })))
+                Ok(ToolResult::success(
+                    "Mouse clicked",
+                    json!({ "button": "left" }),
+                ))
             }
             "double_click" => {
-                self.control.mouse_double_click(MouseButton::Left).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
-                Ok(ToolResult::success("Mouse double clicked", json!({ "button": "left" })))
+                self.control
+                    .mouse_double_click(MouseButton::Left)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
+                Ok(ToolResult::success(
+                    "Mouse double clicked",
+                    json!({ "button": "left" }),
+                ))
             }
             "right_click" => {
-                self.control.mouse_click(MouseButton::Right).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
+                self.control.mouse_click(MouseButton::Right).map_err(|e| {
+                    ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    }
                 })?;
-                Ok(ToolResult::success("Mouse right clicked", json!({ "button": "right" })))
+                Ok(ToolResult::success(
+                    "Mouse right clicked",
+                    json!({ "button": "right" }),
+                ))
             }
             "scroll" => {
                 let delta = params.get("delta").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
-                self.control.mouse_scroll(delta).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
-                Ok(ToolResult::success(format!("Mouse scrolled by {}", delta), json!({ "delta": delta })))
+                self.control
+                    .mouse_scroll(delta)
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    })?;
+                Ok(ToolResult::success(
+                    format!("Mouse scrolled by {}", delta),
+                    json!({ "delta": delta }),
+                ))
             }
             "drag" => {
                 let sx = params.get("start_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let sy = params.get("start_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let ex = params.get("end_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
                 let ey = params.get("end_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                self.control.mouse_drag(sx, sy, ex, ey).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
+                self.control.mouse_drag(sx, sy, ex, ey).map_err(|e| {
+                    ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    }
                 })?;
                 Ok(ToolResult::success(
                     format!("Dragged mouse from ({}, {}) to ({}, {})", sx, sy, ex, ey),

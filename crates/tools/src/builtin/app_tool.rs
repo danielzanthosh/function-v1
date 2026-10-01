@@ -1,6 +1,6 @@
 use crate::{Tool, ToolContext, ToolError, ToolResult};
-use function_platform::{create_computer_control, ComputerControl};
 use async_trait::async_trait;
+use function_platform::{create_computer_control, ComputerControl};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -52,13 +52,18 @@ impl Tool for ApplicationTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'action' parameter".into(),
-            }
-        })?;
+            })?;
 
         match action {
             "launch" => {
@@ -76,9 +81,11 @@ impl Tool for ApplicationTool {
                     empty_args
                 };
 
-                let pid = self.control.app_launch(app, &args).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
+                let pid = self.control.app_launch(app, &args).map_err(|e| {
+                    ToolError::ExecutionFailed {
+                        tool: self.name().into(),
+                        details: e.to_string(),
+                    }
                 })?;
 
                 Ok(ToolResult::success(
@@ -95,17 +102,21 @@ impl Tool for ApplicationTool {
                 ))
             }
             "focus_window" => {
-                let title = params.get("window_title").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ToolError::InvalidParameters {
+                let title = params
+                    .get("window_title")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParameters {
                         tool: self.name().into(),
                         details: "Missing 'window_title' parameter".into(),
-                    }
-                })?;
+                    })?;
 
-                let focused = self.control.focus_window(title).map_err(|e| ToolError::ExecutionFailed {
-                    tool: self.name().into(),
-                    details: e.to_string(),
-                })?;
+                let focused =
+                    self.control
+                        .focus_window(title)
+                        .map_err(|e| ToolError::ExecutionFailed {
+                            tool: self.name().into(),
+                            details: e.to_string(),
+                        })?;
 
                 if focused {
                     Ok(ToolResult::success(

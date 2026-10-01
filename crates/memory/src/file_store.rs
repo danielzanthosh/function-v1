@@ -34,18 +34,23 @@ impl FileMemoryStore {
     }
 
     fn persist(&self) -> Result<(), MemoryError> {
-        let read = self.cache.read().map_err(|e| MemoryError::Database(e.to_string()))?;
+        let read = self
+            .cache
+            .read()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         let items: Vec<MemoryItem> = read.values().cloned().collect();
         let serialized = serde_json::to_string_pretty(&items)?;
 
         if let Some(parent) = self.file_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| MemoryError::Io(format!("Failed to create memory directory: {}", e)))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                MemoryError::Io(format!("Failed to create memory directory: {}", e))
+            })?;
         }
 
         let tmp_path = self.file_path.with_extension("tmp");
-        fs::write(&tmp_path, serialized)
-            .map_err(|e| MemoryError::Io(format!("Failed to write temporary memory file: {}", e)))?;
+        fs::write(&tmp_path, serialized).map_err(|e| {
+            MemoryError::Io(format!("Failed to write temporary memory file: {}", e))
+        })?;
         fs::rename(&tmp_path, &self.file_path)
             .map_err(|e| MemoryError::Io(format!("Failed to persist memory file: {}", e)))?;
 
@@ -57,7 +62,10 @@ impl FileMemoryStore {
 impl MemoryStore for FileMemoryStore {
     async fn remember(&self, item: MemoryItem) -> Result<(), MemoryError> {
         {
-            let mut write = self.cache.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+            let mut write = self
+                .cache
+                .write()
+                .map_err(|e| MemoryError::Database(e.to_string()))?;
             write.insert(item.id.clone(), item);
         }
         self.persist()
@@ -69,7 +77,10 @@ impl MemoryStore for FileMemoryStore {
         category: Option<MemoryCategory>,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, MemoryError> {
-        let read = self.cache.read().map_err(|e| MemoryError::Database(e.to_string()))?;
+        let read = self
+            .cache
+            .read()
+            .map_err(|e| MemoryError::Database(e.to_string()))?;
         let query_lower = query.to_lowercase();
 
         let mut matches: Vec<MemoryItem> = read
@@ -90,14 +101,21 @@ impl MemoryStore for FileMemoryStore {
             .collect();
 
         // Sort by relevance score descending
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         matches.truncate(limit);
         Ok(matches)
     }
 
     async fn forget(&self, id: &str) -> Result<(), MemoryError> {
         {
-            let mut write = self.cache.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+            let mut write = self
+                .cache
+                .write()
+                .map_err(|e| MemoryError::Database(e.to_string()))?;
             write.remove(id);
         }
         self.persist()
@@ -105,7 +123,10 @@ impl MemoryStore for FileMemoryStore {
 
     async fn clear_category(&self, category: MemoryCategory) -> Result<(), MemoryError> {
         {
-            let mut write = self.cache.write().map_err(|e| MemoryError::Database(e.to_string()))?;
+            let mut write = self
+                .cache
+                .write()
+                .map_err(|e| MemoryError::Database(e.to_string()))?;
             write.retain(|_, v| v.category != category);
         }
         self.persist()

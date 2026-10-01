@@ -132,7 +132,11 @@ pub trait LlmProvider: Send + Sync {
 #[async_trait]
 pub trait SpeechToTextProvider: Send + Sync {
     fn name(&self) -> &str;
-    async fn transcribe_audio(&self, audio_pcm: &[u8], sample_rate: u32) -> Result<String, ProviderError>;
+    async fn transcribe_audio(
+        &self,
+        audio_pcm: &[u8],
+        sample_rate: u32,
+    ) -> Result<String, ProviderError>;
 }
 
 /// Abstraction for Text-to-Speech providers.
@@ -146,7 +150,11 @@ pub trait TextToSpeechProvider: Send + Sync {
 #[async_trait]
 pub trait SearchProvider: Send + Sync {
     fn name(&self) -> &str;
-    async fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>, ProviderError>;
+    async fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SearchResult>, ProviderError>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +211,11 @@ impl SpeechToTextProvider for MockSttProvider {
         "mock-stt"
     }
 
-    async fn transcribe_audio(&self, audio_pcm: &[u8], _sample_rate: u32) -> Result<String, ProviderError> {
+    async fn transcribe_audio(
+        &self,
+        audio_pcm: &[u8],
+        _sample_rate: u32,
+    ) -> Result<String, ProviderError> {
         if audio_pcm.is_empty() {
             return Ok(String::new());
         }

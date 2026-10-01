@@ -1,6 +1,6 @@
 use crate::{Tool, ToolContext, ToolError, ToolResult};
-use function_platform::{create_computer_control, ComputerControl};
 use async_trait::async_trait;
+use function_platform::{create_computer_control, ComputerControl};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -45,8 +45,15 @@ impl Tool for ScreenTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let action = params.get("action").and_then(|v| v.as_str()).unwrap_or("dimensions");
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let action = params
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("dimensions");
 
         match action {
             "dimensions" => {

@@ -63,13 +63,13 @@ impl Theme {
                 surface_base: rgb(0x000000),     // Void (#000000)
                 surface_elevated: rgb(0x0a0a0a), // Carbon (#0A0A0A)
                 surface_floating: rgb(0x0f0f0f),
-                surface_active: rgb(0x181818),   // Graphite elevated
-                surface_input: rgb(0x141414),    // Graphite (#141414)
-                border_subtle: rgb(0x242424),    // Ash (#2A2A2A)
+                surface_active: rgb(0x181818), // Graphite elevated
+                surface_input: rgb(0x141414),  // Graphite (#141414)
+                border_subtle: rgb(0x242424),  // Ash (#2A2A2A)
                 border_focus: accent,
-                text_primary: rgb(0xffffff),     // White (#FFFFFF)
-                text_secondary: rgb(0xa3a3a3),   // Silver (#A3A3A3)
-                text_muted: rgb(0x666666),       // Smoke (#666666)
+                text_primary: rgb(0xffffff),   // White (#FFFFFF)
+                text_secondary: rgb(0xa3a3a3), // Silver (#A3A3A3)
+                text_muted: rgb(0x666666),     // Smoke (#666666)
                 accent_primary: accent,
                 accent_hover: rgb(0xd4d4d8),
                 ..Self::dark()
@@ -152,7 +152,7 @@ impl Theme {
 
             // Semantic status colors
             status_idle: rgb(0x666666),
-            status_listening: rgb(0x60a5fa), // Information
+            status_listening: rgb(0x60a5fa),  // Information
             status_processing: rgb(0xfacc15), // Warning
             status_acting: rgb(0xffffff),     // White convergence
             status_success: rgb(0x4ade80),    // Success

@@ -31,7 +31,11 @@ pub fn render_action_bar(theme: &Theme, expanded: bool, listening: bool) -> impl
                 .gap_2()
                 .child(render_badge_button(
                     if listening { "REC" } else { "VOICE" },
-                    if listening { theme.status_listening } else { theme.text_muted },
+                    if listening {
+                        theme.status_listening
+                    } else {
+                        theme.text_muted
+                    },
                     theme,
                 ))
                 .child(render_badge_button(
@@ -42,7 +46,11 @@ pub fn render_action_bar(theme: &Theme, expanded: bool, listening: bool) -> impl
         )
 }
 
-fn render_shortcut_hint(key: &'static str, action: &'static str, theme: &Theme) -> impl IntoElement {
+fn render_shortcut_hint(
+    key: &'static str,
+    action: &'static str,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -58,12 +66,7 @@ fn render_shortcut_hint(key: &'static str, action: &'static str, theme: &Theme) 
                 .text_color(theme.text_muted)
                 .child(key),
         )
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.text_muted)
-                .child(action),
-        )
+        .child(div().text_xs().text_color(theme.text_muted).child(action))
 }
 
 fn render_badge_button(label: &'static str, color: gpui::Rgba, theme: &Theme) -> impl IntoElement {

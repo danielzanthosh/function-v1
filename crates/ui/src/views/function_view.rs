@@ -13,11 +13,14 @@ use crate::actions::{
     CancelTask, ClearInput, CloseFunction, SubmitRequest, ToggleExpanded, ToggleSpotlight,
     ToggleTheme, ToggleVoice,
 };
-use crate::components::spotlight_bar::{get_launcher_items, LauncherAction};
-use crate::components::{
-    get_current_time_string, render_action_bar, render_activity_list, render_logo,
-    render_spotlight_bar, render_status_badge, ActivityEntry, ActivityStatus,
+use crate::components::function_motif::{render_function_motif, MotifState};
+use crate::components::launcher_icons::{
+    calculator_icon, network_icon, settings_icon, terminal_icon, web_icon,
 };
+use crate::components::spotlight_bar::{
+    get_current_time_string, get_launcher_items, LauncherAction, LauncherIconType,
+};
+use crate::components::{render_logo, ActivityEntry, ActivityStatus};
 use crate::theme::Theme;
 use crate::views::render_settings_view;
 use function_agent::AgentState;
@@ -25,22 +28,22 @@ use function_config::AppConfig;
 use function_platform::{copy_to_clipboard, open_url, play_sound, SoundEffect};
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Size, Task,
-    Timer, WeakEntity, Window,
+    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba, Size,
+    Task, Timer, WeakEntity, Window,
 };
 use std::time::Duration;
 
 /// Display mode for the function window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionMode {
-    /// Compact floating bar with voice capability.
-    Compact,
-    /// Spotlight-like command bar (opened when mic is unconfigured or unavailable).
-    Spotlight,
-    /// Full workspace showing active task, computer action sequence, and results.
-    Expanded,
-    /// In-app API key and AI provider configuration screen.
+    /// Intelligent floating command layer
+    Command,
+    /// Settings view
     Settings,
+    /// Compatibility aliases
+    Compact,
+    Spotlight,
+    Expanded,
 }
 
 // Aliases for backwards compatibility
@@ -48,6 +51,8 @@ pub type AssistantMode = FunctionMode;
 
 pub struct FunctionView {
     pub mode: FunctionMode,
+    pub is_visible: bool,
+    pub animation_tick: usize,
     pub mic_configured: bool,
     pub mic_available: bool,
     pub input_buffer: String,
@@ -84,28 +89,24 @@ pub type AssistantView = FunctionView;
 impl FunctionView {
     pub fn new(cx: &mut Context<Self>, mic_configured: bool, mic_available: bool) -> Self {
         let focus_handle = cx.focus_handle();
-        // If microphone is not configured or unavailable, automatically launch in Spotlight mode
-        let initial_mode = if !mic_configured || !mic_available {
-            FunctionMode::Spotlight
-        } else {
-            FunctionMode::Compact
-        };
-
         let config = AppConfig::load();
         let settings_api_key = config.ai_provider.api_key.clone().unwrap_or_default();
         let settings_model = config.ai_provider.model.clone();
         let settings_base_url = config.ai_provider.base_url.clone();
         let settings_sound_enabled = config.sound_enabled;
 
-        // Spawn a background timer loop for standard native cursor blinking (~530ms) & real-time clock
+        // Spawn a background timer loop for subtle motif animation ticks (~150ms) and cursor blinking
         let cursor_task = cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
                 loop {
-                    Timer::after(Duration::from_millis(530)).await;
+                    Timer::after(Duration::from_millis(150)).await;
                     let res = cx.update(|cx| {
                         this.update(cx, |view, cx| {
-                            view.cursor_visible = !view.cursor_visible;
+                            view.animation_tick = view.animation_tick.wrapping_add(1);
+                            if view.animation_tick % 4 == 0 {
+                                view.cursor_visible = !view.cursor_visible;
+                            }
                             view.current_time = get_current_time_string();
                             cx.notify();
                         })
@@ -118,7 +119,9 @@ impl FunctionView {
         });
 
         Self {
-            mode: initial_mode,
+            mode: FunctionMode::Command,
+            is_visible: true,
+            animation_tick: 0,
             mic_configured,
             mic_available,
             input_buffer: String::new(),
@@ -202,7 +205,10 @@ impl FunctionView {
                                     view.state = state_clone.clone();
                                     view.activities.push(ActivityEntry {
                                         step: view.activities.len() + 1,
-                                        description: format!("Confirmation required for {}", action),
+                                        description: format!(
+                                            "Confirmation required for {}",
+                                            action
+                                        ),
                                         status: ActivityStatus::Running,
                                     });
                                     view.play_sound_feedback(SoundEffect::Error);
@@ -235,12 +241,18 @@ impl FunctionView {
         self
     }
 
-    pub fn with_audio_capture(mut self, capture: std::sync::Arc<dyn function_platform::AudioCapture>) -> Self {
+    pub fn with_audio_capture(
+        mut self,
+        capture: std::sync::Arc<dyn function_platform::AudioCapture>,
+    ) -> Self {
         self.audio_capture = Some(capture);
         self
     }
 
-    pub fn with_stt_provider(mut self, stt: std::sync::Arc<dyn function_providers::SpeechToTextProvider>) -> Self {
+    pub fn with_stt_provider(
+        mut self,
+        stt: std::sync::Arc<dyn function_providers::SpeechToTextProvider>,
+    ) -> Self {
         self.stt_provider = Some(stt);
         self
     }
@@ -257,48 +269,77 @@ impl FunctionView {
     }
 
     pub fn target_window_size(&self) -> Size<gpui::Pixels> {
-        match self.mode {
-            FunctionMode::Compact => Size {
-                width: px(680.0),
-                height: px(56.0),
-            },
-            FunctionMode::Spotlight => Size {
-                width: px(620.0),
-                height: px(356.0),
-            },
-            FunctionMode::Expanded => Size {
-                width: px(680.0),
-                height: px(520.0),
-            },
-            FunctionMode::Settings => Size {
-                width: px(620.0),
+        if !self.is_visible {
+            return Size {
+                width: px(0.0),
+                height: px(0.0),
+            };
+        }
+
+        if self.mode == FunctionMode::Settings {
+            return Size {
+                width: px(640.0),
                 height: px(460.0),
-            },
+            };
+        }
+
+        if self.latest_result.is_some() {
+            Size {
+                width: px(640.0),
+                height: px(340.0),
+            }
+        } else if matches!(
+            self.state,
+            AgentState::Processing { .. }
+                | AgentState::Acting { .. }
+                | AgentState::WaitingForConfirmation { .. }
+        ) {
+            Size {
+                width: px(640.0),
+                height: px(220.0),
+            }
+        } else if !self.input_buffer.is_empty() {
+            let items = get_launcher_items(&self.input_buffer);
+            if !items.is_empty() {
+                let count = items.len().min(5);
+                let height = 64.0 + (count as f32 * 50.0) + 16.0;
+                Size {
+                    width: px(640.0),
+                    height: px(height),
+                }
+            } else {
+                Size {
+                    width: px(640.0),
+                    height: px(64.0),
+                }
+            }
+        } else {
+            // Idle state: Clean, minimal floating command bar
+            Size {
+                width: px(640.0),
+                height: px(64.0),
+            }
         }
     }
 
-    pub fn toggle_expanded(&mut self, _: &ToggleExpanded, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_expanded(
+        &mut self,
+        _: &ToggleExpanded,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.play_sound_feedback(SoundEffect::Select);
-        self.mode = match self.mode {
-            FunctionMode::Expanded => {
-                if !self.mic_configured || !self.mic_available {
-                    FunctionMode::Spotlight
-                } else {
-                    FunctionMode::Compact
-                }
-            }
-            _ => FunctionMode::Expanded,
-        };
         window.resize(self.target_window_size());
         cx.notify();
     }
 
-    pub fn toggle_spotlight(&mut self, _: &ToggleSpotlight, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_spotlight(
+        &mut self,
+        _: &ToggleSpotlight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.play_sound_feedback(SoundEffect::Select);
-        self.mode = match self.mode {
-            FunctionMode::Spotlight => FunctionMode::Compact,
-            _ => FunctionMode::Spotlight,
-        };
         window.resize(self.target_window_size());
         cx.notify();
     }
@@ -306,13 +347,7 @@ impl FunctionView {
     pub fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.play_sound_feedback(SoundEffect::Select);
         self.mode = match self.mode {
-            FunctionMode::Settings => {
-                if !self.mic_configured || !self.mic_available {
-                    FunctionMode::Spotlight
-                } else {
-                    FunctionMode::Compact
-                }
-            }
+            FunctionMode::Settings => FunctionMode::Command,
             _ => FunctionMode::Settings,
         };
         window.resize(self.target_window_size());
@@ -335,7 +370,8 @@ impl FunctionView {
                     Ok(wav_bytes) => {
                         if wav_bytes.is_empty() {
                             self.state = AgentState::Idle;
-                            self.voice_error = Some("No speech detected. Type your request instead.".to_string());
+                            self.voice_error =
+                                Some("No speech detected. Type your request instead.".to_string());
                             cx.notify();
                             return;
                         }
@@ -373,7 +409,7 @@ impl FunctionView {
                                                     if let Some(agent_arc) = agent {
                                                         view.active_task = Some(text.clone());
                                                         view.input_buffer.clear();
-                                                        view.mode = FunctionMode::Expanded;
+                                                        view.mode = FunctionMode::Command;
                                                         view.activities.clear();
                                                         view.activities.push(ActivityEntry {
                                                             step: 1,
@@ -453,7 +489,8 @@ impl FunctionView {
             if let Some(ref capture) = self.audio_capture {
                 if let Err(e) = capture.start_recording() {
                     tracing::error!(error = %e, "Failed to start audio recording");
-                    self.voice_error = Some(format!("Mic error: {}. Type your request directly.", e));
+                    self.voice_error =
+                        Some(format!("Mic error: {}. Type your request directly.", e));
                     self.play_sound_feedback(SoundEffect::Error);
                     cx.notify();
                     return;
@@ -469,34 +506,73 @@ impl FunctionView {
     }
 
     pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == FunctionMode::Expanded || self.mode == FunctionMode::Settings {
-            self.mode = if !self.mic_configured || !self.mic_available {
-                FunctionMode::Spotlight
-            } else {
-                FunctionMode::Compact
-            };
+        if self.mode == FunctionMode::Settings {
+            self.mode = FunctionMode::Command;
             window.resize(self.target_window_size());
             self.play_sound_feedback(SoundEffect::Select);
             cx.notify();
+        } else if !self.input_buffer.is_empty() {
+            self.input_buffer.clear();
+            self.selected_index = 0;
+            window.resize(self.target_window_size());
+            cx.notify();
+        } else if self.latest_result.is_some() || self.active_task.is_some() {
+            self.latest_result = None;
+            self.active_task = None;
+            self.state = AgentState::Idle;
+            window.resize(self.target_window_size());
+            cx.notify();
+        } else {
+            self.dismiss(window, cx);
         }
     }
 
     pub fn cancel(&mut self, _: &CancelTask, window: &mut Window, cx: &mut Context<Self>) {
         if !self.input_buffer.is_empty() {
             self.input_buffer.clear();
-        } else if self.mode == FunctionMode::Expanded || self.mode == FunctionMode::Settings {
-            self.mode = if !self.mic_configured || !self.mic_available {
-                FunctionMode::Spotlight
-            } else {
-                FunctionMode::Compact
-            };
-            window.resize(self.target_window_size());
+        }
+        if self.mode == FunctionMode::Settings {
+            self.mode = FunctionMode::Command;
         }
         self.state = AgentState::Idle;
         self.listening = false;
         self.cursor_visible = true;
+        self.latest_result = None;
+        self.active_task = None;
         self.play_sound_feedback(SoundEffect::Select);
+        window.resize(self.target_window_size());
         cx.notify();
+    }
+
+    pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_visible = false;
+        self.play_sound_feedback(SoundEffect::Select);
+        function_platform::hide_window_by_title("Function");
+        window.resize(Size {
+            width: px(0.0),
+            height: px(0.0),
+        });
+        cx.notify();
+    }
+
+    pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_visible = true;
+        self.input_buffer.clear();
+        self.selected_index = 0;
+        self.mode = FunctionMode::Command;
+        self.play_sound_feedback(SoundEffect::Select);
+        function_platform::show_window_by_title("Function");
+        window.resize(self.target_window_size());
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub fn toggle_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_visible {
+            self.dismiss(window, cx);
+        } else {
+            self.summon(window, cx);
+        }
     }
 
     pub fn clear_input(&mut self, _: &ClearInput, _window: &mut Window, cx: &mut Context<Self>) {
@@ -505,7 +581,12 @@ impl FunctionView {
         cx.notify();
     }
 
-    pub fn trigger_launcher_item(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn trigger_launcher_item(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let items = get_launcher_items(&self.input_buffer);
         if let Some(item) = items.get(index).cloned() {
             self.execute_launcher_action(item.action, window, cx);
@@ -535,7 +616,7 @@ impl FunctionView {
                 });
                 self.input_buffer.clear();
                 self.active_task = Some(format!("Shell: {}", cmd));
-                self.mode = FunctionMode::Expanded;
+                self.mode = FunctionMode::Command;
                 window.resize(self.target_window_size());
 
                 self.activities.clear();
@@ -583,8 +664,8 @@ impl FunctionView {
         self.input_buffer.clear();
         self.cursor_visible = true;
 
-        // Switch to expanded workspace to show execution progress
-        self.mode = FunctionMode::Expanded;
+        // Retain command surface and adapt window height to show execution progress
+        self.mode = FunctionMode::Command;
         window.resize(self.target_window_size());
 
         self.activities.clear();
@@ -641,7 +722,12 @@ impl FunctionView {
         cx.notify();
     }
 
-    pub fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cursor_visible = true;
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
@@ -657,7 +743,10 @@ impl FunctionView {
                     self.state = AgentState::Acting {
                         action_description: format!("Approved: {}", action_name),
                     };
-                    self.latest_result = Some(format!("Action '{}' approved by user. Proceeding.", action_name));
+                    self.latest_result = Some(format!(
+                        "Action '{}' approved by user. Proceeding.",
+                        action_name
+                    ));
                     cx.notify();
                     return;
                 }
@@ -678,11 +767,7 @@ impl FunctionView {
         if self.mode == FunctionMode::Settings {
             match key {
                 "escape" => {
-                    self.mode = if !self.mic_configured || !self.mic_available {
-                        FunctionMode::Spotlight
-                    } else {
-                        FunctionMode::Compact
-                    };
+                    self.mode = FunctionMode::Command;
                     window.resize(self.target_window_size());
                     self.play_sound_feedback(SoundEffect::Select);
                     cx.notify();
@@ -716,7 +801,8 @@ impl FunctionView {
                                 "Function",
                                 f32::from(sz.width) as i32,
                                 f32::from(sz.height) as i32,
-                                self.config.window_position == function_config::WindowPositionMode::UpperThird,
+                                self.config.window_position
+                                    == function_config::WindowPositionMode::UpperThird,
                             );
                         }
                         Err(e) => {
@@ -729,10 +815,18 @@ impl FunctionView {
                 }
                 "t" if modifiers.control => {
                     self.config.theme_style = match self.config.theme_style {
-                        function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
-                        function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
-                        function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
-                        function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::CarbonDark,
+                        function_config::ThemeStyle::CarbonDark => {
+                            function_config::ThemeStyle::ObsidianOled
+                        }
+                        function_config::ThemeStyle::ObsidianOled => {
+                            function_config::ThemeStyle::SlateMidnight
+                        }
+                        function_config::ThemeStyle::SlateMidnight => {
+                            function_config::ThemeStyle::StudioLight
+                        }
+                        function_config::ThemeStyle::StudioLight => {
+                            function_config::ThemeStyle::CarbonDark
+                        }
                     };
                     self.theme = Theme::from_config(&self.config);
                     self.play_sound_feedback(SoundEffect::Navigate);
@@ -743,7 +837,9 @@ impl FunctionView {
                     self.config.accent_color = match self.config.accent_color {
                         function_config::AccentColor::White => function_config::AccentColor::Cyan,
                         function_config::AccentColor::Cyan => function_config::AccentColor::Emerald,
-                        function_config::AccentColor::Emerald => function_config::AccentColor::Violet,
+                        function_config::AccentColor::Emerald => {
+                            function_config::AccentColor::Violet
+                        }
                         function_config::AccentColor::Violet => function_config::AccentColor::Amber,
                         function_config::AccentColor::Amber => function_config::AccentColor::White,
                     };
@@ -754,15 +850,20 @@ impl FunctionView {
                 }
                 "p" if modifiers.control => {
                     self.config.window_position = match self.config.window_position {
-                        function_config::WindowPositionMode::Center => function_config::WindowPositionMode::UpperThird,
-                        function_config::WindowPositionMode::UpperThird => function_config::WindowPositionMode::Center,
+                        function_config::WindowPositionMode::Center => {
+                            function_config::WindowPositionMode::UpperThird
+                        }
+                        function_config::WindowPositionMode::UpperThird => {
+                            function_config::WindowPositionMode::Center
+                        }
                     };
                     let sz = self.target_window_size();
                     function_platform::center_window_by_title(
                         "Function",
                         f32::from(sz.width) as i32,
                         f32::from(sz.height) as i32,
-                        self.config.window_position == function_config::WindowPositionMode::UpperThird,
+                        self.config.window_position
+                            == function_config::WindowPositionMode::UpperThird,
                     );
                     self.play_sound_feedback(SoundEffect::Navigate);
                     cx.notify();
@@ -829,6 +930,14 @@ impl FunctionView {
         }
 
         // ==========================================
+        // GLOBAL HOTKEY DISMISS/SUMMON INTERCEPTOR (Ctrl+Space)
+        // ==========================================
+        if modifiers.control && (key == " " || key == "space") {
+            self.dismiss(window, cx);
+            return;
+        }
+
+        // ==========================================
         // SPOTLIGHT / COMPACT MODE KEY HANDLING
         // ==========================================
         if modifiers.alt && !modifiers.control {
@@ -891,18 +1000,21 @@ impl FunctionView {
                 self.input_buffer.pop();
                 self.selected_index = 0;
                 self.cursor_visible = true;
+                window.resize(self.target_window_size());
                 cx.notify();
             }
             "space" => {
                 self.input_buffer.push(' ');
                 self.selected_index = 0;
                 self.cursor_visible = true;
+                window.resize(self.target_window_size());
                 cx.notify();
             }
             ch if ch.len() == 1 && !modifiers.control && !modifiers.alt => {
                 self.input_buffer.push_str(ch);
                 self.selected_index = 0;
                 self.cursor_visible = true;
+                window.resize(self.target_window_size());
                 cx.notify();
             }
             _ => {}
@@ -912,369 +1024,205 @@ impl FunctionView {
 
 impl Render for FunctionView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.is_visible {
+            return div().size_0().into_any_element();
+        }
+
         let theme = self.theme;
         let is_listening = self.listening;
-        let mic_active = self.mic_configured && self.mic_available;
+        let motif_state = MotifState::from_agent_state(&self.state, is_listening);
 
-        match self.mode {
-            FunctionMode::Spotlight => {
-                // ==========================================
-                // SPOTLIGHT COMMAND BAR (Flow Launcher Style)
-                // ==========================================
-                div()
-                    .track_focus(&self.focus_handle)
-                    .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        this.handle_key_down(event, window, cx);
-                    }))
-                    .w_full()
-                    .h_full()
-                    .child(render_spotlight_bar(
-                        &self.input_buffer,
-                        &theme,
-                        self.selected_index,
-                        self.cursor_visible,
-                        &self.current_time,
-                    ))
-            }
-            FunctionMode::Settings => {
-                // ==========================================
-                // SETTINGS VIEW (API Key & Provider Config)
-                // ==========================================
-                div()
-                    .track_focus(&self.focus_handle)
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        this.handle_key_down(event, window, cx);
-                    }))
-                    .w_full()
-                    .h_full()
-                    .child(render_settings_view(
-                        &self.settings_api_key,
-                        &self.settings_model,
-                        &self.settings_base_url,
-                        self.settings_sound_enabled,
-                        self.config.theme_style,
-                        self.config.accent_color,
-                        self.config.window_position,
-                        self.settings_show_key,
-                        self.settings_focused_field,
-                        self.cursor_visible,
-                        self.settings_status_message.as_deref(),
-                        &theme,
-                    ))
-            }
-            FunctionMode::Compact => {
-                // ==========================================
-                // COMPACT FLOATING BAR (When mic is active)
-                // ==========================================
-                let is_placeholder = self.input_buffer.is_empty();
-                let display_text = if self.listening {
-                    "Listening... Speak clearly (Press Ctrl+M or click REC to finish)".to_string()
-                } else if self.is_transcribing {
-                    "Transcribing speech with Whisper...".to_string()
-                } else if let Some(ref err) = self.voice_error {
-                    format!("Speech note: {} (Type request)", err)
-                } else if is_placeholder {
-                    "Ask Function... (Alt+Space to focus, Tab to expand, Ctrl+M for voice)".to_string()
-                } else {
-                    self.input_buffer.clone()
-                };
+        if self.mode == FunctionMode::Settings {
+            return div()
+                .track_focus(&self.focus_handle)
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.handle_key_down(event, window, cx);
+                }))
+                .w_full()
+                .h_full()
+                .child(render_settings_view(
+                    &self.settings_api_key,
+                    &self.settings_model,
+                    &self.settings_base_url,
+                    self.settings_sound_enabled,
+                    self.config.theme_style,
+                    self.config.accent_color,
+                    self.config.window_position,
+                    self.settings_show_key,
+                    self.settings_focused_field,
+                    self.cursor_visible,
+                    self.settings_status_message.as_deref(),
+                    &theme,
+                ))
+                .into_any_element();
+        }
 
-                div()
-                    .track_focus(&self.focus_handle)
-                    .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        this.handle_key_down(event, window, cx);
-                    }))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .w_full()
-                    .h(px(56.0))
-                    .px_4()
-                    .bg(theme.surface_elevated)
-                    .border_1()
-                    .border_color(theme.border_subtle)
-                    .rounded_xl()
-                    .shadow_lg()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .flex_1()
-                            .child(render_logo(20.0))
-                            .child(render_status_badge(&self.state, &theme))
-                            .child(if !is_placeholder {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                             .text_sm()
-                                            .text_color(theme.text_primary)
-                                            .child(display_text),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(2.0))
-                                            .h(px(14.0))
-                                            .bg(if self.cursor_visible {
-                                                theme.accent_primary
-                                            } else {
-                                                rgba(0x00000000)
-                                            }),
-                                    )
-                            } else {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .w(px(2.0))
-                                            .h(px(14.0))
-                                            .bg(if self.cursor_visible {
-                                                theme.accent_primary
-                                            } else {
-                                                rgba(0x00000000)
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.text_muted)
-                                            .child(display_text),
-                                    )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .hover(|s| s.opacity(0.85))
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
-                                        this.toggle_voice(&ToggleVoice, window, cx);
-                                    }))
-                                    .bg(if is_listening {
-                                        theme.status_listening
-                                    } else {
-                                        theme.surface_active
-                                    })
-                                    .text_xs()
-                                    .text_color(if is_listening {
-                                        theme.surface_base
-                                    } else {
-                                        theme.text_secondary
-                                    })
-                                    .child(if is_listening {
-                                        "REC"
-                                    } else if mic_active {
-                                        "VOICE"
-                                    } else {
-                                        "MUTED"
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_sm()
-                                    .bg(theme.surface_active)
-                                    .border_1()
-                                    .border_color(theme.border_subtle)
-                                    .text_xs()
-                                    .text_color(theme.text_secondary)
-                                    .hover(|s| s.bg(theme.surface_floating))
-                                    .child("Expand"),
-                            ),
-                    )
-            }
-            FunctionMode::Expanded => {
-                // ==========================================
-                // EXPANDED WORKSPACE VIEW (520px)
-                // ==========================================
-                let is_placeholder = self.input_buffer.is_empty();
-                let display_text = if self.listening {
-                    "Listening... Speak clearly (Press Ctrl+M to transcribe)".to_string()
-                } else if self.is_transcribing {
-                    "Transcribing speech with Whisper...".to_string()
-                } else if let Some(ref err) = self.voice_error {
-                    format!("Note: {} (Type request)", err)
-                } else if is_placeholder {
-                    "Type a task or press Ctrl+M for voice...".to_string()
-                } else {
-                    self.input_buffer.clone()
-                };
+        // ==========================================
+        // UNIFIED FUNCTION COMMAND LAYER
+        // ==========================================
+        let has_query = !self.input_buffer.is_empty();
+        let has_task = self.active_task.is_some();
+        let has_result = self.latest_result.is_some();
+        let is_busy = matches!(
+            self.state,
+            AgentState::Processing { .. }
+                | AgentState::Acting { .. }
+                | AgentState::WaitingForConfirmation { .. }
+        );
 
-                div()
-                    .track_focus(&self.focus_handle)
-                    .on_action(cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| this.toggle_expanded(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| this.toggle_spotlight(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)))
-                    .on_action(cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        this.handle_key_down(event, window, cx);
-                    }))
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .h_full()
-                    .bg(theme.surface_base)
-                    .border_1()
-                    .border_color(theme.border_subtle)
-                    .rounded_xl()
-                    .shadow_lg()
-                    .overflow_hidden()
-                    // Top Header Bar
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px_4()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(theme.border_subtle)
-                            .bg(theme.surface_elevated)
-                            .child(
+        let bg_surface = Rgba {
+            a: 0.95,
+            ..theme.surface_base
+        };
+
+        let placeholder = if self.listening {
+            "Listening... Speak clearly".to_string()
+        } else if self.is_transcribing {
+            "Transcribing speech with Whisper...".to_string()
+        } else if let Some(ref err) = self.voice_error {
+            format!("Voice error: {}. Type request", err)
+        } else {
+            "Type a command or ask Function...".to_string()
+        };
+
+        let launcher_items = if has_query && !has_task && !has_result && !is_busy {
+            get_launcher_items(&self.input_buffer)
+        } else {
+            Vec::new()
+        };
+        let selected_idx = if launcher_items.is_empty() {
+            0
+        } else {
+            self.selected_index
+                .min(launcher_items.len().saturating_sub(1))
+        };
+
+        div()
+            .track_focus(&self.focus_handle)
+            .on_action(
+                cx.listener(|this, a: &SubmitRequest, window, cx| this.submit(a, window, cx)),
+            )
+            .on_action(cx.listener(|this, a: &ToggleExpanded, window, cx| {
+                this.toggle_expanded(a, window, cx)
+            }))
+            .on_action(cx.listener(|this, a: &ToggleSpotlight, window, cx| {
+                this.toggle_spotlight(a, window, cx)
+            }))
+            .on_action(cx.listener(|this, a: &CloseFunction, window, cx| this.close(a, window, cx)))
+            .on_action(cx.listener(|this, a: &CancelTask, window, cx| this.cancel(a, window, cx)))
+            .on_action(
+                cx.listener(|this, a: &ToggleTheme, window, cx| this.toggle_theme(a, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
+            .flex()
+            .flex_col()
+            .w_full()
+            .h_full()
+            .bg(bg_surface)
+            .rounded_2xl()
+            .shadow_xl()
+            .overflow_hidden()
+            // Upper area: conversational request, execution state, response
+            .when(has_task || has_result || is_busy, |parent| {
+                parent.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .overflow_hidden()
+                        // Conversational user request element
+                        .when(has_task, |p| {
+                            let task_str = self.active_task.as_deref().unwrap_or("").to_string();
+                            p.child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
-                                    .child(render_logo(16.0))
+                                    .gap_3()
+                                    .px_5()
+                                    .pt_4()
+                                    .pb_2()
                                     .child(
                                         div()
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(theme.text_primary)
-                                            .child("Function"),
-                                    )
-                                    .child(render_status_badge(&self.state, &theme)),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_sm()
-                                            .bg(theme.surface_active)
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.surface_floating))
-                                            .child(if theme.is_dark() { "Light" } else { "Dark" }),
-                                    )
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_sm()
-                                            .bg(theme.surface_active)
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.surface_floating))
-                                            .child("Compact"),
-                                    )
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_sm()
-                                            .bg(theme.surface_active)
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .hover(|s| s.bg(theme.surface_floating))
-                                            .child("Esc"),
-                                    ),
-                            ),
-                    )
-                    // Middle Workspace Area
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .p_4()
-                            .gap_3()
-                            // Active Task Section
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .child("FUNCTION INTENT"),
+                                            .text_color(theme.accent_primary)
+                                            .child("ƒ"),
                                     )
                                     .child(
                                         div()
                                             .text_sm()
-                                            .text_color(theme.text_primary)
-                                            .child(
-                                                self.active_task
-                                                    .as_deref()
-                                                    .unwrap_or("No task running. Type an instruction below.")
-                                                    .to_string(),
-                                            ),
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(theme.text_secondary)
+                                            .child(task_str),
                                     ),
                             )
-                            // Activity Timeline Section
-                            .child(
+                        })
+                        // Compact execution states
+                        .when(is_busy, |p| {
+                            let status_text = match &self.state {
+                                AgentState::Processing { thought_summary } => {
+                                    thought_summary.clone().unwrap_or_else(|| {
+                                        "Thinking and orchestrating tools...".into()
+                                    })
+                                }
+                                AgentState::Acting { action_description } => {
+                                    action_description.clone()
+                                }
+                                AgentState::WaitingForConfirmation { action, .. } => {
+                                    format!("Confirmation needed: {}", action)
+                                }
+                                _ => "Executing".into(),
+                            };
+
+                            p.child(
                                 div()
                                     .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                    .items_center()
+                                    .gap_3()
+                                    .px_5()
+                                    .py_2()
+                                    .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(
+                                        if matches!(self.state, AgentState::Acting { .. }) {
+                                            theme.status_acting
+                                        } else if matches!(
+                                            self.state,
+                                            AgentState::WaitingForConfirmation { .. }
+                                        ) {
+                                            theme.status_error
+                                        } else {
+                                            theme.accent_primary
+                                        },
+                                    ))
                                     .child(
                                         div()
                                             .text_xs()
+                                            .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_muted)
-                                            .child("FUNCTION ACTIONS"),
-                                    )
-                                    .child(render_activity_list(&self.activities, &theme)),
+                                            .child(status_text),
+                                    ),
                             )
-                            // Security Confirmation Alert (when action requires approval)
-                            .when(matches!(self.state, AgentState::WaitingForConfirmation { .. }), |parent| {
-                                if let AgentState::WaitingForConfirmation { action, details } = &self.state {
-                                    parent.child(
+                        })
+                        // Security confirmation prompt
+                        .when(
+                            matches!(self.state, AgentState::WaitingForConfirmation { .. }),
+                            |p| {
+                                if let AgentState::WaitingForConfirmation { action, details } =
+                                    &self.state
+                                {
+                                    p.child(
                                         div()
                                             .flex()
                                             .flex_col()
-                                            .gap_2()
+                                            .gap_1()
+                                            .mx_5()
+                                            .my_2()
                                             .p_3()
-                                            .rounded_md()
+                                            .rounded_lg()
                                             .bg(theme.surface_elevated)
                                             .border_1()
                                             .border_color(theme.status_error)
@@ -1288,13 +1236,18 @@ impl Render for FunctionView {
                                                             .text_xs()
                                                             .font_weight(gpui::FontWeight::BOLD)
                                                             .text_color(theme.status_error)
-                                                            .child(format!("CONFIRMATION REQUIRED: {}", action)),
+                                                            .child(format!(
+                                                                "SECURITY CONFIRMATION: {}",
+                                                                action
+                                                            )),
                                                     )
                                                     .child(
                                                         div()
                                                             .text_xs()
                                                             .text_color(theme.text_muted)
-                                                            .child("Press Enter to approve, Esc to reject"),
+                                                            .child(
+                                                                "Enter to allow  •  Esc to deny",
+                                                            ),
                                                     ),
                                             )
                                             .child(
@@ -1305,138 +1258,225 @@ impl Render for FunctionView {
                                             ),
                                     )
                                 } else {
-                                    parent
+                                    p
                                 }
-                            })
-                            // Result Container Section
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.text_muted)
-                                            .child("RESULT / STATUS"),
-                                    )
-                                    .child(
-                                        div()
-                                            .p_3()
-                                            .rounded_md()
-                                            .bg(theme.surface_elevated)
-                                            .border_1()
-                                            .border_color(theme.border_subtle)
-                                            .flex_1()
-                                            .text_sm()
-                                            .text_color(theme.text_secondary)
-                                            .child(
-                                                self.latest_result
-                                                    .as_deref()
-                                                    .unwrap_or("System ready for computer operation.")
-                                                    .to_string(),
-                                            ),
-                                    ),
-                            ),
-                    )
-                    // Bottom Input Area & Action Bar
+                            },
+                        )
+                        // Typography-led spacious response
+                        .when(has_result, |p| {
+                            let result_str =
+                                self.latest_result.as_deref().unwrap_or("").to_string();
+                            p.child(
+                                div().flex_1().px_5().py_3().overflow_hidden().child(
+                                    div()
+                                        .text_sm()
+                                        .line_height(px(22.0))
+                                        .text_color(theme.text_primary)
+                                        .child(result_str),
+                                ),
+                            )
+                        }),
+                )
+            })
+            // Hairline separator before input if upper content exists
+            .when(has_task || has_result || is_busy, |parent| {
+                parent.child(div().w_full().h(px(1.0)).bg(theme.surface_input))
+            })
+            // Refined command input surface
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .h(px(64.0))
+                    .px_5()
+                    // Left: Animated bespoke Function motif mark
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .px_4()
-                            .py_3()
-                            .border_t_1()
-                            .border_color(theme.border_subtle)
-                            .bg(theme.surface_elevated)
-                            .child(
+                            .items_center()
+                            .gap_4()
+                            .flex_1()
+                            .child(render_function_motif(
+                                motif_state,
+                                &theme,
+                                self.animation_tick,
+                                28.0,
+                            ))
+                            // Center: Command input text or placeholder
+                            .child(if has_query {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .justify_between()
-                                    .p_2()
-                                    .rounded_md()
-                                    .bg(theme.surface_input)
-                                    .border_1()
-                                    .border_color(theme.border_focus)
-                                    .child(if !is_placeholder {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .flex_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.text_primary)
-                                                    .child(display_text),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(2.0))
-                                                    .h(px(14.0))
-                                                    .bg(if self.cursor_visible {
-                                                        theme.accent_primary
-                                                    } else {
-                                                        rgba(0x00000000)
-                                                    }),
-                                            )
-                                    } else {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .flex_1()
-                                            .child(
-                                                div()
-                                                    .w(px(2.0))
-                                                    .h(px(14.0))
-                                                    .bg(if self.cursor_visible {
-                                                        theme.accent_primary
-                                                    } else {
-                                                        rgba(0x00000000)
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.text_muted)
-                                                    .child(display_text),
-                                            )
-                                    })
+                                    .flex_1()
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .rounded_sm()
-                                                    .bg(if is_listening {
-                                                        theme.status_listening
-                                                    } else {
-                                                        theme.surface_active
-                                                    })
-                                                    .text_xs()
-                                                    .text_color(if is_listening {
-                                                        theme.surface_base
-                                                    } else {
-                                                        theme.text_secondary
-                                                    })
-                                                    .child(if is_listening {
-                                                        "REC"
-                                                    } else if mic_active {
-                                                        "VOICE"
-                                                    } else {
-                                                        "MUTED"
-                                                    }),
-                                            ),
-                                    ),
-                            )
-                            .child(render_action_bar(&theme, true, is_listening)),
+                                            .text_base()
+                                            .font_weight(gpui::FontWeight::NORMAL)
+                                            .text_color(theme.text_primary)
+                                            .child(self.input_buffer.clone()),
+                                    )
+                                    .child(div().w(px(2.0)).h(px(18.0)).bg(
+                                        if self.cursor_visible {
+                                            theme.accent_primary
+                                        } else {
+                                            rgba(0x00000000)
+                                        },
+                                    ))
+                            } else {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .flex_1()
+                                    .child(div().w(px(2.0)).h(px(18.0)).bg(
+                                        if self.cursor_visible {
+                                            theme.accent_primary
+                                        } else {
+                                            rgba(0x00000000)
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_weight(gpui::FontWeight::NORMAL)
+                                            .text_color(theme.text_muted)
+                                            .child(placeholder),
+                                    )
+                            }),
                     )
-            }
-        }
+                    // Right: Contextual micro indicators
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .when(is_listening, |p| {
+                                p.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme.status_listening)
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(theme.surface_base)
+                                        .child("REC"),
+                                )
+                            })
+                            .when(!is_listening, |p| {
+                                p.child(
+                                    div()
+                                        .cursor_pointer()
+                                        .p_1()
+                                        .rounded_md()
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.toggle_settings(window, cx);
+                                            }),
+                                        )
+                                        .child(settings_icon(15.0)),
+                                )
+                            }),
+                    ),
+            )
+            // Launcher suggestions list (when typing query without active task)
+            .when(!launcher_items.is_empty(), |parent| {
+                let mut list_container = div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(theme.surface_input)
+                    .py_2()
+                    .px_3();
+
+                for (idx, item) in launcher_items.into_iter().enumerate().take(5) {
+                    let is_sel = idx == selected_idx;
+                    let icon_el = match item.icon_type {
+                        LauncherIconType::Function => render_logo(16.0).into_any_element(),
+                        LauncherIconType::Terminal => terminal_icon(16.0).into_any_element(),
+                        LauncherIconType::Calculator => calculator_icon(16.0).into_any_element(),
+                        LauncherIconType::Web => web_icon(16.0).into_any_element(),
+                        LauncherIconType::Network => network_icon(16.0).into_any_element(),
+                        LauncherIconType::Settings => settings_icon(16.0).into_any_element(),
+                    };
+
+                    let action_clone = item.action.clone();
+                    let item_el = div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .h(px(46.0))
+                        .px_3()
+                        .rounded_lg()
+                        .cursor_pointer()
+                        .bg(if is_sel {
+                            theme.surface_active
+                        } else {
+                            rgba(0x00000000)
+                        })
+                        .hover(|s| s.bg(theme.surface_input))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.execute_launcher_action(action_clone.clone(), window, cx);
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .flex_1()
+                                .child(icon_el)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(if is_sel {
+                                                    gpui::FontWeight::SEMIBOLD
+                                                } else {
+                                                    gpui::FontWeight::NORMAL
+                                                })
+                                                .text_color(if is_sel {
+                                                    theme.text_primary
+                                                } else {
+                                                    theme.text_secondary
+                                                })
+                                                .child(item.keyword),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.text_muted)
+                                                .child(item.description),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(theme.surface_input)
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(item.shortcut),
+                        );
+
+                    list_container = list_container.child(item_el);
+                }
+
+                parent.child(list_container)
+            })
+            .into_any_element()
     }
 }

@@ -49,13 +49,18 @@ impl Tool for WebSearchTool {
         false
     }
 
-    async fn execute(&self, params: serde_json::Value, _ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-        let query = params.get("query").and_then(|v| v.as_str()).ok_or_else(|| {
-            ToolError::InvalidParameters {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let query = params
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'query' parameter".into(),
-            }
-        })?;
+            })?;
 
         let max_results = params
             .get("max_results")
@@ -70,7 +75,11 @@ impl Tool for WebSearchTool {
                 encoded
             );
 
-            let curl_bin = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+            let curl_bin = if cfg!(target_os = "windows") {
+                "curl.exe"
+            } else {
+                "curl"
+            };
             let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-L")
@@ -93,7 +102,10 @@ impl Tool for WebSearchTool {
             if let Some(abs_text) = parsed.get("AbstractText").and_then(|t| t.as_str()) {
                 if !abs_text.is_empty() {
                     let heading = parsed.get("Heading").and_then(|h| h.as_str()).unwrap_or(&q);
-                    let abs_url = parsed.get("AbstractURL").and_then(|u| u.as_str()).unwrap_or("");
+                    let abs_url = parsed
+                        .get("AbstractURL")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("");
                     items.push(json!({
                         "title": heading,
                         "url": abs_url,
