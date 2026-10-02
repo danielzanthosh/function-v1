@@ -2023,7 +2023,7 @@ impl FunctionView {
 }
 
 impl Render for FunctionView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.is_visible {
             return div().size_0().into_any_element();
         }
@@ -2074,6 +2074,13 @@ impl Render for FunctionView {
                 | AgentState::WaitingForConfirmation { .. }
         );
         let has_chat = !self.chat_display.is_empty();
+        let is_focused = self.focus_handle.is_focused(window);
+
+        // Dynamically adjust window size if content has grown or shrunk
+        let target_sz = self.target_window_size();
+        if window.bounds().size != target_sz {
+            window.resize(target_sz);
+        }
 
         let bg_surface = Rgba {
             a: 1.0,
@@ -2188,10 +2195,12 @@ impl Render for FunctionView {
                         .pt(px(12.0))
                         .pb(px(8.0))
                         .gap(px(8.0))
-                        .children(chat_entries.into_iter().map(|entry| {
+                        .children(chat_entries.into_iter().enumerate().map(|(idx, entry)| {
                             if entry.is_user {
                                 // User bubble — right-aligned, muted background
                                 div()
+                                    .id(("user_msg", idx))
+                                    .flex_shrink_0()
                                     .flex()
                                     .justify_end()
                                     .child(
@@ -2211,14 +2220,18 @@ impl Render for FunctionView {
                                 // Assistant reply — left-aligned with brand mark, title and 1-click Copy button
                                 let reply_text = entry.text.clone();
                                 div()
+                                    .id(("assistant_msg", idx))
+                                    .flex_shrink_0()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
                                     .w_full()
                                     .max_w(px(580.0))
-                                    .overflow_hidden()
                                     .child(
                                         div()
+                                            .id(("assistant_header", idx))
+                                            .w_full()
+                                            .flex_shrink_0()
                                             .flex()
                                             .items_center()
                                             .justify_between()
@@ -2239,6 +2252,7 @@ impl Render for FunctionView {
                                             )
                                             .child(
                                                 div()
+                                                    .id(("copy_btn", idx))
                                                     .cursor_pointer()
                                                     .flex()
                                                     .items_center()
@@ -2265,7 +2279,9 @@ impl Render for FunctionView {
                                     )
                                     .child(
                                         div()
+                                            .id(("assistant_body", idx))
                                             .w_full()
+                                            .flex_shrink_0()
                                             .px(px(4.0))
                                             .py(px(2.0))
                                             .child(render_markdown(&entry.text, &theme)),
@@ -2277,6 +2293,8 @@ impl Render for FunctionView {
                         .when_some(busy_state_text, |p, status| {
                             p.child(
                                 div()
+                                    .id("thinking_indicator")
+                                    .flex_shrink_0()
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
@@ -2372,11 +2390,26 @@ impl Render for FunctionView {
             // Dominant refined command input surface
             .child(
                 div()
+                    .id("command_input_bar")
+                    .mx(px(14.0))
+                    .mb(px(12.0))
+                    .mt(px(4.0))
+                    .h(px(52.0))
+                    .px(px(14.0))
+                    .rounded_xl()
+                    .bg(theme.surface_input)
+                    .border_1()
+                    .border_color(if is_focused {
+                        Rgba {
+                            a: 0.38,
+                            ..theme.accent_primary
+                        }
+                    } else {
+                        theme.border_subtle
+                    })
                     .flex()
                     .items_center()
                     .justify_between()
-                    .h(px(56.0))
-                    .px_6()
                     .child(
                         div()
                             .flex()
@@ -2393,8 +2426,8 @@ impl Render for FunctionView {
                                     if char_count == 0 {
                                         this.cursor_offset = 0;
                                     } else {
-                                        // Padding px_6 is 24px
-                                        let click_x = f32::from(event.position.x) - 24.0;
+                                        // Margin (14px) + Padding (14px) = 28px
+                                        let click_x = f32::from(event.position.x) - 28.0;
                                         if click_x <= 0.0 {
                                             this.cursor_offset = 0;
                                         } else {

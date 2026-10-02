@@ -155,22 +155,37 @@ impl Agent {
             .unwrap_or_default();
 
         let mut system_prompt = "\
-You are Function, a fast, proactive, agentic desktop AI assistant running natively on this computer.
+You are Function, a fast, proactive, native agentic desktop AI assistant.
 
-Core Capabilities:
-1. Conversational & Knowledge: Answer questions, explain concepts, write text, code, brainstorm, and converse naturally. Use clean GitHub markdown.
-2. Screen Understanding & Vision: If the user asks about something on their screen (e.g., \"What's this?\", \"What error is showing?\", \"Where do I click?\", \"Analyze what's on my display\"), call `computer_screen` with action `screenshot` to capture visual context. Then inspect the screen image and answer accurately. Do NOT take screenshots if visual context is not needed.
-3. Computer Interaction: You have full native desktop tools to interact with apps, mouse, keyboard, and terminal:
-   - `computer_screen`: capture screenshots, retrieve display dimensions, find cursor position.
-   - `computer_mouse`: move mouse cursor, click, double click, right click, middle click, drag, scroll.
-   - `computer_keyboard`: type text, press keys (return, tab, space, escape, etc.), send keyboard shortcuts (e.g. ctrl+c, command+space).
-   - `computer_apps`: open applications by name (e.g. Chrome, Terminal, VS Code, Finder), list active windows, focus windows.
-   - `fs`: read/write/list files.
-   - `terminal`: execute commands safely.
+Operating System Awareness:
+- You run directly on the host computer. Detect the OS and interact using native capabilities.
+- NEVER assume Windows when running on macOS or Linux, and vice-versa.
+- NEVER use Windows commands like `start chrome.exe` or `dir` on macOS or Linux.
+- NEVER use raw shell commands to open or control desktop applications. Always use the native desktop tools.
 
-Agentic Execution Loop:
-- For complex desktop tasks, reason step-by-step: understand intent -> observe state or screen -> decide next tool -> inspect output -> repeat until task is accomplished -> provide a concise final summary.
-- Always provide a concise, helpful summary when finished. Never dump raw internal tool output to the user."
+Primary High-Level Desktop Capabilities:
+1. `open_app`: Launch or focus applications natively by name (e.g. {\"name\": \"Google Chrome\"}, {\"name\": \"Terminal\"}). Uses native OS APIs on macOS, Windows, and Linux.
+2. `close_app`: Gracefully quit or terminate applications by name.
+3. `take_screenshot`: Capture the current screen state. Call this whenever you need visual context, after clicking or opening apps to verify the result, or when the user asks what is on screen.
+4. `click`: Click at specified (x, y) coordinates or current cursor location.
+5. `double_click`: Double click at specified (x, y) coordinates.
+6. `type_text`: Type text or unicode characters into the active input field or window.
+7. `press_key`: Send key presses (e.g. \"return\", \"space\", \"tab\", \"escape\") or keyboard shortcuts (e.g. \"cmd+t\", \"ctrl+c\", \"alt+f4\").
+8. `scroll`: Scroll vertically or horizontally by a given amount.
+9. `execute_command`: Run shell commands ONLY when no high-level native tool exists. Safe commands run automatically; destructive commands pause for user confirmation.
+10. `fs`: Read, write, or list filesystem directories and files.
+11. `web_search`: Search the web for current documentation, news, or knowledge.
+
+Agentic Multi-Step & Observation Loop:
+- Plan -> Execute -> Observe -> Recover/Iterate -> Conclude.
+- For multi-step tasks (e.g., 'Open Chrome, go to YouTube, and check views'):
+  1. Use `open_app` to launch the application.
+  2. Take a screenshot with `take_screenshot` to observe and verify the UI state.
+  3. Click, type, or press keys to navigate to the target.
+  4. Take a screenshot to inspect the new visual context and read the result.
+  5. Continue iteratively until the user's objective is fully accomplished.
+- If an action or tool fails, do NOT immediately abort or dump raw errors. Inspect the structured error, take a screenshot if visual insight helps, attempt an alternative recovery path, and continue.
+- Keep the final response clear, concise, and beautifully formatted in markdown."
             .to_string();
 
         if !context_items.is_empty() {
@@ -264,7 +279,66 @@ Agentic Execution Loop:
                         return Err(AgentError::Canceled);
                     }
 
+                    // Structured debug logging: agent decision → selected tool
+                    tracing::info!(
+                        target: "function_agent",
+                        step = step,
+                        tool = %call.name,
+                        arguments = %call.arguments,
+                        "agent decision → selected tool: {} with args: {}",
+                        call.name,
+                        call.arguments
+                    );
+
                     let action_desc = match call.name.as_str() {
+                        // High-level OS-aware tools
+                        "open_app" => {
+                            let app_name = call
+                                .arguments
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("application");
+                            format!("Opening {}...", app_name)
+                        }
+                        "close_app" => {
+                            let app_name = call
+                                .arguments
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("application");
+                            format!("Closing {}...", app_name)
+                        }
+                        "take_screenshot" => "Capturing screen observation...".to_string(),
+                        "click" => {
+                            if let (Some(x), Some(y)) = (
+                                call.arguments.get("x").and_then(|v| v.as_f64()),
+                                call.arguments.get("y").and_then(|v| v.as_f64()),
+                            ) {
+                                format!("Clicking at ({}, {})...", x as i32, y as i32)
+                            } else {
+                                "Clicking target...".to_string()
+                            }
+                        }
+                        "double_click" => "Double-clicking target...".to_string(),
+                        "type_text" => "Typing text...".to_string(),
+                        "press_key" => {
+                            let key = call
+                                .arguments
+                                .get("key")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("key");
+                            format!("Pressing {}...", key)
+                        }
+                        "scroll" => "Scrolling view...".to_string(),
+                        "execute_command" => {
+                            let cmd = call
+                                .arguments
+                                .get("command")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("command");
+                            format!("Executing `{}`...", cmd)
+                        }
+                        // Low-level / legacy tools
                         "computer_screen" => {
                             let action = call
                                 .arguments
@@ -342,6 +416,14 @@ Agentic Execution Loop:
                         allow_sensitive: false,
                     };
 
+                    // Structured debug logging: execution
+                    tracing::info!(
+                        target: "function_agent",
+                        tool = %call.name,
+                        "execution: running tool '{}'...",
+                        call.name
+                    );
+
                     let result = match self
                         .tools
                         .execute(&call.name, call.arguments.clone(), &ctx)
@@ -364,11 +446,42 @@ Agentic Execution Loop:
                         ),
                     };
 
+                    // Structured debug logging: result
+                    tracing::info!(
+                        target: "function_agent",
+                        tool = %call.name,
+                        success = result.success,
+                        summary = %result.summary,
+                        "result: {} -> success={}, summary='{}'",
+                        call.name,
+                        result.success,
+                        result.summary
+                    );
+
+                    // Extract screenshot base64 if visual observation was captured
                     let mut screenshot_base64 = None;
-                    if call.name == "computer_screen" {
+                    if call.name == "take_screenshot" || call.name == "computer_screen" {
                         if let Some(b64) = result.output.get("base64").and_then(|v| v.as_str()) {
                             screenshot_base64 = Some(b64.to_string());
                         }
+                    }
+
+                    // Structured debug logging: observation
+                    if let Some(ref b64) = screenshot_base64 {
+                        tracing::info!(
+                            target: "function_agent",
+                            tool = %call.name,
+                            observation = "visual screenshot captured",
+                            "observation: visual screen state captured (bytes: {})",
+                            b64.len()
+                        );
+                    } else {
+                        tracing::info!(
+                            target: "function_agent",
+                            tool = %call.name,
+                            output = %result.output,
+                            "observation: tool output recorded for next step"
+                        );
                     }
 
                     messages.push(ChatMessage::tool(
@@ -378,10 +491,17 @@ Agentic Execution Loop:
 
                     if let Some(b64) = screenshot_base64 {
                         messages.push(ChatMessage::user_with_images(
-                            "Visual screen capture:",
+                            "Visual screen observation:",
                             vec![b64],
                         ));
                     }
+
+                    // Structured debug logging: next action
+                    tracing::info!(
+                        target: "function_agent",
+                        step = step,
+                        "next action: evaluating progress and deciding next step"
+                    );
                 }
 
                 self.update_state(AgentState::Processing {

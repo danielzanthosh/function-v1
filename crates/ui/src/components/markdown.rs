@@ -199,8 +199,8 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
         .flex_col()
         .gap_2()
         .w_full()
-        .max_w(px(540.0))
-        .overflow_hidden();
+        .max_w(px(540.0));
+
 
     // Check if message is split into code blocks, math blocks, and normal paragraphs
     let lines: Vec<&str> = text.lines().collect();
