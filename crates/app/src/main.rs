@@ -7,7 +7,7 @@
 //! command bar for fast keyboard-first interaction.
 
 use function_config::AppConfig;
-use function_platform::create_native_platform_service;
+use function_platform::{create_native_platform_service, PlatformService};
 use function_ui::{
     CloseFunction, FunctionView, SubmitRequest, ToggleExpanded, ToggleSpotlight, ToggleTheme,
     ToggleVoice,
@@ -42,7 +42,7 @@ fn main() {
     );
 
     // 3. Initialize native platform integration
-    let platform = create_native_platform_service();
+    let platform: std::sync::Arc<dyn PlatformService> = std::sync::Arc::from(create_native_platform_service());
     tracing::info!(
         platform = platform.platform_name(),
         "Platform service initialized"
@@ -246,9 +246,12 @@ fn main() {
         if let Ok(window_handle) = _window {
             let mut hotkey_rx = platform.subscribe_hotkey();
             let handle_clone = window_handle.clone();
+            let platform_keepalive = platform.clone();
             cx.spawn(move |cx: &mut gpui::AsyncApp| {
                 let cx = cx.clone();
+                let _platform = platform_keepalive;
                 async move {
+                    let _platform_guard = _platform;
                     tracing::info!("GPUI hotkey async listener started, awaiting hotkey events");
                     while let Ok(()) = hotkey_rx.recv().await {
                         tracing::info!("🔔 GPUI hotkey event received by async listener");
@@ -274,10 +277,11 @@ fn main() {
         }
 
         // On macOS, configure accessory policy so Function doesn't appear in the Dock,
-        // and register as modern SMAppService login item for auto-start.
+        // add native top bar / status menu item, and register as modern SMAppService login item for auto-start.
         #[cfg(target_os = "macos")]
         {
             function_platform::set_macos_activation_policy_accessory();
+            function_platform::setup_macos_menu_bar_icon();
             function_platform::register_macos_login_item();
         }
 

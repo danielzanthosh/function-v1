@@ -64,6 +64,26 @@ pub trait PlatformService: Send + Sync {
     fn audio_capture(&self) -> Arc<dyn AudioCapture>;
 }
 
+static GLOBAL_HOTKEY_TX: std::sync::RwLock<Option<broadcast::Sender<()>>> =
+    std::sync::RwLock::new(None);
+
+pub fn set_global_hotkey_tx(tx: broadcast::Sender<()>) {
+    if let Ok(mut lock) = GLOBAL_HOTKEY_TX.write() {
+        *lock = Some(tx);
+    }
+}
+
+pub fn get_global_hotkey_tx() -> Option<broadcast::Sender<()>> {
+    GLOBAL_HOTKEY_TX.read().ok().and_then(|lock| lock.clone())
+}
+
+pub fn trigger_global_hotkey() {
+    if let Some(tx) = get_global_hotkey_tx() {
+        tracing::info!("Triggering global hotkey notification from UI / menu bar / tray");
+        let _ = tx.send(());
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub mod windows {
     use super::*;
@@ -81,6 +101,7 @@ pub mod windows {
     impl WindowsPlatformService {
         pub fn new() -> Self {
             let (hotkey_tx, _) = broadcast::channel(16);
+            set_global_hotkey_tx(hotkey_tx.clone());
             Self {
                 registered_hotkey: Arc::new(RwLock::new(None)),
                 hotkey_tx,
@@ -254,17 +275,51 @@ pub mod windows {
                 if sc_upper.contains("WIN") || sc_upper.contains("SUPER") {
                     mods |= MOD_WIN;
                 }
+                if mods == MOD_NOREPEAT {
+                    mods |= MOD_CONTROL;
+                }
+
+                let mut vk = VK_SPACE;
+                for part in sc_upper.split('+').map(|p| p.trim()) {
+                    match part {
+                        "SPACE" => vk = 0x20,
+                        ";" | "SEMICOLON" => vk = 0xBA, // VK_OEM_1 (;:)
+                        "ESC" | "ESCAPE" => vk = 0x1B,
+                        "TAB" => vk = 0x09,
+                        k if k.len() == 1 => {
+                            let ch = k.chars().next().unwrap();
+                            if ch.is_ascii_alphanumeric() {
+                                vk = ch as u32;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 unsafe {
-                    let mut reg_res = RegisterHotKey(0, 101, mods, VK_SPACE);
-                    if reg_res == 0 {
+                    let mut reg_res = RegisterHotKey(0, 101, mods, vk);
+                    if reg_res == 0 && (mods & MOD_NOREPEAT != 0) {
                         // Fallback without MOD_NOREPEAT for compatibility
-                        reg_res = RegisterHotKey(0, 101, mods & !MOD_NOREPEAT, VK_SPACE);
+                        reg_res = RegisterHotKey(0, 101, mods & !MOD_NOREPEAT, vk);
+                    }
+                    if reg_res == 0 && sc_upper.contains("ALT") {
+                        tracing::warn!(
+                            error_code = GetLastError(),
+                            "Failed to register Alt-based hotkey (occupied by Windows system menu). Falling back to Ctrl+Space..."
+                        );
+                        let fallback_mods = MOD_CONTROL | MOD_NOREPEAT;
+                        reg_res = RegisterHotKey(0, 101, fallback_mods, VK_SPACE);
+                        if reg_res == 0 {
+                            reg_res = RegisterHotKey(0, 101, MOD_CONTROL, VK_SPACE);
+                        }
+                        if reg_res != 0 {
+                            tracing::info!("Fallback Windows global hotkey registered successfully: Ctrl+Space");
+                        }
                     }
                     if reg_res == 0 {
                         tracing::warn!(
                             error_code = GetLastError(),
-                            "Failed to register Windows global hotkey (might be occupied by another app)"
+                            "Failed to register Windows global hotkey (might be occupied by another app). System tray icon remains active."
                         );
                     } else {
                         tracing::info!("Windows global hotkey registered successfully: {}", sc);
@@ -283,6 +338,41 @@ pub mod windows {
                         None
                     };
 
+                    extern "system" {
+                        fn LoadImageW(
+                            hInst: isize,
+                            name: *const u16,
+                            type_: u32,
+                            cx: i32,
+                            cy: i32,
+                            fuLoad: u32,
+                        ) -> isize;
+                    }
+                    const IMAGE_ICON: u32 = 1;
+                    const LR_LOADFROMFILE: u32 = 0x0010;
+
+                    let mut hicon = 0isize;
+                    if let Some(icon_path) = find_icon_path() {
+                        if icon_path.extension().and_then(|e| e.to_str()) == Some("ico") {
+                            let wide_path: Vec<u16> = icon_path
+                                .to_string_lossy()
+                                .encode_utf16()
+                                .chain(std::iter::once(0))
+                                .collect();
+                            hicon = LoadImageW(
+                                0,
+                                wide_path.as_ptr(),
+                                IMAGE_ICON,
+                                16,
+                                16,
+                                LR_LOADFROMFILE,
+                            );
+                        }
+                    }
+                    if hicon == 0 {
+                        hicon = LoadIconW(0, IDI_APPLICATION);
+                    }
+
                     // Register system tray icon to keep background process accessible
                     let mut nid: NotifyIconDataW = std::mem::zeroed();
                     nid.cb_size = std::mem::size_of::<NotifyIconDataW>() as u32;
@@ -290,19 +380,21 @@ pub mod windows {
                     nid.uid = 1001;
                     nid.uflags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
                     nid.ucallback_message = WM_TRAYICON;
-                    nid.hicon = LoadIconW(0, IDI_APPLICATION);
+                    nid.hicon = hicon;
 
-                    let tip = "Function (Ctrl+Space)\0";
+                    let tip = format!("Function ({})\0", sc);
                     for (i, c) in tip.encode_utf16().enumerate().take(127) {
                         nid.sztip[i] = c;
                     }
                     if let Some(notify) = pfn_notify {
-                        let _ = notify(NIM_ADD, &nid);
+                        let res = notify(NIM_ADD, &nid);
+                        tracing::info!(res, "Registered Windows system tray icon");
                     }
 
                     let mut msg: Msg = std::mem::zeroed();
                     while GetMessageW(&mut msg, 0, 0, 0) > 0 {
                         if msg.message == WM_HOTKEY {
+                            tracing::info!("Windows WM_HOTKEY received - triggering Function");
                             let _ = tx.send(());
                         } else if msg.message == WM_TRAYICON {
                             // Left click or double click on tray icon toggles Function
@@ -311,6 +403,7 @@ pub mod windows {
                                 || msg.lparam == 0x0205
                             /* WM_RBUTTONUP */
                             {
+                                tracing::info!("Windows system tray icon clicked - toggling Function");
                                 let _ = tx.send(());
                             }
                         }
@@ -386,6 +479,7 @@ pub mod macos {
     impl MacOsPlatformService {
         pub fn new() -> Self {
             let (hotkey_tx, _) = broadcast::channel(16);
+            set_global_hotkey_tx(hotkey_tx.clone());
             Self {
                 registered_hotkey: Arc::new(RwLock::new(None)),
                 hotkey_tx,
@@ -876,7 +970,7 @@ pub fn set_window_icon_by_title(title: &str) {
             fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
             fn LoadImageW(
                 hInst: isize,
-                name: usize,
+                name: *const u16,
                 type_: u32,
                 cx: i32,
                 cy: i32,
@@ -923,8 +1017,8 @@ pub fn set_window_icon_by_title(title: &str) {
                 }
 
                 let hmod = GetModuleHandleW(std::ptr::null());
-                let mut hicon_sm = LoadImageW(hmod, 1, IMAGE_ICON, 16, 16, LR_SHARED);
-                let mut hicon_lg = LoadImageW(hmod, 1, IMAGE_ICON, 32, 32, LR_SHARED);
+                let mut hicon_sm = LoadImageW(hmod, 1 as *const u16, IMAGE_ICON, 16, 16, LR_SHARED);
+                let mut hicon_lg = LoadImageW(hmod, 1 as *const u16, IMAGE_ICON, 32, 32, LR_SHARED);
 
                 // If embedded resource 1 was not found, load directly from filesystem icon.ico
                 if hicon_sm == 0 || hicon_lg == 0 {
@@ -937,7 +1031,7 @@ pub fn set_window_icon_by_title(title: &str) {
                         if hicon_sm == 0 {
                             hicon_sm = LoadImageW(
                                 0,
-                                icon_path_wide.as_ptr() as usize,
+                                icon_path_wide.as_ptr(),
                                 IMAGE_ICON,
                                 16,
                                 16,
@@ -947,7 +1041,7 @@ pub fn set_window_icon_by_title(title: &str) {
                         if hicon_lg == 0 {
                             hicon_lg = LoadImageW(
                                 0,
-                                icon_path_wide.as_ptr() as usize,
+                                icon_path_wide.as_ptr(),
                                 IMAGE_ICON,
                                 32,
                                 32,
@@ -1251,6 +1345,133 @@ pub fn macos_activate_app() {
                 let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
                 tracing::info!("Activated macOS application via activateIgnoringOtherApps");
             }
+        }
+    }
+}
+
+/// Setup macOS menu bar status item (top bar icon) that toggles Function when clicked.
+pub fn setup_macos_menu_bar_icon() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_allocateClassPair(
+                superclass: *mut std::ffi::c_void,
+                name: *const std::os::raw::c_char,
+                extraBytes: usize,
+            ) -> *mut std::ffi::c_void;
+            fn class_addMethod(
+                cls: *mut std::ffi::c_void,
+                name: *mut std::ffi::c_void,
+                imp: unsafe extern "C" fn(
+                    *mut std::ffi::c_void,
+                    *mut std::ffi::c_void,
+                    *mut std::ffi::c_void,
+                ),
+                types: *const std::os::raw::c_char,
+            ) -> bool;
+            fn objc_registerClassPair(cls: *mut std::ffi::c_void);
+            fn objc_msgSend(
+                receiver: *mut std::ffi::c_void,
+                op: *mut std::ffi::c_void,
+                ...
+            ) -> *mut std::ffi::c_void;
+        }
+
+        // Register FunctionStatusItemTarget class if not already registered
+        let mut target_cls = objc_getClass(b"FunctionStatusItemTarget\0".as_ptr() as _);
+        if target_cls.is_null() {
+            let ns_object = objc_getClass(b"NSObject\0".as_ptr() as _);
+            target_cls = objc_allocateClassPair(
+                ns_object,
+                b"FunctionStatusItemTarget\0".as_ptr() as _,
+                0,
+            );
+            if !target_cls.is_null() {
+                unsafe extern "C" fn on_click(
+                    _this: *mut std::ffi::c_void,
+                    _cmd: *mut std::ffi::c_void,
+                    _sender: *mut std::ffi::c_void,
+                ) {
+                    tracing::info!("Top bar (menu bar) status item clicked");
+                    trigger_global_hotkey();
+                }
+                let sel = sel_registerName(b"onStatusItemClick:\0".as_ptr() as _);
+                class_addMethod(target_cls, sel, on_click, b"v@:@\0".as_ptr() as _);
+                objc_registerClassPair(target_cls);
+            }
+        }
+
+        if target_cls.is_null() {
+            tracing::warn!("Failed to create FunctionStatusItemTarget class");
+            return;
+        }
+
+        let alloc_sel = sel_registerName(b"alloc\0".as_ptr() as _);
+        let init_sel = sel_registerName(b"init\0".as_ptr() as _);
+        let target_inst = objc_msgSend(objc_msgSend(target_cls, alloc_sel), init_sel);
+
+        let ns_status_bar = objc_getClass(b"NSStatusBar\0".as_ptr() as _);
+        if ns_status_bar.is_null() {
+            return;
+        }
+        let system_bar_sel = sel_registerName(b"systemStatusBar\0".as_ptr() as _);
+        let bar = objc_msgSend(ns_status_bar, system_bar_sel);
+        if bar.is_null() {
+            return;
+        }
+
+        let status_item_sel = sel_registerName(b"statusItemWithLength:\0".as_ptr() as _);
+        // -1.0 is NSVariableStatusItemLength
+        type MsgSendFloat = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            f64,
+        ) -> *mut std::ffi::c_void;
+        let msg_send_float: MsgSendFloat = std::mem::transmute(
+            objc_msgSend
+                as unsafe extern "C" fn(
+                    *mut std::ffi::c_void,
+                    *mut std::ffi::c_void,
+                    ...,
+                ) -> *mut std::ffi::c_void,
+        );
+        let status_item = msg_send_float(bar, status_item_sel, -1.0);
+        if status_item.is_null() {
+            tracing::warn!("Failed to create NSStatusItem on systemStatusBar");
+            return;
+        }
+
+        let button_sel = sel_registerName(b"button\0".as_ptr() as _);
+        let button = objc_msgSend(status_item, button_sel);
+        if !button.is_null() {
+            let ns_string = objc_getClass(b"NSString\0".as_ptr() as _);
+            let utf8_sel = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as _);
+            let title = objc_msgSend(
+                ns_string,
+                utf8_sel,
+                b"Function\0".as_ptr() as *const std::os::raw::c_char,
+            );
+            let set_title_sel = sel_registerName(b"setTitle:\0".as_ptr() as _);
+            let _: *mut std::ffi::c_void = objc_msgSend(button, set_title_sel, title);
+
+            let tip = objc_msgSend(
+                ns_string,
+                utf8_sel,
+                b"Function (Command+;)\0".as_ptr() as *const std::os::raw::c_char,
+            );
+            let set_tip_sel = sel_registerName(b"setToolTip:\0".as_ptr() as _);
+            let _: *mut std::ffi::c_void = objc_msgSend(button, set_tip_sel, tip);
+
+            let set_target_sel = sel_registerName(b"setTarget:\0".as_ptr() as _);
+            let _: *mut std::ffi::c_void = objc_msgSend(button, set_target_sel, target_inst);
+
+            let set_action_sel = sel_registerName(b"setAction:\0".as_ptr() as _);
+            let action_sel = sel_registerName(b"onStatusItemClick:\0".as_ptr() as _);
+            let _: *mut std::ffi::c_void = objc_msgSend(button, set_action_sel, action_sel);
+
+            tracing::info!("macOS top bar (menu bar) Function status item created successfully");
         }
     }
 }
