@@ -519,12 +519,82 @@ impl FunctionView {
         }
     }
 
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 1. If in Settings mode, go back to Command mode
+        if self.mode == FunctionMode::Settings {
+            tracing::info!("Escape: going back from Settings to Command mode");
+            self.mode = FunctionMode::Command;
+            window.resize(self.target_window_size());
+            self.play_sound_feedback(SoundEffect::Select);
+            cx.notify();
+            return;
+        }
+
+        // 2. If listening/recording voice, cancel recording and return to idle
+        if self.listening {
+            tracing::info!("Escape: canceling voice recording");
+            self.listening = false;
+            if let Some(ref capture) = self.audio_capture {
+                let _ = capture.stop_recording();
+            }
+            self.state = AgentState::Idle;
+            self.voice_error = None;
+            self.play_sound_feedback(SoundEffect::Select);
+            window.resize(self.target_window_size());
+            cx.notify();
+            return;
+        }
+
+        // 3. If text is selected, deselect it
+        if self.is_text_selected {
+            tracing::info!("Escape: deselecting input text");
+            self.is_text_selected = false;
+            self.play_sound_feedback(SoundEffect::Select);
+            cx.notify();
+            return;
+        }
+
+        // 4. If there is typed text in the input buffer, clear it to go back to clean prompt
+        if !self.input_buffer.is_empty() {
+            tracing::info!("Escape: clearing input buffer to return to clean prompt");
+            self.input_buffer.clear();
+            self.selected_index = 0;
+            self.cursor_visible = true;
+            self.play_sound_feedback(SoundEffect::Select);
+            window.resize(self.target_window_size());
+            cx.notify();
+            return;
+        }
+
+        // 5. If there is a task, result, or activity history showing, go back to fresh idle prompt
+        if self.active_task.is_some()
+            || self.latest_result.is_some()
+            || !self.activities.is_empty()
+            || self.state != AgentState::Idle
+        {
+            tracing::info!("Escape: clearing task/result/activities to return to clean idle prompt");
+            self.active_task = None;
+            self.latest_result = None;
+            self.activities.clear();
+            self.state = AgentState::Idle;
+            self.voice_error = None;
+            self.selected_index = 0;
+            self.play_sound_feedback(SoundEffect::Select);
+            window.resize(self.target_window_size());
+            cx.notify();
+            return;
+        }
+
+        // 6. Already at root idle prompt: do NOT hide the window
+        tracing::debug!("Escape pressed at root prompt - window remains open");
+    }
+
     pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss(window, cx);
+        self.go_back(window, cx);
     }
 
     pub fn cancel(&mut self, _: &CancelTask, window: &mut Window, cx: &mut Context<Self>) {
-        self.dismiss(window, cx);
+        self.go_back(window, cx);
     }
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -787,10 +857,7 @@ impl FunctionView {
         if self.mode == FunctionMode::Settings {
             match key {
                 "escape" => {
-                    self.mode = FunctionMode::Command;
-                    window.resize(self.target_window_size());
-                    self.play_sound_feedback(SoundEffect::Select);
-                    cx.notify();
+                    self.go_back(window, cx);
                     return;
                 }
                 "tab" => {
@@ -1148,12 +1215,7 @@ impl FunctionView {
                 self.toggle_expanded(&ToggleExpanded, window, cx);
             }
             "escape" => {
-                if self.is_text_selected {
-                    self.is_text_selected = false;
-                    cx.notify();
-                    return;
-                }
-                self.cancel(&CancelTask, window, cx);
+                self.go_back(window, cx);
             }
             "backspace" => {
                 if self.is_text_selected {
