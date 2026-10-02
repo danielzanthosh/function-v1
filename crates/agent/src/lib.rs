@@ -25,7 +25,7 @@ pub enum AgentError {
 }
 
 /// Agent lifecycle states observed by the UI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", content = "data")]
 pub enum AgentState {
     Idle,
@@ -33,9 +33,36 @@ pub enum AgentState {
     Processing { thought_summary: Option<String> },
     Acting { action_description: String },
     WaitingForConfirmation { action: String, details: String },
-    Completed { summary: String },
+    Completed { summary: String, new_history: Vec<ChatMessage> },
     Error { message: String },
 }
+
+impl PartialEq for AgentState {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AgentState::Idle, AgentState::Idle) => true,
+            (AgentState::Listening, AgentState::Listening) => true,
+            (
+                AgentState::Processing { thought_summary: a },
+                AgentState::Processing { thought_summary: b },
+            ) => a == b,
+            (
+                AgentState::Acting { action_description: a },
+                AgentState::Acting { action_description: b },
+            ) => a == b,
+            (
+                AgentState::WaitingForConfirmation { action: a, details: c },
+                AgentState::WaitingForConfirmation { action: b, details: d },
+            ) => a == b && c == d,
+            // Compare only the summary; history is not used for equality checks
+            (AgentState::Completed { summary: a, .. }, AgentState::Completed { summary: b, .. }) => a == b,
+            (AgentState::Error { message: a }, AgentState::Error { message: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AgentState {}
 
 /// Detailed action event emitted during agent operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +269,7 @@ Your primary role is to be a helpful conversational AI:
 
         self.update_state(AgentState::Completed {
             summary: final_result.clone(),
+            new_history: history_tail.clone(),
         });
         Ok((final_result, history_tail))
     }

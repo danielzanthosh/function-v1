@@ -220,12 +220,20 @@ impl FunctionView {
                                         status: ActivityStatus::Running,
                                     });
                                 }
-                                AgentState::Completed { summary } => {
+                                AgentState::Completed { summary, new_history } => {
                                     view.state = state_clone.clone();
                                     view.latest_result = Some(summary.clone());
-                                    for act in &mut view.activities {
-                                        act.status = ActivityStatus::Done;
+                                    // Push AI reply into the visible chat log
+                                    if !summary.is_empty() {
+                                        view.chat_display.push(ChatEntry {
+                                            is_user: false,
+                                            text: summary.clone(),
+                                        });
                                     }
+                                    // Store updated API history for next turn
+                                    view.chat_history_api = new_history.clone();
+                                    view.active_task = None;
+                                    view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
                                 }
                                 AgentState::Error { message } => {
@@ -803,61 +811,34 @@ impl FunctionView {
                 thought_summary: None,
             };
 
-            // Snapshot the API history to send into the async closure
+            // Snapshot the API history to pass into the Tokio task.
+            // Results (reply + new_history) come back via AgentState::Completed broadcast
+            // which the with_agent() subscription handles on the GPUI thread.
             let history_snapshot = self.chat_history_api.clone();
             let prompt_clone = prompt.clone();
 
-            // Spawn with access to the view handle so we can write results back
-            let task = cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let cx = cx.clone();
-                async move {
-                    match agent.execute_with_history(&prompt_clone, history_snapshot).await {
-                        Ok((reply, new_history)) => {
-                            let _ = cx.update(|cx| {
-                                this.update(cx, |view, cx| {
-                                    // Update the API history for the next turn
-                                    view.chat_history_api = new_history;
-                                    // Push the AI reply to the visible chat log
-                                    if !reply.is_empty() {
-                                        view.chat_display.push(ChatEntry {
-                                            is_user: false,
-                                            text: reply.clone(),
-                                        });
-                                        view.latest_result = Some(reply);
-                                    }
-                                    view.active_task = None;
-                                    view.activities.clear();
-                                    let target_sz = view.target_window_size();
-                                    cx.notify();
-                                    target_sz
-                                })
-                            });
-                            // Resize on the GPUI thread
-                            // (resize called in render via cx.notify → layout recalculation)
-                        }
-                        Err(e) => {
-                            let err_text = format!("Error: {}", e);
-                            let _ = cx.update(|cx| {
-                                this.update(cx, |view, cx| {
-                                    view.chat_display.push(ChatEntry {
-                                        is_user: false,
-                                        text: err_text,
-                                    });
-                                    view.active_task = None;
-                                    view.activities.clear();
-                                    view.state = AgentState::Idle;
-                                    cx.notify();
-                                })
-                            });
-                        }
-                    }
-                }
-            });
-            task.detach();
-        } else {
-            self.state = AgentState::Acting {
-                action_description: "Executing task".to_string(),
+            let task = async move {
+                // execute_with_history broadcasts Completed { summary, new_history }
+                // before returning, so the subscription picks up everything we need.
+                let _ = agent.execute_with_history(&prompt_clone, history_snapshot).await;
             };
+
+            if let Some(handle) = crate::get_runtime_handle() {
+                handle.spawn(task);
+            } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(task);
+            } else {
+                std::thread::spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        rt.block_on(task);
+                    }
+                });
+            }
+        } else {
+            self.state = AgentState::Idle;
             let no_agent_reply = "No AI provider configured. Go to Settings (Ctrl+,) to add your API key.".to_string();
             self.chat_display.push(ChatEntry {
                 is_user: false,

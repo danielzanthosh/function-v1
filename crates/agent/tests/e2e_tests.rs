@@ -33,7 +33,7 @@ async fn test_agent_state_transitions_idle_to_completed() {
     // Final broadcast should be Completed
     let s2 = rx.recv().await.unwrap();
     assert!(matches!(s2, AgentState::Completed { .. }));
-    if let AgentState::Completed { summary } = s2 {
+    if let AgentState::Completed { summary, .. } = s2 {
         assert_eq!(summary, "Done.");
     }
 }
