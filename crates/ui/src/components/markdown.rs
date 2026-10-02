@@ -194,7 +194,13 @@ pub fn format_latex(raw: &str) -> String {
 
 /// Renders a formatted Markdown + LaTeX response into styled GPUI elements.
 pub fn render_markdown(text: &str, theme: &Theme) -> Div {
-    let mut container = div().flex().flex_col().gap_2().w_full();
+    let mut container = div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .max_w(px(540.0))
+        .overflow_hidden();
 
     // Check if message is split into code blocks, math blocks, and normal paragraphs
     let lines: Vec<&str> = text.lines().collect();
@@ -222,6 +228,9 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                 div()
                     .flex()
                     .flex_col()
+                    .w_full()
+                    .max_w(px(540.0))
+                    .overflow_hidden()
                     .rounded_lg()
                     .bg(theme.surface_elevated)
                     .border_1()
@@ -251,6 +260,7 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                             .text_xs()
                             .line_height(px(18.0))
                             .text_color(theme.text_primary)
+                            .overflow_hidden()
                             .child(code_content),
                     ),
             );
@@ -449,9 +459,26 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
     container
 }
 
+fn append_text_words(mut row: Div, text: &str) -> Div {
+    let mut words = text.split(' ').peekable();
+    while let Some(word) = words.next() {
+        if !word.is_empty() {
+            row = row.child(div().child(word.to_string()));
+        }
+    }
+    row
+}
+
 /// Renders a single line of text with inline markdown styles (bold, code, photo, LaTeX math).
 pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
-    let mut row = div().flex().flex_wrap().items_center().gap_1();
+    let mut row = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_1()
+        .w_full()
+        .max_w(px(540.0))
+        .overflow_hidden();
 
     // Check if text has LaTeX math, code, or photo tags
     let mut remaining = text;
@@ -476,7 +503,7 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
         match next_delim {
             Some((pos, "code")) => {
                 if pos > 0 {
-                    row = row.child(div().child(remaining[..pos].to_string()));
+                    row = append_text_words(row, &remaining[..pos]);
                 }
                 let rest = &remaining[pos + 1..];
                 if let Some(end) = rest.find('`') {
@@ -495,13 +522,13 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                     );
                     remaining = &rest[end + 1..];
                 } else {
-                    row = row.child(div().child(remaining.to_string()));
+                    row = append_text_words(row, remaining);
                     break;
                 }
             }
             Some((pos, "math")) => {
                 if pos > 0 {
-                    row = row.child(div().child(remaining[..pos].to_string()));
+                    row = append_text_words(row, &remaining[..pos]);
                 }
                 let rest = &remaining[pos + 1..];
                 if let Some(end) = rest.find('$') {
@@ -519,13 +546,13 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                     );
                     remaining = &rest[end + 1..];
                 } else {
-                    row = row.child(div().child(remaining.to_string()));
+                    row = append_text_words(row, remaining);
                     break;
                 }
             }
             Some((pos, "bold")) => {
                 if pos > 0 {
-                    row = row.child(div().child(remaining[..pos].to_string()));
+                    row = append_text_words(row, &remaining[..pos]);
                 }
                 let rest = &remaining[pos + 2..];
                 if let Some(end) = rest.find("**") {
@@ -537,13 +564,13 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                     );
                     remaining = &rest[end + 2..];
                 } else {
-                    row = row.child(div().child(remaining.to_string()));
+                    row = append_text_words(row, remaining);
                     break;
                 }
             }
             Some((pos, "photo")) => {
                 if pos > 0 {
-                    row = row.child(div().child(remaining[..pos].to_string()));
+                    row = append_text_words(row, &remaining[..pos]);
                 }
                 let rest = &remaining[pos..];
                 if let Some(end) = rest.find(']') {
@@ -566,12 +593,12 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                     );
                     remaining = &rest[end + 1..];
                 } else {
-                    row = row.child(div().child(remaining.to_string()));
+                    row = append_text_words(row, remaining);
                     break;
                 }
             }
             _ => {
-                row = row.child(div().child(remaining.to_string()));
+                row = append_text_words(row, remaining);
                 break;
             }
         }

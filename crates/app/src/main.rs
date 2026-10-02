@@ -25,7 +25,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,function=debug".into()),
+                .unwrap_or_else(|_| "info,function=debug,gpui::platform::windows::directx_devices=off".into()),
         )
         .init();
 
@@ -184,7 +184,7 @@ fn main() {
                 {
                     Some(TitlebarOptions {
                         title: Some("Function".into()),
-                        appears_transparent: true,
+                        appears_transparent: false,
                         traffic_light_position: None,
                     })
                 }
@@ -258,8 +258,8 @@ fn main() {
                         tracing::info!("Activating Function window");
                         let update_res = cx.update(|cx| {
                             let res = handle_clone.update(cx, |view, window, cx| {
-                                tracing::info!("Calling view.toggle_visibility(window, cx)");
-                                view.toggle_visibility(window, cx);
+                                tracing::info!("Calling view.toggle_visibility_from_hotkey(window, cx)");
+                                view.toggle_visibility_from_hotkey(window, cx);
                             });
                             if let Err(e) = res {
                                 tracing::error!(error = ?e, "Failed to update FunctionView from window handle");

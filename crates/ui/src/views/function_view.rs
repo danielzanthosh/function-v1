@@ -37,8 +37,8 @@ use function_platform::{
 use function_providers::ChatMessage;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba,
-    ScrollHandle, Size, Task, Timer, WeakEntity, Window,
+    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, Render, Rgba, ScrollHandle, Size, Task, Timer, WeakEntity, Window,
 };
 /// Checks if a key string represents a named control key rather than text to type.
 fn is_named_control_key(k: &str) -> bool {
@@ -144,6 +144,8 @@ pub struct FunctionView {
     pub conversation_selected_index: usize,
     pub conversation_status_message: Option<String>,
     pub chat_scroll_handle: ScrollHandle,
+    pub settings_scroll_handle: ScrollHandle,
+    pub cursor_offset: usize,
 }
 
 pub type AssistantView = FunctionView;
@@ -190,6 +192,7 @@ impl FunctionView {
             mic_configured,
             mic_available,
             input_buffer: String::new(),
+            cursor_offset: 0,
             active_task: None,
             state: AgentState::Idle,
             activities: Vec::new(),
@@ -224,6 +227,7 @@ impl FunctionView {
             conversation_selected_index: 0,
             conversation_status_message: None,
             chat_scroll_handle: ScrollHandle::new(),
+            settings_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -739,7 +743,114 @@ impl FunctionView {
         }
     }
 
+    pub fn set_voice_error(&mut self, err: String, cx: &mut Context<Self>) {
+        self.voice_error = Some(err);
+        self.play_sound_feedback(SoundEffect::Error);
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                Timer::after(Duration::from_secs(6)).await;
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |view, cx| {
+                        if view.voice_error.is_some() {
+                            view.voice_error = None;
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn save_settings(&mut self, cx: &mut Context<Self>) {
+        self.config.ai_provider.api_key = if self.settings_api_key.trim().is_empty() {
+            None
+        } else {
+            Some(self.settings_api_key.trim().to_string())
+        };
+        self.config.ai_provider.model = self.settings_model.trim().to_string();
+        self.config.ai_provider.base_url = self.settings_base_url.trim().to_string();
+        self.config.sound_enabled = self.settings_sound_enabled;
+        self.theme = Theme::from_config(&self.config);
+
+        match self.config.save() {
+            Ok(_) => {
+                self.settings_status_message =
+                    Some("Preferences saved to ~/.function/config.json".into());
+                self.play_sound_feedback(SoundEffect::Success);
+            }
+            Err(e) => {
+                self.settings_status_message = Some(format!("Save error: {}", e));
+                self.play_sound_feedback(SoundEffect::Error);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn cycle_theme_style(&mut self, cx: &mut Context<Self>) {
+        self.config.theme_style = match self.config.theme_style {
+            function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
+            function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
+            function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
+            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::CarbonDark,
+        };
+        self.theme = Theme::from_config(&self.config);
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    pub fn cycle_accent_color(&mut self, cx: &mut Context<Self>) {
+        self.config.accent_color = match self.config.accent_color {
+            function_config::AccentColor::White => function_config::AccentColor::Cyan,
+            function_config::AccentColor::Cyan => function_config::AccentColor::Emerald,
+            function_config::AccentColor::Emerald => function_config::AccentColor::Violet,
+            function_config::AccentColor::Violet => function_config::AccentColor::Amber,
+            function_config::AccentColor::Amber => function_config::AccentColor::White,
+        };
+        self.theme = Theme::from_config(&self.config);
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    pub fn toggle_window_position_mode(&mut self, cx: &mut Context<Self>) {
+        self.config.window_position = match self.config.window_position {
+            function_config::WindowPositionMode::Center => {
+                function_config::WindowPositionMode::UpperThird
+            }
+            function_config::WindowPositionMode::UpperThird => {
+                function_config::WindowPositionMode::Center
+            }
+        };
+        let sz = self.target_window_size();
+        function_platform::center_window_by_title(
+            "Function",
+            f32::from(sz.width) as i32,
+            f32::from(sz.height) as i32,
+            self.config.window_position == function_config::WindowPositionMode::UpperThird,
+        );
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    pub fn toggle_sound_setting(&mut self, cx: &mut Context<Self>) {
+        self.settings_sound_enabled = !self.settings_sound_enabled;
+        self.config.sound_enabled = self.settings_sound_enabled;
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 0. If voice error message is active, dismiss it
+        if self.voice_error.is_some() {
+            tracing::info!("Escape: dismissing voice error message");
+            self.voice_error = None;
+            self.play_sound_feedback(SoundEffect::Select);
+            cx.notify();
+            return;
+        }
+
         // 1. If in Settings or Conversations mode, go back to Command mode
         if self.mode == FunctionMode::Settings || self.mode == FunctionMode::Conversations {
             tracing::info!("Escape: going back to Command mode");
@@ -775,21 +886,29 @@ impl FunctionView {
             return;
         }
 
-        // 4. If there is typed text in the input buffer, clear it to go back to clean prompt
-        if !self.input_buffer.is_empty() {
-            tracing::info!("Escape: clearing input buffer to return to clean prompt");
-            self.input_buffer.clear();
+        // 4. If there is active chat history, task, or result: return to home state (preserving input)
+        if !self.chat_display.is_empty()
+            || self.latest_result.is_some()
+            || self.active_task.is_some()
+        {
+            tracing::info!("Escape: returning to home state from active chat/results");
+            self.chat_display.clear();
+            self.chat_history_api.clear();
+            self.active_conversation_id = None;
+            self.latest_result = None;
+            self.active_task = None;
+            self.activities.clear();
+            self.state = AgentState::Idle;
             self.selected_index = 0;
-            self.cursor_visible = true;
             self.play_sound_feedback(SoundEffect::Select);
             window.resize(self.target_window_size());
             cx.notify();
             return;
         }
 
-        // 5. At the root prompt or with active chat/results: return to home like first launch
-        tracing::info!("Escape: returning to home state like first launch");
-        self.go_home(window, cx);
+        // 5. At the root prompt: hide/dismiss the function window, keeping any typed text preserved temporarily!
+        tracing::info!("Escape: at root prompt, dismissing function window and preserving input text");
+        self.dismiss(window, cx);
     }
 
     pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
@@ -821,7 +940,8 @@ impl FunctionView {
             "Summoning Function window (showing and focusing)"
         );
         tracing::info!("Activating Function window");
-        self.input_buffer.clear();
+        // Preserve any previously typed input text so the user's thought is never lost
+        self.cursor_offset = self.input_buffer.chars().count();
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
         self.play_sound_feedback(SoundEffect::Select);
@@ -851,6 +971,13 @@ impl FunctionView {
         } else {
             self.summon(window, cx);
         }
+    }
+
+    pub fn toggle_visibility_from_hotkey(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config.sound_enabled {
+            function_platform::play_sound(SoundEffect::HotkeyToggle);
+        }
+        self.toggle_visibility(window, cx);
     }
 
     pub fn clear_input(&mut self, _: &ClearInput, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1360,15 +1487,19 @@ impl FunctionView {
         }
 
         if key == "c" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
-            let text_to_copy = if !self.input_buffer.is_empty() {
-                self.input_buffer.as_str()
+            let text_to_copy = if self.is_text_selected && !self.input_buffer.is_empty() {
+                self.input_buffer.clone()
             } else if let Some(ref res) = self.latest_result {
-                res.as_str()
+                res.clone()
+            } else if let Some(last_msg) = self.chat_display.iter().rev().find(|m| !m.is_user) {
+                last_msg.text.clone()
+            } else if !self.input_buffer.is_empty() {
+                self.input_buffer.clone()
             } else {
-                ""
+                String::new()
             };
             if !text_to_copy.is_empty() {
-                copy_to_clipboard(text_to_copy);
+                copy_to_clipboard(&text_to_copy);
                 self.play_sound_feedback(SoundEffect::Select);
                 cx.notify();
             }
@@ -1392,10 +1523,14 @@ impl FunctionView {
             if let Some(img_path) = read_clipboard_image() {
                 if self.is_text_selected {
                     self.input_buffer.clear();
+                    self.cursor_offset = 0;
                     self.is_text_selected = false;
                 }
                 let img_str = format!("[Photo: {}] ", img_path.display());
-                self.input_buffer.push_str(&img_str);
+                let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
+                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                self.input_buffer.insert_str(byte_pos, &img_str);
+                self.cursor_offset = insert_pos + img_str.chars().count();
                 self.selected_index = 0;
                 self.cursor_visible = true;
                 let target_sz = self.target_window_size();
@@ -1413,11 +1548,12 @@ impl FunctionView {
             {
                 if self.is_text_selected {
                     self.input_buffer.clear();
+                    self.cursor_offset = 0;
                     self.is_text_selected = false;
                 }
                 let trimmed = text.trim();
                 let path = std::path::Path::new(trimmed);
-                if path.exists() {
+                let text_to_insert = if path.exists() {
                     let ext = path
                         .extension()
                         .and_then(|e| e.to_str())
@@ -1427,14 +1563,17 @@ impl FunctionView {
                         ext.as_str(),
                         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
                     ) {
-                        self.input_buffer
-                            .push_str(&format!("[Photo: {}] ", path.display()));
+                        format!("[Photo: {}] ", path.display())
                     } else {
-                        self.input_buffer.push_str(&text);
+                        text
                     }
                 } else {
-                    self.input_buffer.push_str(&text);
-                }
+                    text
+                };
+                let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
+                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                self.input_buffer.insert_str(byte_pos, &text_to_insert);
+                self.cursor_offset = insert_pos + text_to_insert.chars().count();
                 self.selected_index = 0;
                 self.cursor_visible = true;
                 let target_sz = self.target_window_size();
@@ -1489,11 +1628,34 @@ impl FunctionView {
         }
 
         match key {
-            "left" | "right" => {
-                if self.is_text_selected {
-                    self.is_text_selected = false;
+            "left" => {
+                self.is_text_selected = false;
+                if self.cursor_offset > 0 {
+                    self.cursor_offset -= 1;
+                    self.cursor_visible = true;
                     cx.notify();
                 }
+            }
+            "right" => {
+                self.is_text_selected = false;
+                let char_count = self.input_buffer.chars().count();
+                if self.cursor_offset < char_count {
+                    self.cursor_offset += 1;
+                    self.cursor_visible = true;
+                    cx.notify();
+                }
+            }
+            "home" => {
+                self.is_text_selected = false;
+                self.cursor_offset = 0;
+                self.cursor_visible = true;
+                cx.notify();
+            }
+            "end" => {
+                self.is_text_selected = false;
+                self.cursor_offset = self.input_buffer.chars().count();
+                self.cursor_visible = true;
+                cx.notify();
             }
             "pageup" => {
                 let current = self.chat_scroll_handle.top_item();
@@ -1539,6 +1701,7 @@ impl FunctionView {
                     match cmd {
                         LocalCommand::Configure => {
                             self.input_buffer.clear();
+                            self.cursor_offset = 0;
                             self.selected_index = 0;
                             self.mode = FunctionMode::Settings;
                             self.play_sound_feedback(SoundEffect::Select);
@@ -1574,6 +1737,7 @@ impl FunctionView {
             "backspace" => {
                 if self.is_text_selected {
                     self.input_buffer.clear();
+                    self.cursor_offset = 0;
                     self.is_text_selected = false;
                     self.selected_index = 0;
                     self.cursor_visible = true;
@@ -1584,21 +1748,59 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
-                self.input_buffer.pop();
-                self.selected_index = 0;
-                self.cursor_visible = true;
-                let target_sz = self.target_window_size();
-                if window.bounds().size != target_sz {
-                    window.resize(target_sz);
+                if self.cursor_offset > 0 {
+                    let char_idx = self.cursor_offset - 1;
+                    if let Some((byte_pos, c)) = self.input_buffer.char_indices().nth(char_idx) {
+                        self.input_buffer.drain(byte_pos..byte_pos + c.len_utf8());
+                        self.cursor_offset -= 1;
+                    }
+                    self.selected_index = 0;
+                    self.cursor_visible = true;
+                    let target_sz = self.target_window_size();
+                    if window.bounds().size != target_sz {
+                        window.resize(target_sz);
+                    }
+                    cx.notify();
                 }
-                cx.notify();
+            }
+            "delete" => {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.cursor_offset = 0;
+                    self.is_text_selected = false;
+                    self.selected_index = 0;
+                    self.cursor_visible = true;
+                    let target_sz = self.target_window_size();
+                    if window.bounds().size != target_sz {
+                        window.resize(target_sz);
+                    }
+                    cx.notify();
+                    return;
+                }
+                let char_count = self.input_buffer.chars().count();
+                if self.cursor_offset < char_count {
+                    if let Some((byte_pos, c)) = self.input_buffer.char_indices().nth(self.cursor_offset) {
+                        self.input_buffer.drain(byte_pos..byte_pos + c.len_utf8());
+                    }
+                    self.selected_index = 0;
+                    self.cursor_visible = true;
+                    let target_sz = self.target_window_size();
+                    if window.bounds().size != target_sz {
+                        window.resize(target_sz);
+                    }
+                    cx.notify();
+                }
             }
             "space" => {
                 if self.is_text_selected {
                     self.input_buffer.clear();
+                    self.cursor_offset = 0;
                     self.is_text_selected = false;
                 }
-                self.input_buffer.push(' ');
+                let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
+                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                self.input_buffer.insert(byte_pos, ' ');
+                self.cursor_offset = insert_pos + 1;
                 self.selected_index = 0;
                 self.cursor_visible = true;
                 let target_sz = self.target_window_size();
@@ -1610,14 +1812,19 @@ impl FunctionView {
             ch if !is_named_control_key(ch) && !modifiers.control && !modifiers.alt => {
                 if self.is_text_selected {
                     self.input_buffer.clear();
+                    self.cursor_offset = 0;
                     self.is_text_selected = false;
                 }
+                let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
+                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
                 if ch.chars().count() == 1 {
                     let c = ch.chars().next().unwrap();
                     let typed = if modifiers.shift { shift_char(c) } else { c };
-                    self.input_buffer.push(typed);
+                    self.input_buffer.insert(byte_pos, typed);
+                    self.cursor_offset = insert_pos + 1;
                 } else {
-                    self.input_buffer.push_str(ch);
+                    self.input_buffer.insert_str(byte_pos, ch);
+                    self.cursor_offset = insert_pos + ch.chars().count();
                 }
                 self.selected_index = 0;
                 self.cursor_visible = true;
@@ -1650,20 +1857,7 @@ impl Render for FunctionView {
                 }))
                 .w_full()
                 .h_full()
-                .child(render_settings_view(
-                    &self.settings_api_key,
-                    &self.settings_model,
-                    &self.settings_base_url,
-                    self.settings_sound_enabled,
-                    self.config.theme_style,
-                    self.config.accent_color,
-                    self.config.window_position,
-                    self.settings_show_key,
-                    self.settings_focused_field,
-                    self.cursor_visible,
-                    self.settings_status_message.as_deref(),
-                    &theme,
-                ))
+                .child(render_settings_view(self, cx))
                 .into_any_element();
         }
 
@@ -1818,19 +2012,64 @@ impl Render for FunctionView {
                                     )
                                     .into_any_element()
                             } else {
-                                // Assistant reply — left-aligned with brand mark
+                                // Assistant reply — left-aligned with brand mark, title and 1-click Copy button
+                                let reply_text = entry.text.clone();
                                 div()
                                     .flex()
-                                    .items_start()
-                                    .gap(px(8.0))
+                                    .flex_col()
+                                    .gap_1()
+                                    .w_full()
+                                    .max_w(px(580.0))
+                                    .overflow_hidden()
                                     .child(
                                         div()
-                                            .mt(px(2.0))
-                                            .child(render_brand_mark(16.0)),
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .px_1()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(render_brand_mark(14.0))
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                            .text_color(theme.accent_primary)
+                                                            .child("Function"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .cursor_pointer()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .px_2()
+                                                    .py_0p5()
+                                                    .rounded_md()
+                                                    .bg(theme.surface_input)
+                                                    .border_1()
+                                                    .border_color(theme.border_subtle)
+                                                    .hover(|s| s.bg(theme.surface_active))
+                                                    .text_xs()
+                                                    .text_color(theme.text_secondary)
+                                                    .child("⎘ Copy")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            copy_to_clipboard(&reply_text);
+                                                            this.play_sound_feedback(SoundEffect::Select);
+                                                            cx.notify();
+                                                        }),
+                                                    ),
+                                            ),
                                     )
                                     .child(
                                         div()
-                                            .flex_1()
+                                            .w_full()
                                             .px(px(4.0))
                                             .py(px(2.0))
                                             .child(render_markdown(&entry.text, &theme)),
@@ -1951,13 +2190,43 @@ impl Render for FunctionView {
                             .cursor_text()
                             .on_mouse_down(
                                 gpui::MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
+                                cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                     this.focus_handle.focus(window);
                                     this.is_text_selected = false;
+                                    let char_count = this.input_buffer.chars().count();
+                                    if char_count == 0 {
+                                        this.cursor_offset = 0;
+                                    } else {
+                                        // Padding px_6 is 24px
+                                        let click_x = f32::from(event.position.x) - 24.0;
+                                        if click_x <= 0.0 {
+                                            this.cursor_offset = 0;
+                                        } else {
+                                            // Average advance for text_lg is approx 10.2px
+                                            let approx_idx = (click_x / 10.2).round() as usize;
+                                            this.cursor_offset = approx_idx.min(char_count);
+                                        }
+                                    }
+                                    this.cursor_visible = true;
                                     cx.notify();
                                 }),
                             )
                             .child(if has_query {
+                                let total_chars = self.input_buffer.chars().count();
+                                let cursor_pos = self.cursor_offset.min(total_chars);
+                                let (before_cursor, after_cursor) = {
+                                    let mut before = String::new();
+                                    let mut after = String::new();
+                                    for (i, c) in self.input_buffer.chars().enumerate() {
+                                        if i < cursor_pos {
+                                            before.push(c);
+                                        } else {
+                                            after.push(c);
+                                        }
+                                    }
+                                    (before, after)
+                                };
+
                                 div()
                                     .flex()
                                     .items_center()
@@ -1979,18 +2248,32 @@ impl Render for FunctionView {
                                             )
                                     } else {
                                         div()
-                                            .text_lg()
-                                            .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_primary)
-                                            .child(self.input_buffer.clone())
+                                            .flex()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_lg()
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_primary)
+                                                    .child(before_cursor),
+                                            )
+                                            .child(
+                                                div().w(px(2.0)).h(px(20.0)).bg(
+                                                    if self.cursor_visible {
+                                                        theme.text_primary
+                                                    } else {
+                                                        rgba(0x00000000)
+                                                    },
+                                                ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_lg()
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_primary)
+                                                    .child(after_cursor),
+                                            )
                                     })
-                                    .child(div().w(px(2.0)).h(px(20.0)).bg(
-                                        if self.cursor_visible && !self.is_text_selected {
-                                            theme.text_primary
-                                        } else {
-                                            rgba(0x00000000)
-                                        },
-                                    ))
                             } else {
                                 div()
                                     .flex()

@@ -1312,6 +1312,63 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS,
                     );
                 }
+
+                // Eliminate Windows 11 DWM rectangular ghost border and unwanted frame shadows
+                #[repr(C)]
+                #[allow(non_snake_case)]
+                struct Margins {
+                    cxLeftWidth: i32,
+                    cxRightWidth: i32,
+                    cyTopHeight: i32,
+                    cyBottomHeight: i32,
+                }
+                extern "system" {
+                    fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
+                    fn GetProcAddress(hModule: isize, lpProcName: *const u8) -> *const ();
+                }
+                let dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
+                if dwm != 0 {
+                    type FnDwmSetWindowAttribute = unsafe extern "system" fn(
+                        isize,
+                        u32,
+                        *const std::ffi::c_void,
+                        u32,
+                    ) -> i32;
+                    type FnDwmExtendFrame = unsafe extern "system" fn(isize, *const Margins) -> i32;
+
+                    let p_set = GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr());
+                    if !p_set.is_null() {
+                        let dwm_set: FnDwmSetWindowAttribute = std::mem::transmute(p_set);
+                        // DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_DONOTROUND = 1 (removes outer rectangular rounded halo)
+                        let corner_pref: u32 = 1;
+                        let _ = dwm_set(
+                            hwnd,
+                            33,
+                            &corner_pref as *const u32 as *const std::ffi::c_void,
+                            4,
+                        );
+                        // DWMWA_BORDER_COLOR = 34, DWMWA_COLOR_NONE = 0xFFFFFFFE (removes DWM outer frame border)
+                        let border_color: u32 = 0xFFFFFFFE;
+                        let _ = dwm_set(
+                            hwnd,
+                            34,
+                            &border_color as *const u32 as *const std::ffi::c_void,
+                            4,
+                        );
+                    }
+
+                    let p_ext = GetProcAddress(dwm, b"DwmExtendFrameIntoClientArea\0".as_ptr());
+                    if !p_ext.is_null() {
+                        let dwm_ext: FnDwmExtendFrame = std::mem::transmute(p_ext);
+                        let m = Margins {
+                            cxLeftWidth: -1,
+                            cxRightWidth: -1,
+                            cyTopHeight: -1,
+                            cyBottomHeight: -1,
+                        };
+                        let _ = dwm_ext(hwnd, &m);
+                    }
+                }
             }
         }
     }
@@ -2135,6 +2192,8 @@ pub enum SoundEffect {
     Success,
     /// Error or warning tone
     Error,
+    /// Tactile mechanical keyboard switch press / click (played strictly when toggling via keybind)
+    HotkeyToggle,
 }
 
 /// Play native system audio feedback without blocking the UI thread.
@@ -2148,6 +2207,11 @@ pub fn play_sound(effect: SoundEffect) {
             }
             unsafe {
                 match effect {
+                    SoundEffect::HotkeyToggle => {
+                        // Crisp high-frequency tactile mechanical switch click
+                        let _ = Beep(2400, 10);
+                        let _ = Beep(1300, 6);
+                    }
                     SoundEffect::Navigate => {
                         let _ = Beep(1350, 10);
                     }
@@ -2167,7 +2231,26 @@ pub fn play_sound(effect: SoundEffect) {
             }
         });
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn AudioServicesPlaySystemSound(inSystemSoundID: u32);
+        }
+        match effect {
+            SoundEffect::HotkeyToggle => unsafe {
+                // 1104 is the native tactile Apple keyboard click sound
+                AudioServicesPlaySystemSound(1104);
+            },
+            SoundEffect::Success => unsafe {
+                AudioServicesPlaySystemSound(1001);
+            },
+            SoundEffect::Error => unsafe {
+                AudioServicesPlaySystemSound(1053);
+            },
+            _ => {}
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = effect;
     }

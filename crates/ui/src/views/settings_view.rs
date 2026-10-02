@@ -7,27 +7,19 @@
 //! - Window Positioning (Center, Upper-Third)
 //! - Audio Feedback (Sound ON / Muted)
 //! - Persistent saving to `~/.function/config.json`
+//! - Interactive mouse click triggers and scrollable content area
 
 use crate::components::render_logo;
-use crate::theme::Theme;
+use crate::views::function_view::FunctionView;
 use function_config::{AccentColor, ThemeStyle, WindowPositionMode};
 use gpui::prelude::*;
-use gpui::{div, px, rgba, IntoElement, Rgba};
+use gpui::{div, px, rgba, Context, IntoElement, MouseButton, Rgba};
 
 pub fn render_settings_view(
-    api_key: &str,
-    model: &str,
-    base_url: &str,
-    sound_enabled: bool,
-    theme_style: ThemeStyle,
-    accent_color: AccentColor,
-    window_position: WindowPositionMode,
-    show_key: bool,
-    focused_field: usize,
-    cursor_visible: bool,
-    status_message: Option<&str>,
-    theme: &Theme,
+    view: &FunctionView,
+    cx: &mut Context<FunctionView>,
 ) -> impl IntoElement {
+    let theme = &view.theme;
     let bg_surface = theme.surface_elevated;
     let border_color_val = theme.border_subtle;
     let card_bg = theme.surface_input;
@@ -36,6 +28,18 @@ pub fn render_settings_view(
     let text_secondary = theme.text_secondary;
     let text_primary = theme.text_primary;
     let accent_col = theme.accent_primary;
+
+    let api_key = &view.settings_api_key;
+    let model = &view.settings_model;
+    let base_url = &view.settings_base_url;
+    let sound_enabled = view.settings_sound_enabled;
+    let theme_style = view.config.theme_style;
+    let accent_color = view.config.accent_color;
+    let window_position = view.config.window_position;
+    let show_key = view.settings_show_key;
+    let focused_field = view.settings_focused_field;
+    let cursor_visible = view.cursor_visible;
+    let status_message = view.settings_status_message.as_deref();
 
     // Display string for API key
     let display_api_key = if api_key.is_empty() {
@@ -64,10 +68,10 @@ pub fn render_settings_view(
         .w_full()
         .h_full()
         .bg(Rgba {
-            a: 0.95,
+            a: 0.98,
             ..bg_surface
         })
-        .rounded_2xl() // Curved frameless window
+        .rounded_2xl()
         .shadow_xl()
         .overflow_hidden()
         // ==========================================
@@ -110,28 +114,33 @@ pub fn render_settings_view(
                 )
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .px_2()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(theme.surface_base)
-                                .border_1()
-                                .border_color(card_border)
-                                .text_xs()
-                                .text_color(text_muted)
-                                .child("Esc to return"),
+                        .cursor_pointer()
+                        .px_2p5()
+                        .py_1()
+                        .rounded_md()
+                        .bg(theme.surface_base)
+                        .border_1()
+                        .border_color(card_border)
+                        .hover(|s| s.bg(theme.surface_active))
+                        .text_xs()
+                        .text_color(text_secondary)
+                        .child("✕ Close (Esc)")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.go_back(window, cx);
+                            }),
                         ),
                 ),
         )
         // ==========================================
-        // Settings Fields
+        // Scrollable Settings Fields
         // ==========================================
         .child(
             div()
+                .id("settings_scroll_area")
+                .track_scroll(&view.settings_scroll_handle)
+                .overflow_y_scroll()
                 .flex()
                 .flex_col()
                 .flex_1()
@@ -157,22 +166,35 @@ pub fn render_settings_view(
                                         } else {
                                             text_secondary
                                         })
-                                        .child("AI PROVIDER API KEY (Tab to switch field, Cmd/Ctrl+V to paste)"),
+                                        .child("AI PROVIDER API KEY"),
                                 )
                                 .child(
                                     div()
+                                        .cursor_pointer()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .hover(|s| s.bg(theme.surface_active))
                                         .text_xs()
                                         .text_color(if show_key { accent_col } else { text_muted })
-                                        .child(if show_key { "[Ctrl+H: Masked]" } else { "[Ctrl+H: Revealed]" }),
+                                        .child(if show_key { "👁 Revealed" } else { "👁‍🗨 Masked" })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.settings_show_key = !this.settings_show_key;
+                                                cx.notify();
+                                            }),
+                                        ),
                                 ),
                         )
                         .child(
                             div()
+                                .cursor_text()
                                 .flex()
                                 .items_center()
                                 .justify_between()
                                 .px_3()
-                                .py_1p5()
+                                .py_2()
                                 .rounded_md()
                                 .bg(card_bg)
                                 .border_1()
@@ -181,6 +203,13 @@ pub fn render_settings_view(
                                 } else {
                                     card_border
                                 })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.settings_focused_field = 0;
+                                        cx.notify();
+                                    }),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -230,10 +259,11 @@ pub fn render_settings_view(
                         )
                         .child(
                             div()
+                                .cursor_text()
                                 .flex()
                                 .items_center()
                                 .px_3()
-                                .py_1p5()
+                                .py_2()
                                 .rounded_md()
                                 .bg(card_bg)
                                 .border_1()
@@ -242,24 +272,37 @@ pub fn render_settings_view(
                                 } else {
                                     card_border
                                 })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.settings_focused_field = 1;
+                                        cx.notify();
+                                    }),
+                                )
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .text_color(text_primary)
-                                        .child(display_model),
-                                )
-                                .child(if focused_field == 1 {
-                                    div()
-                                        .w(px(2.0))
-                                        .h(px(14.0))
-                                        .bg(if cursor_visible {
-                                            accent_col
+                                        .flex()
+                                        .items_center()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(text_primary)
+                                                .child(display_model),
+                                        )
+                                        .child(if focused_field == 1 {
+                                            div()
+                                                .w(px(2.0))
+                                                .h(px(14.0))
+                                                .bg(if cursor_visible {
+                                                    accent_col
+                                                } else {
+                                                    rgba(0x00000000)
+                                                })
                                         } else {
-                                            rgba(0x00000000)
-                                        })
-                                } else {
-                                    div()
-                                }),
+                                            div()
+                                        }),
+                                ),
                         ),
                 )
                 // Field 2: Base URL
@@ -281,10 +324,11 @@ pub fn render_settings_view(
                         )
                         .child(
                             div()
+                                .cursor_text()
                                 .flex()
                                 .items_center()
                                 .px_3()
-                                .py_1p5()
+                                .py_2()
                                 .rounded_md()
                                 .bg(card_bg)
                                 .border_1()
@@ -293,24 +337,37 @@ pub fn render_settings_view(
                                 } else {
                                     card_border
                                 })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.settings_focused_field = 2;
+                                        cx.notify();
+                                    }),
+                                )
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .text_color(text_primary)
-                                        .child(display_base_url),
-                                )
-                                .child(if focused_field == 2 {
-                                    div()
-                                        .w(px(2.0))
-                                        .h(px(14.0))
-                                        .bg(if cursor_visible {
-                                            accent_col
+                                        .flex()
+                                        .items_center()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(text_primary)
+                                                .child(display_base_url),
+                                        )
+                                        .child(if focused_field == 2 {
+                                            div()
+                                                .w(px(2.0))
+                                                .h(px(14.0))
+                                                .bg(if cursor_visible {
+                                                    accent_col
+                                                } else {
+                                                    rgba(0x00000000)
+                                                })
                                         } else {
-                                            rgba(0x00000000)
-                                        })
-                                } else {
-                                    div()
-                                }),
+                                            div()
+                                        }),
+                                ),
                         ),
                 )
                 // Customization Row: Theme Style & Accent Color
@@ -319,7 +376,7 @@ pub fn render_settings_view(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .p_2p5()
+                        .p_3()
                         .rounded_md()
                         .bg(card_bg)
                         .border_1()
@@ -339,7 +396,7 @@ pub fn render_settings_view(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("Ctrl+T: Cycle theme | Ctrl+A: Cycle accent"),
+                                        .child("Click badge to cycle appearance"),
                                 ),
                         )
                         .child(
@@ -349,38 +406,54 @@ pub fn render_settings_view(
                                 .gap_2()
                                 .child(
                                     div()
-                                        .px_2()
+                                        .cursor_pointer()
+                                        .px_2p5()
                                         .py_1()
-                                        .rounded_sm()
+                                        .rounded_md()
                                         .bg(theme.surface_base)
                                         .border_1()
                                         .border_color(card_border)
+                                        .hover(|s| s.border_color(accent_col))
                                         .text_xs()
                                         .text_color(text_primary)
                                         .child(match theme_style {
-                                            ThemeStyle::CarbonDark => "Carbon Dark (Brand)",
-                                            ThemeStyle::ObsidianOled => "Obsidian OLED",
-                                            ThemeStyle::SlateMidnight => "Slate Midnight",
-                                            ThemeStyle::StudioLight => "Studio Light",
-                                        }),
+                                            ThemeStyle::CarbonDark => "🎨 Carbon Dark",
+                                            ThemeStyle::ObsidianOled => "🎨 Obsidian OLED",
+                                            ThemeStyle::SlateMidnight => "🎨 Slate Midnight",
+                                            ThemeStyle::StudioLight => "🎨 Studio Light",
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.cycle_theme_style(cx);
+                                            }),
+                                        ),
                                 )
                                 .child(
                                     div()
-                                        .px_2()
+                                        .cursor_pointer()
+                                        .px_2p5()
                                         .py_1()
-                                        .rounded_sm()
+                                        .rounded_md()
                                         .bg(theme.surface_base)
                                         .border_1()
                                         .border_color(accent_col)
+                                        .hover(|s| s.bg(theme.surface_active))
                                         .text_xs()
                                         .text_color(accent_col)
                                         .child(match accent_color {
-                                            AccentColor::White => "White (Brand)",
-                                            AccentColor::Cyan => "Cyan",
-                                            AccentColor::Emerald => "Emerald",
-                                            AccentColor::Violet => "Violet",
-                                            AccentColor::Amber => "Amber",
-                                        }),
+                                            AccentColor::White => "✨ White",
+                                            AccentColor::Cyan => "✨ Cyan",
+                                            AccentColor::Emerald => "✨ Emerald",
+                                            AccentColor::Violet => "✨ Violet",
+                                            AccentColor::Amber => "✨ Amber",
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.cycle_accent_color(cx);
+                                            }),
+                                        ),
                                 ),
                         ),
                 )
@@ -390,7 +463,7 @@ pub fn render_settings_view(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .p_2p5()
+                        .p_3()
                         .rounded_md()
                         .bg(card_bg)
                         .border_1()
@@ -410,7 +483,7 @@ pub fn render_settings_view(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("Ctrl+P: Toggle position | Ctrl+S: Toggle sound"),
+                                        .child("Click badge to toggle mode"),
                                 ),
                         )
                         .child(
@@ -420,24 +493,33 @@ pub fn render_settings_view(
                                 .gap_2()
                                 .child(
                                     div()
-                                        .px_2()
+                                        .cursor_pointer()
+                                        .px_2p5()
                                         .py_1()
-                                        .rounded_sm()
+                                        .rounded_md()
                                         .bg(theme.surface_base)
                                         .border_1()
                                         .border_color(card_border)
+                                        .hover(|s| s.border_color(accent_col))
                                         .text_xs()
                                         .text_color(text_primary)
                                         .child(match window_position {
-                                            WindowPositionMode::Center => "Position: Center",
-                                            WindowPositionMode::UpperThird => "Position: Upper-Third",
-                                        }),
+                                            WindowPositionMode::Center => "📐 Center",
+                                            WindowPositionMode::UpperThird => "📐 Upper-Third",
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_window_position_mode(cx);
+                                            }),
+                                        ),
                                 )
                                 .child(
                                     div()
-                                        .px_2()
+                                        .cursor_pointer()
+                                        .px_2p5()
                                         .py_1()
-                                        .rounded_sm()
+                                        .rounded_md()
                                         .bg(if sound_enabled {
                                             accent_col
                                         } else {
@@ -445,13 +527,20 @@ pub fn render_settings_view(
                                         })
                                         .border_1()
                                         .border_color(card_border)
+                                        .hover(|s| s.border_color(accent_col))
                                         .text_xs()
                                         .text_color(if sound_enabled {
                                             theme.surface_base
                                         } else {
                                             text_muted
                                         })
-                                        .child(if sound_enabled { "Sound: ON" } else { "Sound: MUTED" }),
+                                        .child(if sound_enabled { "🔊 Sound: ON" } else { "🔇 Sound: OFF" })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_sound_setting(cx);
+                                            }),
+                                        ),
                                 ),
                         ),
                 ),
@@ -490,26 +579,43 @@ pub fn render_settings_view(
                         .gap_2()
                         .child(
                             div()
+                                .cursor_pointer()
                                 .px_3()
-                                .py_1()
+                                .py_1p5()
                                 .rounded_md()
                                 .bg(theme.surface_base)
                                 .border_1()
                                 .border_color(card_border)
+                                .hover(|s| s.bg(theme.surface_active))
                                 .text_xs()
                                 .text_color(text_secondary)
-                                .child("Cancel (Esc)"),
+                                .child("Cancel (Esc)")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.go_back(window, cx);
+                                    }),
+                                ),
                         )
                         .child(
                             div()
+                                .cursor_pointer()
                                 .px_3p5()
-                                .py_1()
+                                .py_1p5()
                                 .rounded_md()
                                 .bg(accent_col)
+                                .hover(|s| s.opacity(0.9))
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(theme.surface_base)
-                                .child("Save & Apply (Enter)"),
+                                .child("Save & Apply (Enter)")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.save_settings(cx);
+                                        this.go_back(window, cx);
+                                    }),
+                                ),
                         ),
                 ),
         )
