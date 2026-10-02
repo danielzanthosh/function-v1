@@ -254,11 +254,11 @@ fn main() {
                     let _platform_guard = _platform;
                     tracing::info!("GPUI hotkey async listener started, awaiting hotkey events");
                     while let Ok(()) = hotkey_rx.recv().await {
-                        tracing::info!("🔔 GPUI hotkey event received by async listener");
+                        tracing::info!("GPUI hotkey event received by async listener");
                         tracing::info!("Activating Function window");
                         let update_res = cx.update(|cx| {
                             let res = handle_clone.update(cx, |view, window, cx| {
-                                tracing::info!("⚡ Calling view.toggle_visibility(window, cx)");
+                                tracing::info!("Calling view.toggle_visibility(window, cx)");
                                 view.toggle_visibility(window, cx);
                             });
                             if let Err(e) = res {
@@ -283,6 +283,7 @@ fn main() {
         {
             function_platform::set_macos_activation_policy_accessory();
             function_platform::setup_macos_menu_bar_icon();
+            function_platform::setup_macos_double_command_listener();
             function_platform::register_macos_login_item();
         }
 

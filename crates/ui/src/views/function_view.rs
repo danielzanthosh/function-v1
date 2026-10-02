@@ -634,7 +634,7 @@ impl FunctionView {
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
-        tracing::info!("🌙 Dismissing Function window (hiding)");
+        tracing::info!("Dismissing Function window (hiding)");
         self.is_visible = false;
         self.play_sound_feedback(SoundEffect::Select);
         #[cfg(target_os = "macos")]
@@ -650,7 +650,7 @@ impl FunctionView {
         let target_size = self.target_window_size();
         tracing::info!(
             ?target_size,
-            "✨ Summoning Function window (showing and focusing)"
+            "Summoning Function window (showing and focusing)"
         );
         tracing::info!("Activating Function window");
         self.input_buffer.clear();

@@ -590,6 +590,9 @@ pub mod macos {
                 *current = Some(shortcut.to_string());
             }
 
+            // Ensure macOS double-tap Command listener is active
+            setup_macos_double_command_listener();
+
             tracing::info!(shortcut, "Registering macOS global hotkey");
 
             // Do not touch NSApplication here. GPUI must create its `GPUIApplication`
@@ -643,7 +646,7 @@ pub mod macos {
                 the_event: *mut std::ffi::c_void,
                 user_data: *mut std::ffi::c_void,
             ) -> i32 {
-                tracing::info!("🔥 GLOBAL HOTKEY CALLBACK FIRED");
+                tracing::info!("Carbon global hotkey callback fired");
                 tracing::info!("Hotkey event received: Command+;");
                 tracing::info!(
                     event_ptr = ?the_event,
@@ -1854,6 +1857,270 @@ pub fn register_macos_login_item() {
         }
     }
 }
+
+/// Setup double-tap Command key listener on macOS using AppKit NSEvent monitors.
+///
+/// Listens for rapid double presses of the Command key (either Left or Right Command)
+/// and invokes `trigger_global_hotkey()` to toggle the Function window.
+#[cfg(target_os = "macos")]
+pub fn setup_macos_double_command_listener() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    static LISTENER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+    if LISTENER_INITIALIZED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    struct CommandTapState {
+        last_down: Option<Instant>,
+        last_tap_up: Option<Instant>,
+        canceled: bool,
+    }
+
+    static TAP_STATE: Mutex<CommandTapState> = Mutex::new(CommandTapState {
+        last_down: None,
+        last_tap_up: None,
+        canceled: false,
+    });
+
+    #[repr(C)]
+    struct BlockDescriptor {
+        reserved: usize,
+        size: usize,
+    }
+
+    static BLOCK_DESCRIPTOR: BlockDescriptor = BlockDescriptor {
+        reserved: 0,
+        size: std::mem::size_of::<GlobalBlockLiteral>(),
+    };
+
+    #[repr(C)]
+    struct GlobalBlockLiteral {
+        isa: *const std::ffi::c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: unsafe extern "C" fn(*mut GlobalBlockLiteral, *mut std::ffi::c_void),
+        descriptor: *const BlockDescriptor,
+    }
+
+    #[repr(C)]
+    struct LocalBlockLiteral {
+        isa: *const std::ffi::c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: unsafe extern "C" fn(*mut LocalBlockLiteral, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+        descriptor: *const BlockDescriptor,
+    }
+
+    unsafe fn handle_event(event: *mut std::ffi::c_void) {
+        if event.is_null() {
+            return;
+        }
+
+        type MsgSendUsize = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendU16 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> u16;
+
+        extern "C" {
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+        }
+
+        let msg_send_usize: MsgSendUsize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_u16: MsgSendU16 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let type_sel = sel_registerName(c"type".as_ptr());
+        let event_type = msg_send_usize(event, type_sel);
+
+        // NSEventTypeKeyDown = 10
+        const NSEVENT_TYPE_KEY_DOWN: usize = 10;
+        // NSEventTypeFlagsChanged = 12
+        const NSEVENT_TYPE_FLAGS_CHANGED: usize = 12;
+
+        if event_type == NSEVENT_TYPE_KEY_DOWN {
+            // Any normal key down cancels an active Command double-tap candidate
+            if let Ok(mut state) = TAP_STATE.lock() {
+                state.canceled = true;
+                state.last_down = None;
+                state.last_tap_up = None;
+            }
+            return;
+        }
+
+        if event_type != NSEVENT_TYPE_FLAGS_CHANGED {
+            return;
+        }
+
+        let key_code_sel = sel_registerName(c"keyCode".as_ptr());
+        let modifier_flags_sel = sel_registerName(c"modifierFlags".as_ptr());
+
+        let key_code = msg_send_u16(event, key_code_sel);
+        let flags = msg_send_usize(event, modifier_flags_sel);
+
+        // Left Command = 55 (0x37), Right Command = 54 (0x36)
+        if key_code == 54 || key_code == 55 {
+            // NSEventModifierFlagCommand = 0x0010_0000 (bit 20)
+            let is_cmd_down = (flags & 0x0010_0000) != 0;
+
+            // Check if other modifiers are pressed: Shift (bit 17), Control (bit 18), Option (bit 19)
+            let other_modifiers = flags & (0x0002_0000 | 0x0004_0000 | 0x0008_0000);
+            if other_modifiers != 0 {
+                if let Ok(mut state) = TAP_STATE.lock() {
+                    state.canceled = true;
+                    state.last_down = None;
+                    state.last_tap_up = None;
+                }
+                return;
+            }
+
+            let now = Instant::now();
+            if let Ok(mut state) = TAP_STATE.lock() {
+                if is_cmd_down {
+                    state.last_down = Some(now);
+                    state.canceled = false;
+                } else {
+                    if state.canceled {
+                        state.canceled = false;
+                        state.last_down = None;
+                        return;
+                    }
+
+                    if let Some(down_time) = state.last_down.take() {
+                        let down_duration = now.duration_since(down_time);
+                        // A quick tap should be held for at most 350ms
+                        if down_duration.as_millis() <= 350 {
+                            if let Some(prev_up) = state.last_tap_up.take() {
+                                let interval = now.duration_since(prev_up);
+                                // Interval between tap 1 release and tap 2 release: max 450ms
+                                if interval.as_millis() <= 450 {
+                                    tracing::info!(
+                                        interval_ms = interval.as_millis(),
+                                        "macOS double-tap Command detected - toggling Function window"
+                                    );
+                                    trigger_global_hotkey();
+                                    state.last_down = None;
+                                    state.last_tap_up = None;
+                                    return;
+                                }
+                            }
+                            state.last_tap_up = Some(now);
+                        } else {
+                            state.last_tap_up = None;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Any other modifier key changed
+            if let Ok(mut state) = TAP_STATE.lock() {
+                state.canceled = true;
+                state.last_tap_up = None;
+            }
+        }
+    }
+
+    unsafe extern "C" fn global_monitor_invoke(
+        _block: *mut GlobalBlockLiteral,
+        event: *mut std::ffi::c_void,
+    ) {
+        handle_event(event);
+    }
+
+    unsafe extern "C" fn local_monitor_invoke(
+        _block: *mut LocalBlockLiteral,
+        event: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void {
+        handle_event(event);
+        event
+    }
+
+    extern "C" {
+        #[link_name = "_NSConcreteGlobalBlock"]
+        static NSConcreteGlobalBlock: std::ffi::c_void;
+        fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn objc_msgSend();
+    }
+
+    static mut GLOBAL_BLOCK: GlobalBlockLiteral = GlobalBlockLiteral {
+        isa: std::ptr::null(),
+        flags: 1 << 28, // BLOCK_IS_GLOBAL
+        reserved: 0,
+        invoke: global_monitor_invoke,
+        descriptor: &BLOCK_DESCRIPTOR,
+    };
+
+    static mut LOCAL_BLOCK: LocalBlockLiteral = LocalBlockLiteral {
+        isa: std::ptr::null(),
+        flags: 1 << 28, // BLOCK_IS_GLOBAL
+        reserved: 0,
+        invoke: local_monitor_invoke,
+        descriptor: &BLOCK_DESCRIPTOR,
+    };
+
+    unsafe {
+        (*std::ptr::addr_of_mut!(GLOBAL_BLOCK)).isa = &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
+        (*std::ptr::addr_of_mut!(LOCAL_BLOCK)).isa = &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
+
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendAddMonitor = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            u64,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_add: MsgSendAddMonitor =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let ns_event_class = objc_getClass(c"NSEvent".as_ptr());
+        if ns_event_class.is_null() {
+            tracing::warn!("Failed to get NSEvent class for double-tap Command monitor");
+            return;
+        }
+
+        let add_global_sel = sel_registerName(c"addGlobalMonitorForEventsMatchingMask:handler:".as_ptr());
+        let add_local_sel = sel_registerName(c"addLocalMonitorForEventsMatchingMask:handler:".as_ptr());
+        let retain_sel = sel_registerName(c"retain".as_ptr());
+
+        // Mask: FlagsChanged (1 << 12) | KeyDown (1 << 10)
+        let mask: u64 = (1u64 << 12) | (1u64 << 10);
+
+        let global_mon = msg_send_add(
+            ns_event_class,
+            add_global_sel,
+            mask,
+            std::ptr::addr_of_mut!(GLOBAL_BLOCK) as *mut std::ffi::c_void,
+        );
+        if !global_mon.is_null() {
+            let _ = msg_send_0(global_mon, retain_sel);
+            tracing::info!("macOS global double-tap Command monitor registered successfully");
+        } else {
+            tracing::warn!("Failed to register macOS global double-tap Command monitor");
+        }
+
+        let local_mon = msg_send_add(
+            ns_event_class,
+            add_local_sel,
+            mask,
+            std::ptr::addr_of_mut!(LOCAL_BLOCK) as *mut std::ffi::c_void,
+        );
+        if !local_mon.is_null() {
+            let _ = msg_send_0(local_mon, retain_sel);
+            tracing::info!("macOS local double-tap Command monitor registered successfully");
+        } else {
+            tracing::warn!("Failed to register macOS local double-tap Command monitor");
+        }
+    }
+}
+
+/// Fallback for non-macOS platforms
+#[cfg(not(target_os = "macos"))]
+pub fn setup_macos_double_command_listener() {}
+
 
 /// Sound effect types inspired by Flow Launcher feedback sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
