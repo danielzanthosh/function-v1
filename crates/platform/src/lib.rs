@@ -1084,8 +1084,8 @@ pub fn set_window_icon_by_title(title: &str) {
     }
 }
 
-/// Helper to explicitly center the Win32 window on the active monitor.
-pub fn center_window_by_title(title: &str, width: i32, height: i32, upper_third: bool) {
+///// Helper to explicitly center or position the Win32 window on the active monitor without disrupting size or swapchain.
+pub fn center_window_by_title(title: &str, _width: i32, _height: i32, upper_third: bool) {
     #[cfg(target_os = "windows")]
     {
         use std::ffi::OsStr;
@@ -1096,9 +1096,18 @@ pub fn center_window_by_title(title: &str, width: i32, height: i32, upper_third:
             .chain(std::iter::once(0))
             .collect();
 
+        #[repr(C)]
+        struct Rect {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+        }
+
         extern "system" {
             fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
             fn GetSystemMetrics(nIndex: i32) -> i32;
+            fn GetWindowRect(hWnd: isize, lpRect: *mut Rect) -> i32;
             fn SetWindowPos(
                 hWnd: isize,
                 hWndInsertAfter: isize,
@@ -1112,26 +1121,47 @@ pub fn center_window_by_title(title: &str, width: i32, height: i32, upper_third:
 
         const SM_CXSCREEN: i32 = 0;
         const SM_CYSCREEN: i32 = 1;
+        const SWP_NOSIZE: u32 = 0x0001;
         const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
 
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
-                let screen_w = GetSystemMetrics(SM_CXSCREEN);
-                let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                let x = (screen_w - width) / 2;
-                let y = if upper_third {
-                    (screen_h - height) * 38 / 100
-                } else {
-                    (screen_h - height) / 2
+                let mut rc = Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
                 };
-                SetWindowPos(hwnd, 0, x, y, width, height, SWP_NOZORDER);
+                if GetWindowRect(hwnd, &mut rc) != 0 {
+                    let w = rc.right - rc.left;
+                    let h = rc.bottom - rc.top;
+                    let screen_w = GetSystemMetrics(SM_CXSCREEN);
+                    let screen_h = GetSystemMetrics(SM_CYSCREEN);
+                    let x = (screen_w - w) / 2;
+                    let y = if upper_third {
+                        (screen_h - h) * 38 / 100
+                    } else {
+                        (screen_h - h) / 2
+                    };
+                    SetWindowPos(
+                        hwnd,
+                        0,
+                        x,
+                        y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                    );
+                }
             }
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (title, width, height, upper_third);
+        let _ = (title, _width, _height, upper_third);
     }
 }
 
@@ -1260,22 +1290,25 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
         const SWP_NOSIZE: u32 = 0x0001;
         const SWP_NOZORDER: u32 = 0x0004;
         const SWP_FRAMECHANGED: u32 = 0x0020;
+        const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
 
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 let new_ex = (ex | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
-                SetWindowPos(
-                    hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-                );
+                if ex != new_ex {
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
+                    SetWindowPos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS,
+                    );
+                }
             }
         }
     }

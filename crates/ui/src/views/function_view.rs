@@ -883,14 +883,6 @@ impl FunctionView {
                             self.settings_status_message =
                                 Some("Preferences saved to ~/.function/config.json".into());
                             self.play_sound_feedback(SoundEffect::Success);
-                            let sz = self.target_window_size();
-                            function_platform::center_window_by_title(
-                                "Function",
-                                f32::from(sz.width) as i32,
-                                f32::from(sz.height) as i32,
-                                self.config.window_position
-                                    == function_config::WindowPositionMode::UpperThird,
-                            );
                         }
                         Err(e) => {
                             self.settings_status_message = Some(format!("Save error: {}", e));
@@ -1223,14 +1215,20 @@ impl FunctionView {
                     self.is_text_selected = false;
                     self.selected_index = 0;
                     self.cursor_visible = true;
-                    window.resize(self.target_window_size());
+                    let target_sz = self.target_window_size();
+                    if window.bounds().size != target_sz {
+                        window.resize(target_sz);
+                    }
                     cx.notify();
                     return;
                 }
                 self.input_buffer.pop();
                 self.selected_index = 0;
                 self.cursor_visible = true;
-                window.resize(self.target_window_size());
+                let target_sz = self.target_window_size();
+                if window.bounds().size != target_sz {
+                    window.resize(target_sz);
+                }
                 cx.notify();
             }
             "space" => {
@@ -1241,7 +1239,10 @@ impl FunctionView {
                 self.input_buffer.push(' ');
                 self.selected_index = 0;
                 self.cursor_visible = true;
-                window.resize(self.target_window_size());
+                let target_sz = self.target_window_size();
+                if window.bounds().size != target_sz {
+                    window.resize(target_sz);
+                }
                 cx.notify();
             }
             ch if ch.len() == 1 && !modifiers.control && !modifiers.alt => {
@@ -1252,7 +1253,10 @@ impl FunctionView {
                 self.input_buffer.push_str(ch);
                 self.selected_index = 0;
                 self.cursor_visible = true;
-                window.resize(self.target_window_size());
+                let target_sz = self.target_window_size();
+                if window.bounds().size != target_sz {
+                    window.resize(target_sz);
+                }
                 cx.notify();
             }
             _ => {}
