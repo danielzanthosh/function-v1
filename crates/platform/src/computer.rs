@@ -627,12 +627,13 @@ pub mod macos {
             let mut main_key = "";
 
             for &k in keys {
-                match k.to_lowercase().as_str() {
+                let lowercase_key = k.to_lowercase();
+                match lowercase_key.as_str() {
                     "cmd" | "command" => flags |= 0x0010_0000,
                     "shift" => flags |= 0x0002_0000,
                     "alt" | "option" => flags |= 0x0008_0000,
                     "ctrl" | "control" => flags |= 0x0004_0000,
-                    other => main_key = other,
+                    _ => main_key = k,
                 }
             }
 
