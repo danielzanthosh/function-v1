@@ -67,7 +67,7 @@ fn main() {
         tracing::warn!(error = %e, "Failed to register global hotkey");
     }
 
-    let initial_size = Size::new(px(640.0), px(64.0));
+    let initial_size = Size::new(px(640.0), px(112.0));
 
     // 4. Initialize Tools, Memory, Provider, and Agent
     let mut tools = function_tools::ToolRegistry::new();
@@ -291,18 +291,21 @@ fn main() {
             let init_w = init_w_f32 as i32;
             let init_h = init_h_f32 as i32;
             std::thread::spawn(move || {
-                for _ in 0..10 {
+                for _ in 0..15 {
                     std::thread::sleep(std::time::Duration::from_millis(60));
-                    function_platform::set_window_icon_by_title("Function");
-                    function_platform::set_window_as_tool_window_by_title("Function");
-                    function_platform::center_window_by_title(
-                        "Function",
-                        init_w,
-                        init_h,
-                        is_upper_third,
-                    );
-                    if start_hidden {
-                        function_platform::hide_window_by_title("Function");
+                    if function_platform::has_window_by_title("Function") {
+                        function_platform::set_window_icon_by_title("Function");
+                        function_platform::set_window_as_tool_window_by_title("Function");
+                        function_platform::center_window_by_title(
+                            "Function",
+                            init_w,
+                            init_h,
+                            is_upper_third,
+                        );
+                        if start_hidden {
+                            function_platform::hide_window_by_title("Function");
+                        }
+                        break;
                     }
                 }
             });

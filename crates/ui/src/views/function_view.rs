@@ -288,13 +288,6 @@ impl FunctionView {
     }
 
     pub fn target_window_size(&self) -> Size<gpui::Pixels> {
-        if !self.is_visible {
-            return Size {
-                width: px(0.0),
-                height: px(0.0),
-            };
-        }
-
         if self.mode == FunctionMode::Settings {
             return Size {
                 width: px(640.0),
@@ -533,25 +526,24 @@ impl FunctionView {
     }
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = window;
         tracing::info!("🌙 Dismissing Function window (hiding)");
         self.is_visible = false;
         self.play_sound_feedback(SoundEffect::Select);
+        #[cfg(target_os = "macos")]
+        function_platform::macos_hide_app();
         #[cfg(not(target_os = "macos"))]
         function_platform::hide_window_by_title("Function");
-        window.resize(Size {
-            width: px(0.0),
-            height: px(0.0),
-        });
         cx.notify();
     }
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_visible = true;
         let target_size = self.target_window_size();
         tracing::info!(
             ?target_size,
             "✨ Summoning Function window (showing and focusing)"
         );
-        self.is_visible = true;
         self.input_buffer.clear();
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
@@ -563,7 +555,10 @@ impl FunctionView {
             window.activate_window();
         }
         #[cfg(not(target_os = "macos"))]
-        function_platform::show_window_by_title("Function");
+        {
+            function_platform::show_window_by_title("Function");
+            window.activate_window();
+        }
         window.resize(target_size);
         self.focus_handle.focus(window);
         cx.notify();

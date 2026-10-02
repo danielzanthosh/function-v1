@@ -1117,6 +1117,31 @@ pub fn center_window_by_title(title: &str, width: i32, height: i32, upper_third:
     }
 }
 
+/// Check if a native window with the given title exists.
+pub fn has_window_by_title(title: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let title_wide: Vec<u16> = OsStr::new(title)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        }
+
+        unsafe { FindWindowW(std::ptr::null(), title_wide.as_ptr()) != 0 }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title;
+        false
+    }
+}
+
 /// Hide the native window completely from the desktop and taskbar.
 pub fn hide_window_by_title(title: &str) {
     #[cfg(target_os = "windows")]
@@ -1131,7 +1156,7 @@ pub fn hide_window_by_title(title: &str) {
 
         extern "system" {
             fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-            fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+            fn ShowWindowAsync(hWnd: isize, nCmdShow: i32) -> i32;
         }
 
         const SW_HIDE: i32 = 0;
@@ -1139,7 +1164,7 @@ pub fn hide_window_by_title(title: &str) {
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
-                ShowWindow(hwnd, SW_HIDE);
+                ShowWindowAsync(hwnd, SW_HIDE);
             }
         }
     }
@@ -1149,7 +1174,7 @@ pub fn hide_window_by_title(title: &str) {
     }
 }
 
-/// Reveal and focus the native window instantly, bypassing OS focus stealing restrictions.
+/// Reveal and focus the native window instantly and asynchronously without re-entering the UI thread WndProc.
 pub fn show_window_by_title(title: &str) {
     #[cfg(target_os = "windows")]
     {
@@ -1163,67 +1188,17 @@ pub fn show_window_by_title(title: &str) {
 
         extern "system" {
             fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-            fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+            fn ShowWindowAsync(hWnd: isize, nCmdShow: i32) -> i32;
             fn SetForegroundWindow(hWnd: isize) -> i32;
-            fn GetForegroundWindow() -> isize;
-            fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
-            fn GetCurrentThreadId() -> u32;
-            fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
-            fn SetWindowPos(
-                hWnd: isize,
-                hWndInsertAfter: isize,
-                X: i32,
-                Y: i32,
-                cx: i32,
-                cy: i32,
-                uFlags: u32,
-            ) -> i32;
-            fn SetFocus(hWnd: isize) -> isize;
         }
 
         const SW_SHOW: i32 = 5;
-        const HWND_TOPMOST: isize = -1;
-        const HWND_NOTOPMOST: isize = -2;
-        const SWP_NOMOVE: u32 = 0x0002;
-        const SWP_NOSIZE: u32 = 0x0001;
-        const SWP_SHOWWINDOW: u32 = 0x0040;
 
         unsafe {
             let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
             if hwnd != 0 {
-                let fg_hwnd = GetForegroundWindow();
-                let fg_thread = GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut());
-                let cur_thread = GetCurrentThreadId();
-
-                if fg_thread != 0 && fg_thread != cur_thread {
-                    AttachThreadInput(cur_thread, fg_thread, 1);
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                    );
-                    SetWindowPos(
-                        hwnd,
-                        HWND_NOTOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                    );
-                    SetForegroundWindow(hwnd);
-                    SetFocus(hwnd);
-                    AttachThreadInput(cur_thread, fg_thread, 0);
-                } else {
-                    ShowWindow(hwnd, SW_SHOW);
-                    SetForegroundWindow(hwnd);
-                    SetFocus(hwnd);
-                }
+                ShowWindowAsync(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
             }
         }
     }
@@ -1344,6 +1319,32 @@ pub fn macos_activate_app() {
                 let activate_sel = sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
                 let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
                 tracing::info!("Activated macOS application via activateIgnoringOtherApps");
+            }
+        }
+    }
+}
+
+/// Hide/dismiss the application on macOS, hiding all windows without terminating the process.
+pub fn macos_hide_app() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend(
+                receiver: *mut std::ffi::c_void,
+                op: *mut std::ffi::c_void,
+                ...
+            ) -> *mut std::ffi::c_void;
+        }
+        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+        if !ns_app_class.is_null() {
+            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            if !app.is_null() {
+                let hide_sel = sel_registerName(b"hide:\0".as_ptr() as _);
+                let _: *mut std::ffi::c_void = objc_msgSend(app, hide_sel, std::ptr::null_mut::<std::ffi::c_void>());
+                tracing::info!("Dismissed macOS application via [NSApp hide:]");
             }
         }
     }
