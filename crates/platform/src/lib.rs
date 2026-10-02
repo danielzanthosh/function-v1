@@ -148,32 +148,38 @@ pub fn ensure_single_instance() -> bool {
 
     #[cfg(target_os = "macos")]
     {
+        use std::os::unix::io::AsRawFd;
+
         extern "C" {
-            fn open(path: *const std::os::raw::c_char, oflag: i32, mode: u16) -> i32;
             fn flock(fd: i32, operation: i32) -> i32;
         }
 
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let lock_dir = format!("{}/.function", home);
         let _ = std::fs::create_dir_all(&lock_dir);
-        let lock_path = format!("{}/function.lock\0", lock_dir);
+        let lock_path = format!("{}/function.lock", lock_dir);
 
-        // O_RDWR = 2, O_CREAT = 0x0200
-        const O_RDWR: i32 = 2;
-        const O_CREAT: i32 = 0x0200;
         // LOCK_EX = 2, LOCK_NB = 4
         const LOCK_EX: i32 = 2;
         const LOCK_NB: i32 = 4;
 
-        unsafe {
-            let fd = open(lock_path.as_ptr() as *const _, O_RDWR | O_CREAT, 0o666);
-            if fd >= 0 {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+        {
+            let fd = file.as_raw_fd();
+            unsafe {
                 if flock(fd, LOCK_EX | LOCK_NB) != 0 {
                     tracing::warn!("Another instance of Function is already running on macOS. Activating existing instance and exiting.");
                     trigger_global_hotkey();
                     return false;
                 }
             }
+            // Retain the file handle so the advisory lock remains held for the process lifetime
+            std::mem::forget(file);
         }
         true
     }
