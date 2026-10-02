@@ -1276,23 +1276,30 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
 pub fn set_macos_activation_policy_accessory() {
     #[cfg(target_os = "macos")]
     unsafe {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendSetPolicy =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> isize;
+
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_msgSend(
-                receiver: *mut std::ffi::c_void,
-                op: *mut std::ffi::c_void,
-                ...
-            ) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
         }
-        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_policy: MsgSendSetPolicy =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
         if !ns_app_class.is_null() {
-            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
-            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
+            let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
-                let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr() as _);
+                let set_policy_sel = sel_registerName(c"setActivationPolicy:".as_ptr());
                 // NSApplicationActivationPolicyAccessory = 1
-                let _: *mut std::ffi::c_void = objc_msgSend(app, set_policy_sel, 1isize);
+                let _ = msg_send_policy(app, set_policy_sel, 1isize);
+                tracing::info!("Configured macOS application activation policy as accessory (dock icon hidden)");
             }
         }
     }
@@ -1302,22 +1309,28 @@ pub fn set_macos_activation_policy_accessory() {
 pub fn macos_activate_app() {
     #[cfg(target_os = "macos")]
     unsafe {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendActivate =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_msgSend(
-                receiver: *mut std::ffi::c_void,
-                op: *mut std::ffi::c_void,
-                ...
-            ) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
         }
-        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_activate: MsgSendActivate =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
         if !ns_app_class.is_null() {
-            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
-            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
+            let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
-                let activate_sel = sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
-                let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
+                let activate_sel = sel_registerName(c"activateIgnoringOtherApps:".as_ptr());
+                let _ = msg_send_activate(app, activate_sel, true);
                 tracing::info!("Activated macOS application via activateIgnoringOtherApps");
             }
         }
@@ -1328,22 +1341,31 @@ pub fn macos_activate_app() {
 pub fn macos_hide_app() {
     #[cfg(target_os = "macos")]
     unsafe {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendHide = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_msgSend(
-                receiver: *mut std::ffi::c_void,
-                op: *mut std::ffi::c_void,
-                ...
-            ) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
         }
-        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_hide: MsgSendHide =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
         if !ns_app_class.is_null() {
-            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
-            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
+            let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
-                let hide_sel = sel_registerName(b"hide:\0".as_ptr() as _);
-                let _: *mut std::ffi::c_void = objc_msgSend(app, hide_sel, std::ptr::null_mut::<std::ffi::c_void>());
+                let hide_sel = sel_registerName(c"hide:".as_ptr());
+                let _ = msg_send_hide(app, hide_sel, std::ptr::null_mut());
                 tracing::info!("Dismissed macOS application via [NSApp hide:]");
             }
         }
@@ -1354,6 +1376,24 @@ pub fn macos_hide_app() {
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
     unsafe {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend1 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendCStr = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const std::os::raw::c_char,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendFloat = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            f64,
+        ) -> *mut std::ffi::c_void;
+
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -1373,20 +1413,23 @@ pub fn setup_macos_menu_bar_icon() {
                 types: *const std::os::raw::c_char,
             ) -> bool;
             fn objc_registerClassPair(cls: *mut std::ffi::c_void);
-            fn objc_msgSend(
-                receiver: *mut std::ffi::c_void,
-                op: *mut std::ffi::c_void,
-                ...
-            ) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
         }
 
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_cstr: MsgSendCStr =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_float: MsgSendFloat =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
         // Register FunctionStatusItemTarget class if not already registered
-        let mut target_cls = objc_getClass(b"FunctionStatusItemTarget\0".as_ptr() as _);
+        let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
         if target_cls.is_null() {
-            let ns_object = objc_getClass(b"NSObject\0".as_ptr() as _);
+            let ns_object = objc_getClass(c"NSObject".as_ptr());
             target_cls = objc_allocateClassPair(
                 ns_object,
-                b"FunctionStatusItemTarget\0".as_ptr() as _,
+                c"FunctionStatusItemTarget".as_ptr(),
                 0,
             );
             if !target_cls.is_null() {
@@ -1398,8 +1441,8 @@ pub fn setup_macos_menu_bar_icon() {
                     tracing::info!("Top bar (menu bar) status item clicked");
                     trigger_global_hotkey();
                 }
-                let sel = sel_registerName(b"onStatusItemClick:\0".as_ptr() as _);
-                class_addMethod(target_cls, sel, on_click, b"v@:@\0".as_ptr() as _);
+                let sel = sel_registerName(c"onStatusItemClick:".as_ptr());
+                class_addMethod(target_cls, sel, on_click, c"v@:@".as_ptr());
                 objc_registerClassPair(target_cls);
             }
         }
@@ -1409,68 +1452,54 @@ pub fn setup_macos_menu_bar_icon() {
             return;
         }
 
-        let alloc_sel = sel_registerName(b"alloc\0".as_ptr() as _);
-        let init_sel = sel_registerName(b"init\0".as_ptr() as _);
-        let target_inst = objc_msgSend(objc_msgSend(target_cls, alloc_sel), init_sel);
+        let alloc_sel = sel_registerName(c"alloc".as_ptr());
+        let init_sel = sel_registerName(c"init".as_ptr());
+        let target_inst = msg_send_0(msg_send_0(target_cls, alloc_sel), init_sel);
 
-        let ns_status_bar = objc_getClass(b"NSStatusBar\0".as_ptr() as _);
+        let ns_status_bar = objc_getClass(c"NSStatusBar".as_ptr());
         if ns_status_bar.is_null() {
             return;
         }
-        let system_bar_sel = sel_registerName(b"systemStatusBar\0".as_ptr() as _);
-        let bar = objc_msgSend(ns_status_bar, system_bar_sel);
+        let system_bar_sel = sel_registerName(c"systemStatusBar".as_ptr());
+        let bar = msg_send_0(ns_status_bar, system_bar_sel);
         if bar.is_null() {
             return;
         }
 
-        let status_item_sel = sel_registerName(b"statusItemWithLength:\0".as_ptr() as _);
+        let status_item_sel = sel_registerName(c"statusItemWithLength:".as_ptr());
         // -1.0 is NSVariableStatusItemLength
-        type MsgSendFloat = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            f64,
-        ) -> *mut std::ffi::c_void;
-        let msg_send_float: MsgSendFloat = std::mem::transmute(
-            objc_msgSend
-                as unsafe extern "C" fn(
-                    *mut std::ffi::c_void,
-                    *mut std::ffi::c_void,
-                    ...,
-                ) -> *mut std::ffi::c_void,
-        );
         let status_item = msg_send_float(bar, status_item_sel, -1.0);
         if status_item.is_null() {
             tracing::warn!("Failed to create NSStatusItem on systemStatusBar");
             return;
         }
 
-        let button_sel = sel_registerName(b"button\0".as_ptr() as _);
-        let button = objc_msgSend(status_item, button_sel);
+        let button_sel = sel_registerName(c"button".as_ptr());
+        let button = msg_send_0(status_item, button_sel);
         if !button.is_null() {
-            let ns_string = objc_getClass(b"NSString\0".as_ptr() as _);
-            let utf8_sel = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as _);
-            let title = objc_msgSend(
-                ns_string,
-                utf8_sel,
-                b"Function\0".as_ptr() as *const std::os::raw::c_char,
-            );
-            let set_title_sel = sel_registerName(b"setTitle:\0".as_ptr() as _);
-            let _: *mut std::ffi::c_void = objc_msgSend(button, set_title_sel, title);
+            let ns_string = objc_getClass(c"NSString".as_ptr());
+            let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
 
-            let tip = objc_msgSend(
-                ns_string,
-                utf8_sel,
-                b"Function (Command+;)\0".as_ptr() as *const std::os::raw::c_char,
-            );
-            let set_tip_sel = sel_registerName(b"setToolTip:\0".as_ptr() as _);
-            let _: *mut std::ffi::c_void = objc_msgSend(button, set_tip_sel, tip);
+            static TITLE_CSTR: &std::ffi::CStr = c"Function";
+            let title = msg_send_cstr(ns_string, utf8_sel, TITLE_CSTR.as_ptr());
+            if !title.is_null() {
+                let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
+                msg_send_1(button, set_title_sel, title);
+            }
 
-            let set_target_sel = sel_registerName(b"setTarget:\0".as_ptr() as _);
-            let _: *mut std::ffi::c_void = objc_msgSend(button, set_target_sel, target_inst);
+            static TIP_CSTR: &std::ffi::CStr = c"Function (Command+;)";
+            let tip = msg_send_cstr(ns_string, utf8_sel, TIP_CSTR.as_ptr());
+            if !tip.is_null() {
+                let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
+                msg_send_1(button, set_tip_sel, tip);
+            }
 
-            let set_action_sel = sel_registerName(b"setAction:\0".as_ptr() as _);
-            let action_sel = sel_registerName(b"onStatusItemClick:\0".as_ptr() as _);
-            let _: *mut std::ffi::c_void = objc_msgSend(button, set_action_sel, action_sel);
+            let set_target_sel = sel_registerName(c"setTarget:".as_ptr());
+            msg_send_1(button, set_target_sel, target_inst);
+
+            let set_action_sel = sel_registerName(c"setAction:".as_ptr());
+            let action_sel = sel_registerName(c"onStatusItemClick:".as_ptr());
+            msg_send_1(button, set_action_sel, action_sel);
 
             tracing::info!("macOS top bar (menu bar) Function status item created successfully");
         }
@@ -1485,6 +1514,8 @@ pub fn register_macos_login_item() {
         // Objective-C BOOL is signed char (i8) on Apple platforms: 0 is NO, non-zero is YES.
         type ObjcBool = std::os::raw::c_schar;
 
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
         type MsgSendStatus =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize;
         type MsgSendRegister = unsafe extern "C" fn(
@@ -1496,41 +1527,26 @@ pub fn register_macos_login_item() {
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_msgSend(
-                receiver: *mut std::ffi::c_void,
-                op: *mut std::ffi::c_void,
-                ...
-            ) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
         }
 
-        let sm_app_service_class = objc_getClass(b"SMAppService\0".as_ptr() as _);
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_status: MsgSendStatus =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_register: MsgSendRegister =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let sm_app_service_class = objc_getClass(c"SMAppService".as_ptr());
         if !sm_app_service_class.is_null() {
-            let main_app_sel = sel_registerName(b"mainAppService\0".as_ptr() as _);
-            let service = objc_msgSend(sm_app_service_class, main_app_sel);
+            let main_app_sel = sel_registerName(c"mainAppService".as_ptr());
+            let service = msg_send_0(sm_app_service_class, main_app_sel);
             if !service.is_null() {
-                let status_sel = sel_registerName(b"status\0".as_ptr() as _);
-                let msg_send_status: MsgSendStatus = std::mem::transmute(
-                    objc_msgSend
-                        as unsafe extern "C" fn(
-                            *mut std::ffi::c_void,
-                            *mut std::ffi::c_void,
-                            ...
-                        ) -> *mut std::ffi::c_void,
-                );
+                let status_sel = sel_registerName(c"status".as_ptr());
                 // SMAppServiceStatusEnabled = 1
                 let status = msg_send_status(service, status_sel);
                 if status != 1 {
-                    let register_sel = sel_registerName(b"registerAndReturnError:\0".as_ptr() as _);
+                    let register_sel = sel_registerName(c"registerAndReturnError:".as_ptr());
                     let mut err: *mut std::ffi::c_void = std::ptr::null_mut();
-                    let msg_send_register: MsgSendRegister = std::mem::transmute(
-                        objc_msgSend
-                            as unsafe extern "C" fn(
-                                *mut std::ffi::c_void,
-                                *mut std::ffi::c_void,
-                                ...
-                            )
-                                -> *mut std::ffi::c_void,
-                    );
                     let res: ObjcBool = msg_send_register(
                         service,
                         register_sel,
