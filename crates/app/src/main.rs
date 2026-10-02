@@ -9,10 +9,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use function_config::AppConfig;
-use function_platform::{create_native_platform_service, PlatformService};
+use function_platform::{create_native_platform_service, PlatformCommand, PlatformService};
 use function_ui::{
-    CloseFunction, FunctionView, SubmitRequest, ToggleExpanded, ToggleSpotlight, ToggleTheme,
-    ToggleVoice,
+    CloseFunction, FunctionView, OpenSettings, QuitFunction, SubmitRequest, ToggleExpanded,
+    ToggleSpotlight, ToggleTheme, ToggleVoice,
 };
 use gpui::{
     px, AppContext, Application, Bounds, KeyBinding, Point, Size, WindowBackgroundAppearance,
@@ -137,6 +137,9 @@ fn main() {
             KeyBinding::new("ctrl-s", ToggleSpotlight, None),
             KeyBinding::new("ctrl-t", ToggleTheme, None),
             KeyBinding::new("ctrl-m", ToggleVoice, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("ctrl-,", OpenSettings, None),
+            KeyBinding::new("cmd-q", QuitFunction, None),
         ]);
 
         let (screen_w, screen_h) = {
@@ -245,6 +248,10 @@ fn main() {
                     .observe_activation(window, cx)
             })
         });
+        let (command_tx, mut command_rx) =
+            tokio::sync::broadcast::channel::<PlatformCommand>(16);
+        function_platform::set_global_command_tx(command_tx);
+
         if let Ok(window_handle) = _window {
             let mut hotkey_rx = platform.subscribe_hotkey();
             let handle_clone = window_handle.clone();
@@ -254,24 +261,71 @@ fn main() {
                 let _platform = platform_keepalive;
                 async move {
                     let _platform_guard = _platform;
-                    tracing::info!("GPUI hotkey async listener started, awaiting hotkey events");
-                    while let Ok(()) = hotkey_rx.recv().await {
-                        tracing::info!("GPUI hotkey event received by async listener");
-                        tracing::info!("Activating Function window");
-                        let update_res = cx.update(|cx| {
-                            let res = handle_clone.update(cx, |view, window, cx| {
-                                tracing::info!("Calling view.toggle_visibility_from_hotkey(window, cx)");
-                                view.toggle_visibility_from_hotkey(window, cx);
-                            });
-                            if let Err(e) = res {
-                                tracing::error!(error = ?e, "Failed to update FunctionView from window handle");
+                    tracing::info!("GPUI event listener started, awaiting hotkey & platform commands");
+                    loop {
+                        tokio::select! {
+                            hotkey_res = hotkey_rx.recv() => {
+                                match hotkey_res {
+                                    Ok(()) => {
+                                        tracing::info!("GPUI global hotkey received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.toggle_visibility_from_hotkey(window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to update FunctionView on hotkey");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on hotkey");
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
                             }
-                        });
-                        if let Err(e) = update_res {
-                            tracing::error!(error = ?e, "Failed to run cx.update in hotkey async task");
+                            cmd_res = command_rx.recv() => {
+                                match cmd_res {
+                                    Ok(PlatformCommand::ToggleWindow) => {
+                                        tracing::info!("PlatformCommand::ToggleWindow received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.toggle_visibility_from_hotkey(window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to update FunctionView on toggle");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on toggle");
+                                        }
+                                    }
+                                    Ok(PlatformCommand::OpenSettings) => {
+                                        tracing::info!("PlatformCommand::OpenSettings received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.open_settings(&OpenSettings, window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to open settings on FunctionView");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on OpenSettings");
+                                        }
+                                    }
+                                    Ok(PlatformCommand::Quit) => {
+                                        tracing::info!("PlatformCommand::Quit received, shutting down");
+                                        let _ = cx.update(|cx| {
+                                            cx.quit();
+                                        });
+                                        break;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
                         }
                     }
-                    tracing::warn!("GPUI hotkey async listener ended (hotkey channel closed)");
+                    tracing::warn!("GPUI async listener ended");
                 }
             })
             .detach();
@@ -284,7 +338,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         {
             function_platform::set_macos_activation_policy_accessory();
-            function_platform::setup_macos_menu_bar_icon();
+            function_platform::setup_macos_menu_bar_icon(&config.hotkey);
             function_platform::setup_macos_double_command_listener();
             function_platform::register_macos_login_item();
         }

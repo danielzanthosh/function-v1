@@ -102,6 +102,7 @@ pub type AssistantMode = FunctionMode;
 pub struct FunctionView {
     pub mode: FunctionMode,
     pub is_visible: bool,
+    pub is_active_window: bool,
     pub animation_tick: usize,
     pub mic_configured: bool,
     pub mic_available: bool,
@@ -188,6 +189,7 @@ impl FunctionView {
         Self {
             mode: FunctionMode::Command,
             is_visible: !start_hidden,
+            is_active_window: !start_hidden,
             animation_tick: 0,
             mic_configured,
             mic_available,
@@ -233,11 +235,46 @@ impl FunctionView {
 
     pub fn observe_activation(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut activated_once = false;
+        let deactivation_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let deactivation_pending_sub = deactivation_pending.clone();
         let _sub = cx.observe_window_activation(window, move |this, window, cx| {
-            if window.is_window_active() {
+            let is_active = window.is_window_active();
+            this.is_active_window = is_active;
+            if is_active {
                 activated_once = true;
-            } else if activated_once && this.is_visible {
-                this.dismiss(window, cx);
+                deactivation_pending_sub.store(false, std::sync::atomic::Ordering::SeqCst);
+            } else if activated_once
+                && this.is_visible
+                && !deactivation_pending_sub.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let pending_flag = deactivation_pending_sub.clone();
+                // Defer deactivation handling to the next run loop turn.
+                // This guarantees we never synchronously re-enter AppKit window management
+                // or lock GPUI mutexes while inside becomeKeyWindow / resignKeyWindow callbacks!
+                cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    let cx = cx.clone();
+                    async move {
+                        // Allow any active key-window exchange to settle on the main runloop
+                        Timer::after(Duration::from_millis(80)).await;
+                        let _ = cx.update(|cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                pending_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                                // If the window is still inactive and visible, dismiss cleanly
+                                if !this.is_active_window && this.is_visible {
+                                    tracing::info!("Window confirmed inactive after runloop turn: dismissing");
+                                    this.is_visible = false;
+                                    this.play_sound_feedback(SoundEffect::Select);
+                                    #[cfg(target_os = "macos")]
+                                    function_platform::macos_hide_app();
+                                    #[cfg(not(target_os = "macos"))]
+                                    function_platform::hide_window_by_title("Function");
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    }
+                })
+                .detach();
             }
         });
         self._activation_sub = Some(_sub);
@@ -923,6 +960,7 @@ impl FunctionView {
         let _ = window;
         tracing::info!("Dismissing Function window (hiding)");
         self.is_visible = false;
+        self.is_active_window = false;
         self.play_sound_feedback(SoundEffect::Select);
         #[cfg(target_os = "macos")]
         function_platform::macos_hide_app();
@@ -933,6 +971,7 @@ impl FunctionView {
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.is_visible = true;
+        self.is_active_window = true;
         self.is_text_selected = false;
         let target_size = self.target_window_size();
         tracing::info!(
@@ -961,12 +1000,33 @@ impl FunctionView {
         cx.notify();
     }
 
+    pub fn open_settings(
+        &mut self,
+        _: &crate::actions::OpenSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_visible {
+            self.summon(window, cx);
+        }
+        self.mode = FunctionMode::Settings;
+        self.cursor_offset = 0;
+        self.selected_index = 0;
+        self.play_sound_feedback(SoundEffect::Select);
+        window.resize(self.target_window_size());
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
     pub fn toggle_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_focused = self.is_visible && window.is_window_active();
         tracing::info!(
             current_visibility = self.is_visible,
+            is_window_active = window.is_window_active(),
+            is_focused = is_focused,
             "Toggling Function window visibility"
         );
-        if self.is_visible {
+        if is_focused {
             self.dismiss(window, cx);
         } else {
             self.summon(window, cx);
@@ -1046,10 +1106,7 @@ impl FunctionView {
                 cx.notify();
             }
             LauncherAction::OpenSettings => {
-                self.mode = FunctionMode::Settings;
-                window.resize(self.target_window_size());
-                self.play_sound_feedback(SoundEffect::Select);
-                cx.notify();
+                self.open_settings(&crate::actions::OpenSettings, window, cx);
             }
             LauncherAction::NewConversation => {
                 self.start_new_conversation(window, cx);
@@ -1075,11 +1132,7 @@ impl FunctionView {
             match cmd {
                 LocalCommand::Configure => {
                     self.input_buffer.clear();
-                    self.selected_index = 0;
-                    self.mode = FunctionMode::Settings;
-                    self.play_sound_feedback(SoundEffect::Select);
-                    window.resize(self.target_window_size());
-                    cx.notify();
+                    self.open_settings(&crate::actions::OpenSettings, window, cx);
                     return;
                 }
                 LocalCommand::NewConversation => {
@@ -1585,9 +1638,15 @@ impl FunctionView {
             return;
         }
 
-        if modifiers.control && (key == "," || key == "settings") {
-            self.toggle_settings(window, cx);
+        if (modifiers.control || modifiers.secondary() || modifiers.platform)
+            && (key == "," || key == "settings")
+        {
+            self.open_settings(&crate::actions::OpenSettings, window, cx);
             return;
+        }
+
+        if (modifiers.control || modifiers.secondary() || modifiers.platform) && key == "q" {
+            std::process::exit(0);
         }
 
         // ==========================================
@@ -1940,6 +1999,16 @@ impl Render for FunctionView {
             .on_action(
                 cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)),
             )
+            .on_action(cx.listener(
+                |this, a: &crate::actions::OpenSettings, window, cx| {
+                    this.open_settings(a, window, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |_this, _a: &crate::actions::QuitFunction, _window, cx| {
+                    cx.quit();
+                },
+            ))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))

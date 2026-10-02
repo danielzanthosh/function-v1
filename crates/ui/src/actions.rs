@@ -14,7 +14,8 @@ actions!(
         ToggleVoice,
         OpenSettings,
         ClearInput,
-        ToggleSpotlight
+        ToggleSpotlight,
+        QuitFunction
     ]
 );
 

@@ -64,7 +64,16 @@ pub trait PlatformService: Send + Sync {
     fn audio_capture(&self) -> Arc<dyn AudioCapture>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformCommand {
+    ToggleWindow,
+    OpenSettings,
+    Quit,
+}
+
 static GLOBAL_HOTKEY_TX: std::sync::RwLock<Option<broadcast::Sender<()>>> =
+    std::sync::RwLock::new(None);
+static GLOBAL_COMMAND_TX: std::sync::RwLock<Option<broadcast::Sender<PlatformCommand>>> =
     std::sync::RwLock::new(None);
 
 pub fn set_global_hotkey_tx(tx: broadcast::Sender<()>) {
@@ -77,11 +86,105 @@ pub fn get_global_hotkey_tx() -> Option<broadcast::Sender<()>> {
     GLOBAL_HOTKEY_TX.read().ok().and_then(|lock| lock.clone())
 }
 
-pub fn trigger_global_hotkey() {
-    if let Some(tx) = get_global_hotkey_tx() {
-        tracing::info!("Triggering global hotkey notification from UI / menu bar / tray");
-        let _ = tx.send(());
+pub fn set_global_command_tx(tx: broadcast::Sender<PlatformCommand>) {
+    if let Ok(mut lock) = GLOBAL_COMMAND_TX.write() {
+        *lock = Some(tx);
     }
+}
+
+pub fn get_global_command_tx() -> Option<broadcast::Sender<PlatformCommand>> {
+    GLOBAL_COMMAND_TX.read().ok().and_then(|lock| lock.clone())
+}
+
+pub fn send_platform_command(cmd: PlatformCommand) {
+    if let Some(tx) = get_global_command_tx() {
+        let _ = tx.send(cmd);
+    } else if cmd == PlatformCommand::ToggleWindow {
+        if let Some(tx) = get_global_hotkey_tx() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+pub fn trigger_global_hotkey() {
+    tracing::info!("Triggering global hotkey notification from UI / menu bar / tray");
+    send_platform_command(PlatformCommand::ToggleWindow);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacShortcutInfo {
+    pub key_char: String,
+    pub modifier_mask: usize,
+    pub display_label: String,
+}
+
+/// Parse a hotkey string (e.g. "Command+;", "Option+Space", "Ctrl+Space") into AppKit key equivalent info.
+pub fn parse_macos_shortcut(hotkey: &str) -> Option<MacShortcutInfo> {
+    let mut modifier_mask = 0usize;
+    let mut symbols = Vec::new();
+    let mut key_char = String::new();
+    let mut key_name = String::new();
+
+    const NSEVENT_MODIFIER_FLAG_SHIFT: usize = 0x0002_0000;
+    const NSEVENT_MODIFIER_FLAG_CONTROL: usize = 0x0004_0000;
+    const NSEVENT_MODIFIER_FLAG_OPTION: usize = 0x0008_0000;
+    const NSEVENT_MODIFIER_FLAG_COMMAND: usize = 0x0010_0000;
+
+    for part in hotkey.split('+') {
+        let trimmed = part.trim();
+        match trimmed.to_lowercase().as_str() {
+            "command" | "cmd" | "super" => {
+                modifier_mask |= NSEVENT_MODIFIER_FLAG_COMMAND;
+                symbols.push("⌘");
+            }
+            "option" | "alt" => {
+                modifier_mask |= NSEVENT_MODIFIER_FLAG_OPTION;
+                symbols.push("⌥");
+            }
+            "control" | "ctrl" => {
+                modifier_mask |= NSEVENT_MODIFIER_FLAG_CONTROL;
+                symbols.push("⌃");
+            }
+            "shift" => {
+                modifier_mask |= NSEVENT_MODIFIER_FLAG_SHIFT;
+                symbols.push("⇧");
+            }
+            "space" => {
+                key_char = " ".to_string();
+                key_name = "Space".to_string();
+            }
+            ";" | "semicolon" => {
+                key_char = ";".to_string();
+                key_name = ";".to_string();
+            }
+            "," | "comma" => {
+                key_char = ",".to_string();
+                key_name = ",".to_string();
+            }
+            other if !other.is_empty() => {
+                let first = other.chars().next().unwrap();
+                key_char = first.to_ascii_lowercase().to_string();
+                key_name = first.to_ascii_uppercase().to_string();
+            }
+            _ => {}
+        }
+    }
+
+    if key_char.is_empty() {
+        return None;
+    }
+
+    if modifier_mask == 0 {
+        modifier_mask = NSEVENT_MODIFIER_FLAG_COMMAND;
+        symbols.push("⌘");
+    }
+
+    let display_label = format!("{}{}", symbols.concat(), key_name);
+    Some(MacShortcutInfo {
+        key_char,
+        modifier_mask,
+        display_label,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -1416,12 +1519,21 @@ pub fn set_macos_activation_policy_accessory() {
     }
 }
 
+#[cfg(target_os = "macos")]
+static PREVIOUS_APP: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
 /// Activate the application on macOS, bringing it to the foreground even if another app is active.
 pub fn macos_activate_app() {
     #[cfg(target_os = "macos")]
     unsafe {
         type MsgSend0 =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend1 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendPid = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
         type MsgSendActivate =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
 
@@ -1432,14 +1544,45 @@ pub fn macos_activate_app() {
         }
 
         let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_pid: MsgSendPid = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_activate: MsgSendActivate =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
+        // 1. Capture the previously frontmost application so we can return focus to it on dismiss
+        let ns_workspace_cls = objc_getClass(c"NSWorkspace".as_ptr());
+        if !ns_workspace_cls.is_null() {
+            let shared_ws_sel = sel_registerName(c"sharedWorkspace".as_ptr());
+            let ws = msg_send_0(ns_workspace_cls, shared_ws_sel);
+            if !ws.is_null() {
+                let frontmost_sel = sel_registerName(c"frontmostApplication".as_ptr());
+                let front_app = msg_send_0(ws, frontmost_sel);
+                if !front_app.is_null() {
+                    let pid_sel = sel_registerName(c"processIdentifier".as_ptr());
+                    let front_pid = msg_send_pid(front_app, pid_sel);
+                    let my_pid = std::process::id() as i32;
+                    if front_pid != my_pid {
+                        let retain_sel = sel_registerName(c"retain".as_ptr());
+                        let retained = msg_send_0(front_app, retain_sel);
+                        let old_ptr = PREVIOUS_APP.swap(retained as isize, std::sync::atomic::Ordering::SeqCst);
+                        if old_ptr != 0 {
+                            let release_sel = sel_registerName(c"release".as_ptr());
+                            let _ = msg_send_0(old_ptr as *mut std::ffi::c_void, release_sel);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Unhide and activate Function
         let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
         if !ns_app_class.is_null() {
             let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
             let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
+                let unhide_sel = sel_registerName(c"unhide:".as_ptr());
+                let _ = msg_send_1(app, unhide_sel, std::ptr::null_mut());
+
                 let activate_sel = sel_registerName(c"activateIgnoringOtherApps:".as_ptr());
                 let _ = msg_send_activate(app, activate_sel, true);
                 tracing::info!("Activated macOS application via activateIgnoringOtherApps");
@@ -1448,17 +1591,24 @@ pub fn macos_activate_app() {
     }
 }
 
-/// Hide/dismiss the application on macOS, hiding all windows without terminating the process.
+/// Hide/dismiss the application on macOS, hiding all windows without terminating the process
+/// and returning focus to the previously active application.
 pub fn macos_hide_app() {
     #[cfg(target_os = "macos")]
     unsafe {
         type MsgSend0 =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        type MsgSendHide = unsafe extern "C" fn(
+        type MsgSend1 = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
         ) -> *mut std::ffi::c_void;
+        type MsgSendUsize =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendObjectAtIndex =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+        type MsgSendActivateOptions =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> bool;
 
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -1467,7 +1617,12 @@ pub fn macos_hide_app() {
         }
 
         let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_hide: MsgSendHide =
+        let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_usize: MsgSendUsize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_at_index: MsgSendObjectAtIndex =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_activate_options: MsgSendActivateOptions =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
@@ -1475,9 +1630,43 @@ pub fn macos_hide_app() {
             let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
             let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
+                // 1. Order out all windows so they immediately disappear
+                let windows_sel = sel_registerName(c"windows".as_ptr());
+                let windows = msg_send_0(app, windows_sel);
+                if !windows.is_null() {
+                    let count_sel = sel_registerName(c"count".as_ptr());
+                    let object_at_index_sel = sel_registerName(c"objectAtIndex:".as_ptr());
+                    let order_out_sel = sel_registerName(c"orderOut:".as_ptr());
+                    let count = msg_send_usize(windows, count_sel);
+                    for i in 0..count {
+                        let win = msg_send_at_index(windows, object_at_index_sel, i);
+                        if !win.is_null() {
+                            let _ = msg_send_1(win, order_out_sel, std::ptr::null_mut());
+                        }
+                    }
+                }
+
+                // 2. Hide application via [NSApp hide:]
                 let hide_sel = sel_registerName(c"hide:".as_ptr());
-                let _ = msg_send_hide(app, hide_sel, std::ptr::null_mut());
-                tracing::info!("Dismissed macOS application via [NSApp hide:]");
+                let _ = msg_send_1(app, hide_sel, std::ptr::null_mut());
+
+                // 3. Deactivate application so macOS window manager shifts focus
+                let deactivate_sel = sel_registerName(c"deactivate".as_ptr());
+                let _ = msg_send_0(app, deactivate_sel);
+
+                // 4. Return focus to previous application if known
+                let prev_ptr = PREVIOUS_APP.swap(0, std::sync::atomic::Ordering::SeqCst);
+                if prev_ptr != 0 {
+                    let prev_app = prev_ptr as *mut std::ffi::c_void;
+                    // NSApplicationActivateIgnoringOtherApps = 1 << 1 (2)
+                    let activate_options_sel = sel_registerName(c"activateWithOptions:".as_ptr());
+                    let _ = msg_send_activate_options(prev_app, activate_options_sel, 2);
+                    let release_sel = sel_registerName(c"release".as_ptr());
+                    let _ = msg_send_0(prev_app, release_sel);
+                    tracing::info!("Returned focus to previous macOS application via activateWithOptions");
+                }
+
+                tracing::info!("Dismissed macOS application: ordered out windows, hid app, deactivated");
             }
         }
     }
@@ -1518,9 +1707,10 @@ fn find_macos_icon_path() -> Option<std::path::PathBuf> {
 }
 
 /// Setup macOS menu bar status item (top bar icon) that displays the template icon and native AppKit menu.
-pub fn setup_macos_menu_bar_icon() {
+pub fn setup_macos_menu_bar_icon(_hotkey_str: &str) {
     #[cfg(target_os = "macos")]
     unsafe {
+        let hotkey_str = _hotkey_str;
         static STATUS_ITEM_INITIALIZED: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         static G_STATUS_ITEM: std::sync::atomic::AtomicIsize =
@@ -1530,6 +1720,8 @@ pub fn setup_macos_menu_bar_icon() {
             tracing::info!("macOS menu bar icon already initialized, skipping duplicate setup");
             return;
         }
+
+        const NSEVENT_MODIFIER_FLAG_COMMAND: usize = 0x0010_0000;
 
         type MsgSend0 =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
@@ -1552,6 +1744,11 @@ pub fn setup_macos_menu_bar_icon() {
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
             std::os::raw::c_schar,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendUsize = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            usize,
         ) -> *mut std::ffi::c_void;
 
         #[repr(C)]
@@ -1604,6 +1801,8 @@ pub fn setup_macos_menu_bar_icon() {
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_bool: MsgSendBool =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_usize: MsgSendUsize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_size: MsgSendSize =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_init_item: MsgSendInitItem =
@@ -1612,6 +1811,7 @@ pub fn setup_macos_menu_bar_icon() {
         let alloc_sel = sel_registerName(c"alloc".as_ptr());
         let init_sel = sel_registerName(c"init".as_ptr());
         let retain_sel = sel_registerName(c"retain".as_ptr());
+        let set_mask_sel = sel_registerName(c"setKeyEquivalentModifierMask:".as_ptr());
 
         // Register FunctionStatusItemTarget class if not already registered
         let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
@@ -1629,7 +1829,7 @@ pub fn setup_macos_menu_bar_icon() {
                     _sender: *mut std::ffi::c_void,
                 ) {
                     tracing::info!("Menu item 'Show Function' clicked");
-                    trigger_global_hotkey();
+                    send_platform_command(PlatformCommand::ToggleWindow);
                 }
 
                 unsafe extern "C" fn on_settings_click(
@@ -1638,7 +1838,7 @@ pub fn setup_macos_menu_bar_icon() {
                     _sender: *mut std::ffi::c_void,
                 ) {
                     tracing::info!("Menu item 'Settings' clicked");
-                    trigger_global_hotkey();
+                    send_platform_command(PlatformCommand::OpenSettings);
                 }
 
                 unsafe extern "C" fn on_quit_function(
@@ -1646,7 +1846,8 @@ pub fn setup_macos_menu_bar_icon() {
                     _cmd: *mut std::ffi::c_void,
                     _sender: *mut std::ffi::c_void,
                 ) {
-                    tracing::info!("Function quit requested");
+                    tracing::info!("Function quit requested from menu");
+                    send_platform_command(PlatformCommand::Quit);
                     std::process::exit(0);
                 }
 
@@ -1735,6 +1936,9 @@ pub fn setup_macos_menu_bar_icon() {
             }
         }
 
+        // Derive Show Function shortcut info from the actual authoritative configuration
+        let shortcut_info = parse_macos_shortcut(hotkey_str);
+
         if !button.is_null() {
             if !icon_loaded {
                 static TITLE_CSTR: &std::ffi::CStr = c"ƒ";
@@ -1745,11 +1949,17 @@ pub fn setup_macos_menu_bar_icon() {
                 }
             }
 
-            static TIP_CSTR: &std::ffi::CStr = c"Function (Command+;)";
-            let tip = msg_send_cstr(ns_string, utf8_sel, TIP_CSTR.as_ptr());
-            if !tip.is_null() {
-                let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
-                msg_send_1(button, set_tip_sel, tip);
+            let tip_label = if let Some(ref sc) = shortcut_info {
+                format!("Function ({})", sc.display_label)
+            } else {
+                "Function".to_string()
+            };
+            if let Ok(c_tip) = std::ffi::CString::new(tip_label.as_bytes()) {
+                let tip = msg_send_cstr(ns_string, utf8_sel, c_tip.as_ptr());
+                if !tip.is_null() {
+                    let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
+                    msg_send_1(button, set_tip_sel, tip);
+                }
             }
         }
 
@@ -1790,17 +2000,24 @@ pub fn setup_macos_menu_bar_icon() {
                 let sep1 = msg_send_0(ns_menu_item_cls, sep_sel);
                 msg_send_1(menu, add_item_sel, sep1);
 
-                // 2. "Show Function" (action: onShowFunction:, key: ";")
+                // 2. "Show Function" (action: onShowFunction:, derived keyEquivalent & modifiers)
                 let show_title = msg_send_cstr(ns_string, utf8_sel, c"Show Function".as_ptr());
-                let semi_key = msg_send_cstr(ns_string, utf8_sel, c";".as_ptr());
+                let (show_key_str, show_mask) = if let Some(ref sc) = shortcut_info {
+                    (sc.key_char.clone(), sc.modifier_mask)
+                } else {
+                    ("".to_string(), 0usize)
+                };
+                let show_key_cstr = std::ffi::CString::new(show_key_str.as_bytes()).unwrap_or_default();
+                let show_key = msg_send_cstr(ns_string, utf8_sel, show_key_cstr.as_ptr());
                 let show_act = sel_registerName(c"onShowFunction:".as_ptr());
                 let show_item = msg_send_init_item(
                     msg_send_0(ns_menu_item_cls, alloc_sel),
                     init_item_sel,
                     show_title,
                     show_act,
-                    semi_key,
+                    show_key,
                 );
+                msg_send_usize(show_item, set_mask_sel, show_mask);
                 msg_send_1(show_item, set_target_sel, target_inst);
                 msg_send_bool(show_item, set_enabled_sel, 1);
                 msg_send_1(menu, add_item_sel, show_item);
@@ -1809,7 +2026,7 @@ pub fn setup_macos_menu_bar_icon() {
                 let sep2 = msg_send_0(ns_menu_item_cls, sep_sel);
                 msg_send_1(menu, add_item_sel, sep2);
 
-                // 3. "Settings" (action: onSettingsClick:, key: ",")
+                // 3. "Settings" (action: onSettingsClick:, key: ⌘,)
                 let settings_title = msg_send_cstr(ns_string, utf8_sel, c"Settings".as_ptr());
                 let comma_key = msg_send_cstr(ns_string, utf8_sel, c",".as_ptr());
                 let settings_act = sel_registerName(c"onSettingsClick:".as_ptr());
@@ -1820,6 +2037,7 @@ pub fn setup_macos_menu_bar_icon() {
                     settings_act,
                     comma_key,
                 );
+                msg_send_usize(settings_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
                 msg_send_1(settings_item, set_target_sel, target_inst);
                 msg_send_bool(settings_item, set_enabled_sel, 1);
                 msg_send_1(menu, add_item_sel, settings_item);
@@ -1828,7 +2046,7 @@ pub fn setup_macos_menu_bar_icon() {
                 let sep3 = msg_send_0(ns_menu_item_cls, sep_sel);
                 msg_send_1(menu, add_item_sel, sep3);
 
-                // 4. "Quit Function" (action: onQuitFunction:, key: "q")
+                // 4. "Quit Function" (action: onQuitFunction:, key: ⌘Q)
                 let quit_title = msg_send_cstr(ns_string, utf8_sel, c"Quit Function".as_ptr());
                 let q_key = msg_send_cstr(ns_string, utf8_sel, c"q".as_ptr());
                 let quit_act = sel_registerName(c"onQuitFunction:".as_ptr());
@@ -1839,6 +2057,7 @@ pub fn setup_macos_menu_bar_icon() {
                     quit_act,
                     q_key,
                 );
+                msg_send_usize(quit_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
                 msg_send_1(quit_item, set_target_sel, target_inst);
                 msg_send_bool(quit_item, set_enabled_sel, 1);
                 msg_send_1(menu, add_item_sel, quit_item);
@@ -2578,4 +2797,47 @@ mod tests {
         assert_eq!(&wav_bytes[0..4], b"RIFF");
         assert_eq!(&wav_bytes[8..12], b"WAVE");
     }
+
+    #[test]
+    fn test_parse_macos_shortcut() {
+        // Command+;
+        let sc1 = parse_macos_shortcut("Command+;").expect("should parse Command+;");
+        assert_eq!(sc1.key_char, ";");
+        assert_eq!(sc1.modifier_mask, 0x0010_0000);
+        assert_eq!(sc1.display_label, "⌘;");
+
+        // Option+Space
+        let sc2 = parse_macos_shortcut("Option+Space").expect("should parse Option+Space");
+        assert_eq!(sc2.key_char, " ");
+        assert_eq!(sc2.modifier_mask, 0x0008_0000);
+        assert_eq!(sc2.display_label, "⌥Space");
+
+        // Ctrl+Space / Alt+Space
+        let sc3 = parse_macos_shortcut("Ctrl+Space").expect("should parse Ctrl+Space");
+        assert_eq!(sc3.key_char, " ");
+        assert_eq!(sc3.modifier_mask, 0x0004_0000);
+        assert_eq!(sc3.display_label, "⌃Space");
+
+        // Command+Shift+F
+        let sc4 = parse_macos_shortcut("Command+Shift+f").expect("should parse Command+Shift+f");
+        assert_eq!(sc4.key_char, "f");
+        assert_eq!(sc4.modifier_mask, 0x0010_0000 | 0x0002_0000);
+        assert_eq!(sc4.display_label, "⌘⇧F");
+    }
+
+    #[tokio::test]
+    async fn test_platform_commands() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        set_global_command_tx(tx);
+
+        send_platform_command(PlatformCommand::ToggleWindow);
+        assert_eq!(rx.recv().await.unwrap(), PlatformCommand::ToggleWindow);
+
+        send_platform_command(PlatformCommand::OpenSettings);
+        assert_eq!(rx.recv().await.unwrap(), PlatformCommand::OpenSettings);
+
+        send_platform_command(PlatformCommand::Quit);
+        assert_eq!(rx.recv().await.unwrap(), PlatformCommand::Quit);
+    }
 }
+
