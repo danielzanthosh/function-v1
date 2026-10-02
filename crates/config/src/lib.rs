@@ -136,7 +136,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             hotkey: if cfg!(target_os = "macos") {
-                "Command+;".to_string()
+                "Double Command".to_string()
             } else {
                 "Ctrl+Space".to_string()
             },
@@ -186,7 +186,7 @@ impl AppConfig {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(mut cfg) = serde_json::from_str::<Self>(&content) {
                     // Preserve custom shortcuts while moving only the old shipped macOS
-                    // default away from Option+Space.
+                    // defaults (Option+Space, Command+;) away to Double Command.
                     if migrate_macos_default_hotkey(&mut cfg) {
                         let _ = cfg.save();
                     }
@@ -212,8 +212,12 @@ impl AppConfig {
 fn migrate_macos_default_hotkey(config: &mut AppConfig) -> bool {
     #[cfg(target_os = "macos")]
     {
-        if config.hotkey == "Option+Space" {
-            config.hotkey = "Command+;".to_string();
+        if config.hotkey == "Option+Space"
+            || config.hotkey == "Command+;"
+            || config.hotkey == "Cmd+;"
+            || config.hotkey == "Command+semicolon"
+        {
+            config.hotkey = "Double Command".to_string();
             return true;
         }
     }
@@ -392,12 +396,26 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             assert!(migrated);
-            assert_eq!(config.hotkey, "Command+;");
+            assert_eq!(config.hotkey, "Double Command");
         }
         #[cfg(not(target_os = "macos"))]
         {
             assert!(!migrated);
             assert_eq!(config.hotkey, "Option+Space");
+        }
+
+        let mut config_cmd = AppConfig::default();
+        config_cmd.hotkey = "Command+;".to_string();
+        let migrated_cmd = migrate_macos_default_hotkey(&mut config_cmd);
+        #[cfg(target_os = "macos")]
+        {
+            assert!(migrated_cmd);
+            assert_eq!(config_cmd.hotkey, "Double Command");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(!migrated_cmd);
+            assert_eq!(config_cmd.hotkey, "Command+;");
         }
     }
 

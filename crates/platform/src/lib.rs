@@ -41,7 +41,7 @@ pub trait PlatformService: Send + Sync {
     /// Return the OS name / identifier.
     fn platform_name(&self) -> &'static str;
 
-    /// Register the global activation hotkey (e.g. "Ctrl+Space" on Windows, "Command+;" on macOS).
+    /// Register the global activation hotkey (e.g. "Ctrl+Space" on Windows; macOS uses global Double Command).
     async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError>;
 
     /// Unregister any previously registered hotkey.
@@ -244,8 +244,22 @@ pub struct MacShortcutInfo {
     pub display_label: String,
 }
 
-/// Parse a hotkey string (e.g. "Command+;", "Option+Space", "Ctrl+Space") into AppKit key equivalent info.
+/// Parse a hotkey string (e.g. "Double Command", "Ctrl+Space", "Option+Space") into AppKit key equivalent info.
 pub fn parse_macos_shortcut(hotkey: &str) -> Option<MacShortcutInfo> {
+    let lower = hotkey.trim().to_lowercase();
+    if lower == "double command"
+        || lower == "command+command"
+        || lower == "cmd+cmd"
+        || lower == "double ⌘"
+        || lower == "⌘ ⌘"
+    {
+        return Some(MacShortcutInfo {
+            key_char: String::new(),
+            modifier_mask: 0,
+            display_label: "⌘ ⌘".to_string(),
+        });
+    }
+
     let mut modifier_mask = 0usize;
     let mut symbols = Vec::new();
     let mut key_char = String::new();
@@ -759,241 +773,24 @@ pub mod macos {
         }
     }
 
-    fn parse_hotkey(shortcut: &str) -> Result<(u32, u32), PlatformError> {
-        const OPTION_KEY: u32 = 0x0800;
-        const CONTROL_KEY: u32 = 0x1000;
-        const CMD_KEY: u32 = 0x0100;
-        const SHIFT_KEY: u32 = 0x0200;
-
-        let mut modifiers = 0;
-        let mut key_code = None;
-        for part in shortcut.split('+').map(|part| part.trim().to_uppercase()) {
-            match part.as_str() {
-                "OPTION" | "ALT" => modifiers |= OPTION_KEY,
-                "CTRL" | "CONTROL" => modifiers |= CONTROL_KEY,
-                "CMD" | "COMMAND" => modifiers |= CMD_KEY,
-                "SHIFT" => modifiers |= SHIFT_KEY,
-                "SPACE" => key_code = Some(49),           // kVK_Space
-                ";" | "SEMICOLON" => key_code = Some(41), // kVK_ANSI_Semicolon
-                "" => {}
-                key => {
-                    return Err(PlatformError::Unsupported(format!(
-                        "Unsupported macOS hotkey key: {key}"
-                    )));
-                }
-            }
-        }
-
-        if modifiers == 0 {
-            modifiers = OPTION_KEY;
-        }
-
-        Ok((
-            key_code.ok_or_else(|| {
-                PlatformError::Unsupported("macOS hotkey must include a key".to_string())
-            })?,
-            modifiers,
-        ))
-    }
-
     #[async_trait]
     impl PlatformService for MacOsPlatformService {
         fn platform_name(&self) -> &'static str {
             "macOS"
         }
 
-        async fn register_hotkey(&self, shortcut: &str) -> Result<(), PlatformError> {
-            let (key_code, modifiers) = parse_hotkey(shortcut)?;
-            {
-                let mut current = self.registered_hotkey.write().unwrap();
-                if let Some(ref existing) = *current {
-                    if existing == shortcut {
-                        tracing::info!(
-                            shortcut,
-                            "macOS hotkey already registered, skipping duplicate registration"
-                        );
-                        return Ok(());
-                    }
-                    self.cleanup_hotkey_sync();
-                }
-                *current = Some(shortcut.to_string());
-            }
-
-            // Ensure macOS double-tap Command listener is active
+        async fn register_hotkey(&self, _shortcut: &str) -> Result<(), PlatformError> {
+            // macOS activation is driven exclusively by Double-tap Command and Escape.
+            // Ensure the double-Command listener is active.
             setup_macos_double_command_listener();
-
-            tracing::info!(shortcut, "Registering macOS global hotkey");
-
-            // Do not touch NSApplication here. GPUI must create its `GPUIApplication`
-            // subclass before any code asks AppKit for the shared application; otherwise
-            // AppKit creates a plain NSApplication and GPUI cannot store its platform
-            // state on its subclass. The accessory activation policy is applied from
-            // the GPUI launch callback in `function-app` instead.
-
-            #[repr(C)]
-            #[derive(Copy, Clone)]
-            struct EventHotKeyID {
-                signature: u32,
-                id: u32,
-            }
-
-            #[repr(C)]
-            struct EventTypeSpec {
-                event_class: u32,
-                event_kind: u32,
-            }
-
-            #[link(name = "Carbon", kind = "framework")]
-            #[allow(non_snake_case)]
-            extern "C" {
-                fn GetApplicationEventTarget() -> *mut std::ffi::c_void;
-                fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
-                fn InstallEventHandler(
-                    inTarget: *mut std::ffi::c_void,
-                    inHandler: unsafe extern "C" fn(
-                        nextHandler: *mut std::ffi::c_void,
-                        theEvent: *mut std::ffi::c_void,
-                        userData: *mut std::ffi::c_void,
-                    ) -> i32,
-                    inNumTypes: u32,
-                    inList: *const EventTypeSpec,
-                    inUserData: *mut std::ffi::c_void,
-                    outHandlerRef: *mut *mut std::ffi::c_void,
-                ) -> i32;
-                fn RegisterEventHotKey(
-                    inHotKeyCode: u32,
-                    inHotKeyModifiers: u32,
-                    inHotKeyID: EventHotKeyID,
-                    inTarget: *mut std::ffi::c_void,
-                    inOptions: u32,
-                    outHotKeyRef: *mut *mut std::ffi::c_void,
-                ) -> i32;
-            }
-
-            unsafe extern "C" fn carbon_hotkey_handler(
-                _next: *mut std::ffi::c_void,
-                the_event: *mut std::ffi::c_void,
-                user_data: *mut std::ffi::c_void,
-            ) -> i32 {
-                tracing::info!("Carbon global hotkey callback fired");
-                tracing::info!("Hotkey event received: Command+;");
-                tracing::info!(
-                    event_ptr = ?the_event,
-                    "kEventHotKeyPressed event received in Carbon handler"
-                );
-
-                trigger_global_hotkey();
-
-                if !user_data.is_null() {
-                    let tx = &*(user_data as *const broadcast::Sender<()>);
-                    tracing::info!(
-                        subscribers = tx.receiver_count(),
-                        "Carbon callback notifying application broadcast channel"
-                    );
-                    match tx.send(()) {
-                        Ok(num) => {
-                            tracing::info!(num, "Dispatched hotkey event to application broadcast channel");
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = ?e, "Failed to send hotkey event - no receivers listening");
-                        }
-                    }
-                } else {
-                    tracing::error!("Carbon hotkey callback received null user_data pointer");
-                }
-                0
-            }
-
-            const K_EVENT_CLASS_KEYBOARD: u32 = 0x6b657962; // 'keyb'
-            const K_EVENT_HOT_KEY_PRESSED: u32 = 1;
-            let tx_box = Box::new(self.hotkey_tx.clone());
-            let tx_ptr = Box::into_raw(tx_box) as *mut std::ffi::c_void;
-
-            let spec = EventTypeSpec {
-                event_class: K_EVENT_CLASS_KEYBOARD,
-                event_kind: K_EVENT_HOT_KEY_PRESSED,
-            };
-
-            unsafe {
-                let mut target = GetEventDispatcherTarget();
-                if target.is_null() {
-                    tracing::warn!("GetEventDispatcherTarget() returned NULL, falling back to GetApplicationEventTarget()");
-                    target = GetApplicationEventTarget();
-                }
-
-                if target.is_null() {
-                    tracing::error!("Both GetEventDispatcherTarget() and GetApplicationEventTarget() returned NULL!");
-                } else {
-                    tracing::info!(
-                        target = ?target,
-                        "Retrieved EventTarget for Carbon hotkey handling"
-                    );
-                }
-
-                let mut handler_ref: *mut std::ffi::c_void = std::ptr::null_mut();
-                let mut hotkey_ref: *mut std::ffi::c_void = std::ptr::null_mut();
-
-                tracing::info!(
-                    shortcut,
-                    key_code,
-                    modifier_mask = format!("{:#06x}", modifiers),
-                    "Installing Carbon event handler on EventDispatcherTarget"
-                );
-
-                let h_res = InstallEventHandler(
-                    target,
-                    carbon_hotkey_handler,
-                    1,
-                    &spec,
-                    tx_ptr,
-                    &mut handler_ref,
-                );
-                tracing::info!(
-                    h_res,
-                    handler_ref = ?handler_ref,
-                    "InstallEventHandler completed"
-                );
-
-                let hotkey_id = EventHotKeyID {
-                    signature: 0x46554e43, // 'FUNC'
-                    id: 1,
-                };
-                tracing::info!(
-                    signature = format!("{:#010x}", hotkey_id.signature),
-                    id = hotkey_id.id,
-                    key_code,
-                    modifier_mask = format!("{:#06x}", modifiers),
-                    "Registering EventHotKey with Carbon"
-                );
-
-                let r_res =
-                    RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
-                tracing::info!(
-                    r_res,
-                    hotkey_ref = ?hotkey_ref,
-                    "RegisterEventHotKey completed"
-                );
-
-                if h_res == 0 && r_res == 0 {
-                    self.tx_ptr_ref.store(tx_ptr as isize, Ordering::SeqCst);
-                    self.handler_ref
-                        .store(handler_ref as isize, Ordering::SeqCst);
-                    self.hotkey_ref.store(hotkey_ref as isize, Ordering::SeqCst);
-                    tracing::info!(
-                        "macOS Carbon global hotkey registered successfully: {}",
-                        shortcut
-                    );
-                } else {
-                    tracing::warn!(h_res, r_res, "Failed to register macOS Carbon hotkey");
-                }
-            }
-
+            let mut current = self.registered_hotkey.write().unwrap();
+            *current = Some("Double Command".to_string());
+            tracing::info!("macOS global activation configured: Double Command");
             Ok(())
         }
 
         async fn unregister_hotkey(&self) -> Result<(), PlatformError> {
-            tracing::info!("Unregistering macOS global hotkey");
-            self.cleanup_hotkey_sync();
+            tracing::info!("Unregistering macOS global activation");
             let mut current = self.registered_hotkey.write().unwrap();
             *current = None;
             Ok(())
@@ -1685,6 +1482,7 @@ pub fn macos_activate_app() {
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn object_getClass(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn class_getName(cls: *mut std::ffi::c_void) -> *const std::os::raw::c_char;
             fn class_replaceMethod(
                 cls: *mut std::ffi::c_void,
                 name: *mut std::ffi::c_void,
@@ -1769,10 +1567,21 @@ pub fn macos_activate_app() {
                     for i in 0..count {
                         let win = msg_send_at_index(windows, object_at_index_sel, i);
                         if !win.is_null() {
+                            // Never tamper with NSStatusBarWindow or popup menu windows
+                            let win_cls = object_getClass(win);
+                            if !win_cls.is_null() {
+                                let cls_name_ptr = class_getName(win_cls);
+                                if !cls_name_ptr.is_null() {
+                                    let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
+                                    if cls_name.contains("StatusBar") || cls_name.contains("Menu") || cls_name.contains("Panel") {
+                                        continue;
+                                    }
+                                }
+                            }
+
                             // In Cocoa, borderless windows return NO to canBecomeKeyWindow by default.
                             // Replace canBecomeKeyWindow and canBecomeMainWindow to return YES
                             // so the spotlight-style window can receive keyboard events and focus.
-                            let win_cls = object_getClass(win);
                             if !win_cls.is_null() {
                                 let _ = class_replaceMethod(
                                     win_cls,
@@ -1843,6 +1652,8 @@ pub fn macos_hide_app() {
 
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn object_getClass(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn class_getName(cls: *mut std::ffi::c_void) -> *const std::os::raw::c_char;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn objc_msgSend();
         }
@@ -1861,7 +1672,7 @@ pub fn macos_hide_app() {
             let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
             let app = msg_send_0(ns_app_class, shared_app_sel);
             if !app.is_null() {
-                // 1. Order out all windows so they immediately disappear
+                // 1. Order out non-status windows so they immediately disappear
                 let windows_sel = sel_registerName(c"windows".as_ptr());
                 let windows = msg_send_0(app, windows_sel);
                 if !windows.is_null() {
@@ -1872,16 +1683,22 @@ pub fn macos_hide_app() {
                     for i in 0..count {
                         let win = msg_send_at_index(windows, object_at_index_sel, i);
                         if !win.is_null() {
+                            let win_cls = object_getClass(win);
+                            if !win_cls.is_null() {
+                                let cls_name_ptr = class_getName(win_cls);
+                                if !cls_name_ptr.is_null() {
+                                    let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
+                                    if cls_name.contains("StatusBar") || cls_name.contains("Menu") || cls_name.contains("Panel") {
+                                        continue;
+                                    }
+                                }
+                            }
                             let _ = msg_send_1(win, order_out_sel, std::ptr::null_mut());
                         }
                     }
                 }
 
-                // 2. Hide application via [NSApp hide:]
-                let hide_sel = sel_registerName(c"hide:".as_ptr());
-                let _ = msg_send_1(app, hide_sel, std::ptr::null_mut());
-
-                // 3. Deactivate application so macOS window manager shifts focus
+                // 2. Deactivate application so macOS window manager shifts focus
                 let deactivate_sel = sel_registerName(c"deactivate".as_ptr());
                 let _ = msg_send_0(app, deactivate_sel);
 
@@ -1903,19 +1720,31 @@ pub fn macos_hide_app() {
     }
 }
 
-/// Helper to find icon.png for macOS menu bar icon
+/// Embedded transparent brand logo for the macOS status item (preserves alpha mask for template rendering)
+#[cfg(target_os = "macos")]
+const MACOS_STATUS_ICON_BYTES: &[u8] =
+    include_bytes!("../../../assets/brand/White logo in Tranparent.png");
+
+/// Helper to find transparent logo asset for macOS menu bar icon
 #[cfg(target_os = "macos")]
 fn find_macos_icon_path() -> Option<std::path::PathBuf> {
+    if let Ok(override_path) = std::env::var("FUNCTION_MENU_ICON_PATH") {
+        let p = std::path::PathBuf::from(override_path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidates = [
-                dir.join("../Resources/icon.png"),
-                dir.join("Resources/icon.png"),
-                dir.join("icon.png"),
-                dir.join("assets/icon.png"),
-                dir.join("../assets/icon.png"),
-                dir.join("../../assets/icon.png"),
-                dir.join("../../../assets/icon.png"),
+                dir.join("../Resources/White logo in Tranparent.png"),
+                dir.join("../Resources/menu_icon.png"),
+                dir.join("Resources/White logo in Tranparent.png"),
+                dir.join("Resources/menu_icon.png"),
+                dir.join("assets/brand/White logo in Tranparent.png"),
+                dir.join("../assets/brand/White logo in Tranparent.png"),
+                dir.join("../../assets/brand/White logo in Tranparent.png"),
+                dir.join("../../../assets/brand/White logo in Tranparent.png"),
             ];
             for c in candidates {
                 if c.exists() {
@@ -1925,9 +1754,9 @@ fn find_macos_icon_path() -> Option<std::path::PathBuf> {
         }
     }
     let cwd_candidates = [
-        std::path::PathBuf::from("assets/icon.png"),
-        std::path::PathBuf::from("Resources/icon.png"),
-        std::path::PathBuf::from("icon.png"),
+        std::path::PathBuf::from("assets/brand/White logo in Tranparent.png"),
+        std::path::PathBuf::from("Resources/White logo in Tranparent.png"),
+        std::path::PathBuf::from("Resources/menu_icon.png"),
     ];
     for c in cwd_candidates {
         if c.exists() {
@@ -1937,368 +1766,419 @@ fn find_macos_icon_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Setup macOS menu bar status item (top bar icon) that displays the template icon and native AppKit menu.
-pub fn setup_macos_menu_bar_icon(_hotkey_str: &str) {
+#[cfg(target_os = "macos")]
+static STATUS_ITEM_INITIALIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static G_STATUS_ITEM: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+#[cfg(target_os = "macos")]
+static G_STATUS_MENU: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+#[cfg(target_os = "macos")]
+static G_STATUS_TARGET: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+/// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
+pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
     unsafe {
-        let hotkey_str = _hotkey_str;
-        static STATUS_ITEM_INITIALIZED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        static G_STATUS_ITEM: std::sync::atomic::AtomicIsize =
-            std::sync::atomic::AtomicIsize::new(0);
-
         if STATUS_ITEM_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             tracing::info!("macOS menu bar icon already initialized, skipping duplicate setup");
             return;
         }
 
-        const NSEVENT_MODIFIER_FLAG_COMMAND: usize = 0x0010_0000;
-
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        type MsgSend1 = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-        ) -> *mut std::ffi::c_void;
-        type MsgSendCStr = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            *const std::os::raw::c_char,
-        ) -> *mut std::ffi::c_void;
-        type MsgSendFloat = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            f64,
-        ) -> *mut std::ffi::c_void;
-        type MsgSendBool = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            std::os::raw::c_schar,
-        ) -> *mut std::ffi::c_void;
-        type MsgSendUsize = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            usize,
-        ) -> *mut std::ffi::c_void;
-
-        #[repr(C)]
-        #[derive(Copy, Clone)]
-        struct NSSize {
-            width: f64,
-            height: f64,
-        }
-        type MsgSendSize = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            NSSize,
-        ) -> *mut std::ffi::c_void;
-
-        type MsgSendInitItem = unsafe extern "C" fn(
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-            *mut std::ffi::c_void,
-        ) -> *mut std::ffi::c_void;
-
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_allocateClassPair(
-                superclass: *mut std::ffi::c_void,
-                name: *const std::os::raw::c_char,
-                extraBytes: usize,
-            ) -> *mut std::ffi::c_void;
-            fn class_addMethod(
-                cls: *mut std::ffi::c_void,
-                name: *mut std::ffi::c_void,
-                imp: unsafe extern "C" fn(
-                    *mut std::ffi::c_void,
-                    *mut std::ffi::c_void,
-                    *mut std::ffi::c_void,
-                ),
-                types: *const std::os::raw::c_char,
-            ) -> bool;
-            fn objc_registerClassPair(cls: *mut std::ffi::c_void);
             fn objc_msgSend();
+            fn dispatch_async_f(
+                queue: *mut std::ffi::c_void,
+                context: *mut std::ffi::c_void,
+                work: unsafe extern "C" fn(*mut std::ffi::c_void),
+            );
+            static _dispatch_main_q: std::ffi::c_void;
         }
 
-        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_cstr: MsgSendCStr =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_float: MsgSendFloat =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_bool: MsgSendBool =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_usize: MsgSendUsize =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_size: MsgSendSize =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let msg_send_init_item: MsgSendInitItem =
+        type MsgSendBool0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool;
+        let msg_send_bool_0: MsgSendBool0 =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
-        let alloc_sel = sel_registerName(c"alloc".as_ptr());
-        let init_sel = sel_registerName(c"init".as_ptr());
-        let retain_sel = sel_registerName(c"retain".as_ptr());
-        let set_mask_sel = sel_registerName(c"setKeyEquivalentModifierMask:".as_ptr());
-
-        // Register FunctionStatusItemTarget class if not already registered
-        let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
-        if target_cls.is_null() {
-            let ns_object = objc_getClass(c"NSObject".as_ptr());
-            target_cls = objc_allocateClassPair(
-                ns_object,
-                c"FunctionStatusItemTarget".as_ptr(),
-                0,
-            );
-            if !target_cls.is_null() {
-                unsafe extern "C" fn on_show_function(
-                    _this: *mut std::ffi::c_void,
-                    _cmd: *mut std::ffi::c_void,
-                    _sender: *mut std::ffi::c_void,
-                ) {
-                    tracing::info!("Menu item 'Show Function' clicked");
-                    send_platform_command(PlatformCommand::ToggleWindow);
+        let ns_thread_cls = objc_getClass(c"NSThread".as_ptr());
+        let is_main_sel = sel_registerName(c"isMainThread".as_ptr());
+        if !ns_thread_cls.is_null() {
+            let is_main: bool = msg_send_bool_0(ns_thread_cls, is_main_sel);
+            if !is_main {
+                unsafe extern "C" fn run_setup_on_main(_ctx: *mut std::ffi::c_void) {
+                    setup_macos_menu_bar_icon_inner();
                 }
-
-                unsafe extern "C" fn on_settings_click(
-                    _this: *mut std::ffi::c_void,
-                    _cmd: *mut std::ffi::c_void,
-                    _sender: *mut std::ffi::c_void,
-                ) {
-                    tracing::info!("Menu item 'Settings' clicked");
-                    send_platform_command(PlatformCommand::OpenSettings);
-                }
-
-                unsafe extern "C" fn on_quit_function(
-                    _this: *mut std::ffi::c_void,
-                    _cmd: *mut std::ffi::c_void,
-                    _sender: *mut std::ffi::c_void,
-                ) {
-                    tracing::info!("Function quit requested from menu");
-                    send_platform_command(PlatformCommand::Quit);
-                    std::process::exit(0);
-                }
-
-                let show_sel = sel_registerName(c"onShowFunction:".as_ptr());
-                class_addMethod(target_cls, show_sel, on_show_function, c"v@:@".as_ptr());
-
-                let settings_sel = sel_registerName(c"onSettingsClick:".as_ptr());
-                class_addMethod(target_cls, settings_sel, on_settings_click, c"v@:@".as_ptr());
-
-                let quit_sel = sel_registerName(c"onQuitFunction:".as_ptr());
-                class_addMethod(target_cls, quit_sel, on_quit_function, c"v@:@".as_ptr());
-
-                // Backward-compatible selector for button click
-                class_addMethod(
-                    target_cls,
-                    sel_registerName(c"onStatusItemClick:".as_ptr()),
-                    on_show_function,
-                    c"v@:@".as_ptr(),
+                dispatch_async_f(
+                    &_dispatch_main_q as *const _ as *mut std::ffi::c_void,
+                    std::ptr::null_mut(),
+                    run_setup_on_main,
                 );
-
-                objc_registerClassPair(target_cls);
+                return;
             }
         }
 
-        if target_cls.is_null() {
-            tracing::warn!("Failed to create FunctionStatusItemTarget class");
-            return;
+        setup_macos_menu_bar_icon_inner();
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn setup_macos_menu_bar_icon_inner() {
+    const NSEVENT_MODIFIER_FLAG_COMMAND: usize = 0x0010_0000;
+
+    type MsgSend0 =
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    type MsgSend1 = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    type MsgSendCStr = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *const std::os::raw::c_char,
+    ) -> *mut std::ffi::c_void;
+    type MsgSendFloat = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        f64,
+    ) -> *mut std::ffi::c_void;
+    type MsgSendBool = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        std::os::raw::c_schar,
+    ) -> *mut std::ffi::c_void;
+    type MsgSendUsize = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        usize,
+    ) -> *mut std::ffi::c_void;
+    type MsgSendBytes = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *const u8,
+        usize,
+    ) -> *mut std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSSize {
+        width: f64,
+        height: f64,
+    }
+    type MsgSendSize = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        NSSize,
+    ) -> *mut std::ffi::c_void;
+
+    type MsgSendInitItem = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    extern "C" {
+        fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn objc_allocateClassPair(
+            superclass: *mut std::ffi::c_void,
+            name: *const std::os::raw::c_char,
+            extraBytes: usize,
+        ) -> *mut std::ffi::c_void;
+        fn class_addMethod(
+            cls: *mut std::ffi::c_void,
+            name: *mut std::ffi::c_void,
+            imp: unsafe extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+            ),
+            types: *const std::os::raw::c_char,
+        ) -> bool;
+        fn objc_registerClassPair(cls: *mut std::ffi::c_void);
+        fn objc_msgSend();
+    }
+
+    let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_cstr: MsgSendCStr =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_float: MsgSendFloat =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_bool: MsgSendBool =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_usize: MsgSendUsize =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_size: MsgSendSize =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_bytes: MsgSendBytes =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_init_item: MsgSendInitItem =
+        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+    let alloc_sel = sel_registerName(c"alloc".as_ptr());
+    let init_sel = sel_registerName(c"init".as_ptr());
+    let retain_sel = sel_registerName(c"retain".as_ptr());
+    let set_mask_sel = sel_registerName(c"setKeyEquivalentModifierMask:".as_ptr());
+
+    // Register FunctionStatusItemTarget class if not already registered
+    let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
+    if target_cls.is_null() {
+        let ns_object = objc_getClass(c"NSObject".as_ptr());
+        target_cls = objc_allocateClassPair(
+            ns_object,
+            c"FunctionStatusItemTarget".as_ptr(),
+            0,
+        );
+        if !target_cls.is_null() {
+            unsafe extern "C" fn on_show_function(
+                _this: *mut std::ffi::c_void,
+                _cmd: *mut std::ffi::c_void,
+                _sender: *mut std::ffi::c_void,
+            ) {
+                tracing::info!("macOS menu action: Show Function");
+                tracing::info!("Dispatching PlatformCommand::ToggleWindow");
+                send_platform_command(PlatformCommand::ToggleWindow);
+            }
+
+            unsafe extern "C" fn on_settings_click(
+                _this: *mut std::ffi::c_void,
+                _cmd: *mut std::ffi::c_void,
+                _sender: *mut std::ffi::c_void,
+            ) {
+                tracing::info!("macOS menu action: Settings");
+                tracing::info!("Dispatching PlatformCommand::OpenSettings");
+                send_platform_command(PlatformCommand::OpenSettings);
+            }
+
+            unsafe extern "C" fn on_quit_function(
+                _this: *mut std::ffi::c_void,
+                _cmd: *mut std::ffi::c_void,
+                _sender: *mut std::ffi::c_void,
+            ) {
+                tracing::info!("macOS menu action: Quit Function");
+                tracing::info!("Dispatching PlatformCommand::Quit");
+                send_platform_command(PlatformCommand::Quit);
+            }
+
+            let show_sel = sel_registerName(c"onShowFunction:".as_ptr());
+            class_addMethod(target_cls, show_sel, on_show_function, c"v@:@".as_ptr());
+
+            let settings_sel = sel_registerName(c"onSettingsClick:".as_ptr());
+            class_addMethod(target_cls, settings_sel, on_settings_click, c"v@:@".as_ptr());
+
+            let quit_sel = sel_registerName(c"onQuitFunction:".as_ptr());
+            class_addMethod(target_cls, quit_sel, on_quit_function, c"v@:@".as_ptr());
+
+            objc_registerClassPair(target_cls);
         }
+    }
 
-        let target_inst = msg_send_0(msg_send_0(target_cls, alloc_sel), init_sel);
-        if !target_inst.is_null() {
-            let _ = msg_send_0(target_inst, retain_sel);
-        }
+    if target_cls.is_null() {
+        tracing::warn!("Failed to create FunctionStatusItemTarget class");
+        return;
+    }
 
-        let ns_status_bar = objc_getClass(c"NSStatusBar".as_ptr());
-        if ns_status_bar.is_null() {
-            return;
-        }
-        let system_bar_sel = sel_registerName(c"systemStatusBar".as_ptr());
-        let bar = msg_send_0(ns_status_bar, system_bar_sel);
-        if bar.is_null() {
-            return;
-        }
+    let target_inst = msg_send_0(msg_send_0(target_cls, alloc_sel), init_sel);
+    if !target_inst.is_null() {
+        let _ = msg_send_0(target_inst, retain_sel);
+        G_STATUS_TARGET.store(target_inst as isize, std::sync::atomic::Ordering::SeqCst);
+    }
 
-        let status_item_sel = sel_registerName(c"statusItemWithLength:".as_ptr());
-        // -1.0 is NSVariableStatusItemLength
-        let status_item = msg_send_float(bar, status_item_sel, -1.0);
-        if status_item.is_null() {
-            tracing::warn!("Failed to create NSStatusItem on systemStatusBar");
-            return;
-        }
-        // Crucial: Retain status_item so AppKit autorelease pool does not deallocate it!
-        let _ = msg_send_0(status_item, retain_sel);
-        G_STATUS_ITEM.store(status_item as isize, std::sync::atomic::Ordering::SeqCst);
+    let ns_status_bar = objc_getClass(c"NSStatusBar".as_ptr());
+    if ns_status_bar.is_null() {
+        return;
+    }
+    let system_bar_sel = sel_registerName(c"systemStatusBar".as_ptr());
+    let bar = msg_send_0(ns_status_bar, system_bar_sel);
+    if bar.is_null() {
+        return;
+    }
 
-        let button_sel = sel_registerName(c"button".as_ptr());
-        let button = msg_send_0(status_item, button_sel);
-        let ns_string = objc_getClass(c"NSString".as_ptr());
-        let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
+    let status_item_sel = sel_registerName(c"statusItemWithLength:".as_ptr());
+    // -1.0 is NSVariableStatusItemLength
+    let status_item = msg_send_float(bar, status_item_sel, -1.0);
+    if status_item.is_null() {
+        tracing::warn!("Failed to create NSStatusItem on systemStatusBar");
+        return;
+    }
+    // Strongly retain status_item for application lifetime
+    let _ = msg_send_0(status_item, retain_sel);
+    G_STATUS_ITEM.store(status_item as isize, std::sync::atomic::Ordering::SeqCst);
+    tracing::info!("macOS status item initialized");
 
-        let mut icon_loaded = false;
-        if let Some(icon_path) = find_macos_icon_path() {
-            if let Ok(c_path) = std::ffi::CString::new(icon_path.to_string_lossy().as_bytes()) {
-                let path_str = msg_send_cstr(ns_string, utf8_sel, c_path.as_ptr());
-                if !path_str.is_null() {
-                    let ns_image = objc_getClass(c"NSImage".as_ptr());
-                    let image_alloc = msg_send_0(ns_image, alloc_sel);
-                    let init_file_sel = sel_registerName(c"initWithContentsOfFile:".as_ptr());
-                    let image = msg_send_1(image_alloc, init_file_sel, path_str);
-                    if !image.is_null() {
-                        let _ = msg_send_0(image, retain_sel);
-                        let set_template_sel = sel_registerName(c"setTemplate:".as_ptr());
-                        msg_send_bool(image, set_template_sel, 1);
+    let button_sel = sel_registerName(c"button".as_ptr());
+    let button = msg_send_0(status_item, button_sel);
+    let ns_string = objc_getClass(c"NSString".as_ptr());
+    let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
 
-                        let set_size_sel = sel_registerName(c"setSize:".as_ptr());
-                        msg_send_size(image, set_size_sel, NSSize { width: 18.0, height: 18.0 });
+    // Load transparent logo asset from embedded bytes or disk
+    let mut icon_loaded = false;
+    let ns_data_cls = objc_getClass(c"NSData".as_ptr());
+    let ns_image_cls = objc_getClass(c"NSImage".as_ptr());
+    if !ns_data_cls.is_null() && !ns_image_cls.is_null() {
+        let data_with_bytes_sel = sel_registerName(c"dataWithBytes:length:".as_ptr());
+        let data = msg_send_bytes(
+            ns_data_cls,
+            data_with_bytes_sel,
+            MACOS_STATUS_ICON_BYTES.as_ptr(),
+            MACOS_STATUS_ICON_BYTES.len(),
+        );
+        let mut image = if !data.is_null() {
+            let image_alloc = msg_send_0(ns_image_cls, alloc_sel);
+            let init_data_sel = sel_registerName(c"initWithData:".as_ptr());
+            msg_send_1(image_alloc, init_data_sel, data)
+        } else {
+            std::ptr::null_mut()
+        };
 
-                        if !button.is_null() {
-                            let set_image_sel = sel_registerName(c"setImage:".as_ptr());
-                            msg_send_1(button, set_image_sel, image);
-                            icon_loaded = true;
-                            tracing::info!(path = %icon_path.display(), "Loaded template icon for macOS menu bar item");
-                        }
+        // Fallback to searching disk if embedded init was null
+        if image.is_null() {
+            if let Some(icon_path) = find_macos_icon_path() {
+                if let Ok(c_path) = std::ffi::CString::new(icon_path.to_string_lossy().as_bytes()) {
+                    let path_str = msg_send_cstr(ns_string, utf8_sel, c_path.as_ptr());
+                    if !path_str.is_null() {
+                        let image_alloc = msg_send_0(ns_image_cls, alloc_sel);
+                        let init_file_sel = sel_registerName(c"initWithContentsOfFile:".as_ptr());
+                        image = msg_send_1(image_alloc, init_file_sel, path_str);
                     }
                 }
             }
         }
 
-        // Derive Show Function shortcut info from the actual authoritative configuration
-        let shortcut_info = parse_macos_shortcut(hotkey_str);
+        if !image.is_null() {
+            let _ = msg_send_0(image, retain_sel);
+            // Standard status item size: 18x18 pt
+            let set_size_sel = sel_registerName(c"setSize:".as_ptr());
+            msg_send_size(image, set_size_sel, NSSize { width: 18.0, height: 18.0 });
 
-        if !button.is_null() {
-            if !icon_loaded {
-                static TITLE_CSTR: &std::ffi::CStr = c"ƒ";
-                let title = msg_send_cstr(ns_string, utf8_sel, TITLE_CSTR.as_ptr());
-                if !title.is_null() {
-                    let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
-                    msg_send_1(button, set_title_sel, title);
-                }
+            // Template rendering allows macOS to automatically shade the icon
+            // for both light and dark menu bars while preserving transparency
+            let set_template_sel = sel_registerName(c"setTemplate:".as_ptr());
+            msg_send_bool(image, set_template_sel, 1);
+
+            if !button.is_null() {
+                let set_image_sel = sel_registerName(c"setImage:".as_ptr());
+                msg_send_1(button, set_image_sel, image);
+                let set_img_pos_sel = sel_registerName(c"setImagePosition:".as_ptr());
+                // NSImageOnly = 1
+                msg_send_usize(button, set_img_pos_sel, 1);
+                icon_loaded = true;
+                tracing::info!("Loaded transparent template icon for macOS status item");
             }
+        }
+    }
 
-            let tip_label = if let Some(ref sc) = shortcut_info {
-                format!("Function ({})", sc.display_label)
-            } else {
-                "Function".to_string()
-            };
-            if let Ok(c_tip) = std::ffi::CString::new(tip_label.as_bytes()) {
-                let tip = msg_send_cstr(ns_string, utf8_sel, c_tip.as_ptr());
-                if !tip.is_null() {
-                    let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
-                    msg_send_1(button, set_tip_sel, tip);
-                }
+    if !button.is_null() {
+        if !icon_loaded {
+            static TITLE_CSTR: &std::ffi::CStr = c"ƒ";
+            let title = msg_send_cstr(ns_string, utf8_sel, TITLE_CSTR.as_ptr());
+            if !title.is_null() {
+                let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
+                msg_send_1(button, set_title_sel, title);
             }
         }
 
-        // Build native NSMenu
-        let ns_menu_cls = objc_getClass(c"NSMenu".as_ptr());
-        let ns_menu_item_cls = objc_getClass(c"NSMenuItem".as_ptr());
-        if !ns_menu_cls.is_null() && !ns_menu_item_cls.is_null() {
-            let menu_alloc = msg_send_0(ns_menu_cls, alloc_sel);
-            let menu_init_sel = sel_registerName(c"initWithTitle:".as_ptr());
-            let menu_title = msg_send_cstr(ns_string, utf8_sel, c"FunctionMenu".as_ptr());
-            let menu = msg_send_1(menu_alloc, menu_init_sel, menu_title);
-            if !menu.is_null() {
-                let _ = msg_send_0(menu, retain_sel);
-
-                let set_autoenables_sel = sel_registerName(c"setAutoenablesItems:".as_ptr());
-                msg_send_bool(menu, set_autoenables_sel, 0);
-
-                let add_item_sel = sel_registerName(c"addItem:".as_ptr());
-                let sep_sel = sel_registerName(c"separatorItem".as_ptr());
-                let init_item_sel = sel_registerName(c"initWithTitle:action:keyEquivalent:".as_ptr());
-                let set_target_sel = sel_registerName(c"setTarget:".as_ptr());
-                let set_enabled_sel = sel_registerName(c"setEnabled:".as_ptr());
-
-                // 1. "Function" (disabled header)
-                let f_title = msg_send_cstr(ns_string, utf8_sel, c"Function".as_ptr());
-                let empty_key = msg_send_cstr(ns_string, utf8_sel, c"".as_ptr());
-                let header_item = msg_send_init_item(
-                    msg_send_0(ns_menu_item_cls, alloc_sel),
-                    init_item_sel,
-                    f_title,
-                    std::ptr::null_mut(),
-                    empty_key,
-                );
-                msg_send_bool(header_item, set_enabled_sel, 0);
-                msg_send_1(menu, add_item_sel, header_item);
-
-                // Separator
-                let sep1 = msg_send_0(ns_menu_item_cls, sep_sel);
-                msg_send_1(menu, add_item_sel, sep1);
-
-                // 2. "Show Function" (action: onShowFunction:, derived keyEquivalent & modifiers)
-                let show_title = msg_send_cstr(ns_string, utf8_sel, c"Show Function".as_ptr());
-                let (show_key_str, show_mask) = if let Some(ref sc) = shortcut_info {
-                    (sc.key_char.clone(), sc.modifier_mask)
-                } else {
-                    ("".to_string(), 0usize)
-                };
-                let show_key_cstr = std::ffi::CString::new(show_key_str.as_bytes()).unwrap_or_default();
-                let show_key = msg_send_cstr(ns_string, utf8_sel, show_key_cstr.as_ptr());
-                let show_act = sel_registerName(c"onShowFunction:".as_ptr());
-                let show_item = msg_send_init_item(
-                    msg_send_0(ns_menu_item_cls, alloc_sel),
-                    init_item_sel,
-                    show_title,
-                    show_act,
-                    show_key,
-                );
-                msg_send_usize(show_item, set_mask_sel, show_mask);
-                msg_send_1(show_item, set_target_sel, target_inst);
-                msg_send_bool(show_item, set_enabled_sel, 1);
-                msg_send_1(menu, add_item_sel, show_item);
-
-                // Separator
-                let sep2 = msg_send_0(ns_menu_item_cls, sep_sel);
-                msg_send_1(menu, add_item_sel, sep2);
-
-                // 3. "Settings" (action: onSettingsClick:, key: ⌘,)
-                let settings_title = msg_send_cstr(ns_string, utf8_sel, c"Settings".as_ptr());
-                let comma_key = msg_send_cstr(ns_string, utf8_sel, c",".as_ptr());
-                let settings_act = sel_registerName(c"onSettingsClick:".as_ptr());
-                let settings_item = msg_send_init_item(
-                    msg_send_0(ns_menu_item_cls, alloc_sel),
-                    init_item_sel,
-                    settings_title,
-                    settings_act,
-                    comma_key,
-                );
-                msg_send_usize(settings_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
-                msg_send_1(settings_item, set_target_sel, target_inst);
-                msg_send_bool(settings_item, set_enabled_sel, 1);
-                msg_send_1(menu, add_item_sel, settings_item);
-
-                // Separator
-                let sep3 = msg_send_0(ns_menu_item_cls, sep_sel);
-                msg_send_1(menu, add_item_sel, sep3);
-
-                // 4. "Quit Function" (action: onQuitFunction:, key: ⌘Q)
-                let quit_title = msg_send_cstr(ns_string, utf8_sel, c"Quit Function".as_ptr());
-                let q_key = msg_send_cstr(ns_string, utf8_sel, c"q".as_ptr());
-                let quit_act = sel_registerName(c"onQuitFunction:".as_ptr());
-                let quit_item = msg_send_init_item(
-                    msg_send_0(ns_menu_item_cls, alloc_sel),
-                    init_item_sel,
-                    quit_title,
-                    quit_act,
-                    q_key,
-                );
-                msg_send_usize(quit_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
-                msg_send_1(quit_item, set_target_sel, target_inst);
-                msg_send_bool(quit_item, set_enabled_sel, 1);
-                msg_send_1(menu, add_item_sel, quit_item);
-
-                let set_menu_sel = sel_registerName(c"setMenu:".as_ptr());
-                msg_send_1(status_item, set_menu_sel, menu);
-            }
+        let tip = msg_send_cstr(ns_string, utf8_sel, c"Function (Double Command)".as_ptr());
+        if !tip.is_null() {
+            let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
+            msg_send_1(button, set_tip_sel, tip);
         }
+    }
 
-        tracing::info!("Function menu bar item initialized");
+    // Build clean native NSMenu:
+    // Show Function      ⌘ ⌘
+    // ----------------------
+    // Settings            ⌘ ,
+    // ----------------------
+    // Quit Function       ⌘ Q
+    let ns_menu_cls = objc_getClass(c"NSMenu".as_ptr());
+    let ns_menu_item_cls = objc_getClass(c"NSMenuItem".as_ptr());
+    if !ns_menu_cls.is_null() && !ns_menu_item_cls.is_null() {
+        let menu_alloc = msg_send_0(ns_menu_cls, alloc_sel);
+        let menu_init_sel = sel_registerName(c"initWithTitle:".as_ptr());
+        let menu_title = msg_send_cstr(ns_string, utf8_sel, c"FunctionMenu".as_ptr());
+        let menu = msg_send_1(menu_alloc, menu_init_sel, menu_title);
+        if !menu.is_null() {
+            let _ = msg_send_0(menu, retain_sel);
+            G_STATUS_MENU.store(menu as isize, std::sync::atomic::Ordering::SeqCst);
+
+            let set_autoenables_sel = sel_registerName(c"setAutoenablesItems:".as_ptr());
+            msg_send_bool(menu, set_autoenables_sel, 0);
+
+            let add_item_sel = sel_registerName(c"addItem:".as_ptr());
+            let sep_sel = sel_registerName(c"separatorItem".as_ptr());
+            let init_item_sel = sel_registerName(c"initWithTitle:action:keyEquivalent:".as_ptr());
+            let set_target_sel = sel_registerName(c"setTarget:".as_ptr());
+            let set_enabled_sel = sel_registerName(c"setEnabled:".as_ptr());
+
+            // 1. "Show Function      ⌘ ⌘"
+            // Double Command cannot be represented as single keyEquivalent; visual label is used.
+            let show_title = msg_send_cstr(ns_string, utf8_sel, c"Show Function      \u{2318} \u{2318}".as_ptr());
+            let empty_key = msg_send_cstr(ns_string, utf8_sel, c"".as_ptr());
+            let show_act = sel_registerName(c"onShowFunction:".as_ptr());
+            let show_item = msg_send_init_item(
+                msg_send_0(ns_menu_item_cls, alloc_sel),
+                init_item_sel,
+                show_title,
+                show_act,
+                empty_key,
+            );
+            msg_send_usize(show_item, set_mask_sel, 0);
+            msg_send_1(show_item, set_target_sel, target_inst);
+            msg_send_bool(show_item, set_enabled_sel, 1);
+            msg_send_1(menu, add_item_sel, show_item);
+
+            // Separator
+            let sep1 = msg_send_0(ns_menu_item_cls, sep_sel);
+            msg_send_1(menu, add_item_sel, sep1);
+
+            // 2. "Settings" (keyEquivalent: ⌘,)
+            let settings_title = msg_send_cstr(ns_string, utf8_sel, c"Settings".as_ptr());
+            let comma_key = msg_send_cstr(ns_string, utf8_sel, c",".as_ptr());
+            let settings_act = sel_registerName(c"onSettingsClick:".as_ptr());
+            let settings_item = msg_send_init_item(
+                msg_send_0(ns_menu_item_cls, alloc_sel),
+                init_item_sel,
+                settings_title,
+                settings_act,
+                comma_key,
+            );
+            msg_send_usize(settings_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
+            msg_send_1(settings_item, set_target_sel, target_inst);
+            msg_send_bool(settings_item, set_enabled_sel, 1);
+            msg_send_1(menu, add_item_sel, settings_item);
+
+            // Separator
+            let sep2 = msg_send_0(ns_menu_item_cls, sep_sel);
+            msg_send_1(menu, add_item_sel, sep2);
+
+            // 3. "Quit Function" (keyEquivalent: ⌘Q)
+            let quit_title = msg_send_cstr(ns_string, utf8_sel, c"Quit Function".as_ptr());
+            let q_key = msg_send_cstr(ns_string, utf8_sel, c"q".as_ptr());
+            let quit_act = sel_registerName(c"onQuitFunction:".as_ptr());
+            let quit_item = msg_send_init_item(
+                msg_send_0(ns_menu_item_cls, alloc_sel),
+                init_item_sel,
+                quit_title,
+                quit_act,
+                q_key,
+            );
+            msg_send_usize(quit_item, set_mask_sel, NSEVENT_MODIFIER_FLAG_COMMAND);
+            msg_send_1(quit_item, set_target_sel, target_inst);
+            msg_send_bool(quit_item, set_enabled_sel, 1);
+            msg_send_1(menu, add_item_sel, quit_item);
+
+            let set_menu_sel = sel_registerName(c"setMenu:".as_ptr());
+            msg_send_1(status_item, set_menu_sel, menu);
+            tracing::info!("macOS status menu initialized");
+        }
     }
 }
 
@@ -2510,11 +2390,9 @@ pub fn setup_macos_double_command_listener() {
                                 let interval = now.duration_since(prev_up);
                                 // Interval between tap 1 release and tap 2 release: max 450ms
                                 if interval.as_millis() <= 450 {
-                                    tracing::info!(
-                                        interval_ms = interval.as_millis(),
-                                        "macOS double-tap Command detected - toggling Function window"
-                                    );
-                                    trigger_global_hotkey();
+                                    tracing::info!("Double Command detected");
+                                    tracing::info!("Dispatching PlatformCommand::ToggleWindow");
+                                    send_platform_command(PlatformCommand::ToggleWindow);
                                     state.last_down = None;
                                     state.last_tap_up = None;
                                     return;
@@ -3064,11 +2942,11 @@ mod tests {
 
     #[test]
     fn test_parse_macos_shortcut() {
-        // Command+;
-        let sc1 = parse_macos_shortcut("Command+;").expect("should parse Command+;");
-        assert_eq!(sc1.key_char, ";");
-        assert_eq!(sc1.modifier_mask, 0x0010_0000);
-        assert_eq!(sc1.display_label, "⌘;");
+        // Double Command
+        let sc1 = parse_macos_shortcut("Double Command").expect("should parse Double Command");
+        assert_eq!(sc1.key_char, "");
+        assert_eq!(sc1.modifier_mask, 0);
+        assert_eq!(sc1.display_label, "⌘ ⌘");
 
         // Option+Space
         let sc2 = parse_macos_shortcut("Option+Space").expect("should parse Option+Space");

@@ -67,11 +67,14 @@ fn main() {
     let mic_available = runtime.block_on(platform.is_microphone_available());
     let mic_configured = config.speech.is_configured();
 
-    // Register global hotkey
-    let hotkey_shortcut = config.hotkey.clone();
-    let register_res = runtime.block_on(platform.register_hotkey(&hotkey_shortcut));
-    if let Err(e) = register_res {
-        tracing::warn!(error = %e, "Failed to register global hotkey");
+    // Register global hotkey (Windows uses native RegisterHotKey; macOS uses global Double Command)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let hotkey_shortcut = config.hotkey.clone();
+        let register_res = runtime.block_on(platform.register_hotkey(&hotkey_shortcut));
+        if let Err(e) = register_res {
+            tracing::warn!(error = %e, "Failed to register global hotkey");
+        }
     }
 
     let initial_size = Size::new(px(640.0), px(112.0));
@@ -339,7 +342,7 @@ fn main() {
                                         let _ = cx.update(|cx| {
                                             cx.quit();
                                         });
-                                        break;
+                                        std::process::exit(0);
                                     }
                                     Err(_) => break,
                                 }
@@ -359,7 +362,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         {
             function_platform::set_macos_activation_policy_accessory();
-            function_platform::setup_macos_menu_bar_icon(&config.hotkey);
+            function_platform::setup_macos_menu_bar_icon();
             function_platform::setup_macos_double_command_listener();
             function_platform::register_macos_login_item();
         }

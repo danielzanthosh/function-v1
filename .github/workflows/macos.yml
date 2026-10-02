@@ -49,6 +49,8 @@ jobs:
           # 3. Copy application resources
           cp assets/icon.ico Function.app/Contents/Resources/icon.ico
           cp assets/icon.png Function.app/Contents/Resources/icon.png
+          cp "assets/brand/White logo in Tranparent.png" "Function.app/Contents/Resources/White logo in Tranparent.png"
+          cp "assets/brand/White logo in Tranparent.png" Function.app/Contents/Resources/menu_icon.png
 
           # 4. Generate AppIcon.icns from brand icon
           mkdir -p icon.iconset
