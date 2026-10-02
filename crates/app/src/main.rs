@@ -6,6 +6,8 @@
 //! If the microphone is not configured or unavailable, automatically opens a Spotlight-like
 //! command bar for fast keyboard-first interaction.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use function_config::AppConfig;
 use function_platform::{create_native_platform_service, PlatformService};
 use function_ui::{
