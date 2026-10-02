@@ -9,6 +9,7 @@
 //! - Local IP address inspection and copy (`ipadr`)
 //! - In-app AI provider and API key configuration (`Ctrl+,` or `settings`)
 
+use std::time::Duration;
 use crate::actions::{
     CancelTask, ClearInput, CloseFunction, SubmitRequest, ToggleExpanded, ToggleSpotlight,
     ToggleTheme, ToggleVoice,
@@ -20,20 +21,64 @@ use crate::components::launcher_icons::{
 use crate::components::spotlight_bar::{
     get_current_time_string, get_launcher_items, LauncherAction, LauncherIconType,
 };
-use crate::components::{render_brand_mark, render_logo, ActivityEntry, ActivityStatus};
+use crate::components::{
+    render_brand_mark, render_inline_text, render_logo, render_markdown, ActivityEntry,
+    ActivityStatus,
+};
 use crate::local_commands::{resolve_local_command, LocalCommand};
 use crate::theme::Theme;
 use crate::views::render_settings_view;
 use function_agent::AgentState;
 use function_config::AppConfig;
-use function_platform::{copy_to_clipboard, open_url, play_sound, SoundEffect};
+use function_platform::{
+    copy_to_clipboard, open_url, play_sound, read_clipboard_image, SoundEffect,
+};
 use function_providers::ChatMessage;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba, Size,
     Task, Timer, WeakEntity, Window,
 };
-use std::time::Duration;
+/// Checks if a key string represents a named control key rather than text to type.
+fn is_named_control_key(k: &str) -> bool {
+    matches!(
+        k,
+        "up" | "down" | "left" | "right" | "enter" | "return" | "tab" | "escape" | "esc"
+            | "backspace" | "delete" | "home" | "end" | "pageup" | "pagedown" | "shift"
+            | "control" | "ctrl" | "alt" | "option" | "command" | "cmd" | "super"
+            | "capslock" | "insert" | "printscreen" | "scrolllock" | "pause" | "menu"
+            | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12"
+    )
+}
+
+/// Maps a character to its shifted counterpart on standard keyboards.
+fn shift_char(c: char) -> char {
+    match c {
+        'a'..='z' => c.to_ascii_uppercase(),
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '`' => '~',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        other => other,
+    }
+}
 
 /// A single message in the visible chat log.
 #[derive(Debug, Clone)]
@@ -220,11 +265,38 @@ impl FunctionView {
                                         status: ActivityStatus::Running,
                                     });
                                 }
+                                AgentState::Streaming { chunk: _, accumulated } => {
+                                    view.state = state_clone.clone();
+                                    view.latest_result = Some(accumulated.clone());
+                                    if let Some(last) = view.chat_display.last_mut() {
+                                        if !last.is_user {
+                                            last.text = accumulated.clone();
+                                        } else {
+                                            view.chat_display.push(ChatEntry {
+                                                is_user: false,
+                                                text: accumulated.clone(),
+                                            });
+                                        }
+                                    } else {
+                                        view.chat_display.push(ChatEntry {
+                                            is_user: false,
+                                            text: accumulated.clone(),
+                                        });
+                                    }
+                                }
                                 AgentState::Completed { summary, new_history } => {
                                     view.state = state_clone.clone();
                                     view.latest_result = Some(summary.clone());
-                                    // Push AI reply into the visible chat log
-                                    if !summary.is_empty() {
+                                    if let Some(last) = view.chat_display.last_mut() {
+                                        if !last.is_user {
+                                            last.text = summary.clone();
+                                        } else if !summary.is_empty() {
+                                            view.chat_display.push(ChatEntry {
+                                                is_user: false,
+                                                text: summary.clone(),
+                                            });
+                                        }
+                                    } else if !summary.is_empty() {
                                         view.chat_display.push(ChatEntry {
                                             is_user: false,
                                             text: summary.clone(),
@@ -238,10 +310,14 @@ impl FunctionView {
                                 }
                                 AgentState::Error { message } => {
                                     view.state = state_clone.clone();
-                                    view.latest_result = Some(format!("Error: {}", message));
-                                    if let Some(last) = view.activities.last_mut() {
-                                        last.status = ActivityStatus::Failed;
-                                    }
+                                    let err_text = format!("Error: {}", message);
+                                    view.latest_result = Some(err_text.clone());
+                                    view.chat_display.push(ChatEntry {
+                                        is_user: false,
+                                        text: err_text,
+                                    });
+                                    view.active_task = None;
+                                    view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Error);
                                 }
                                 AgentState::WaitingForConfirmation { action, .. } => {
@@ -319,12 +395,15 @@ impl FunctionView {
             };
         }
 
-        // If we have a chat history, size the window to show it
+        // If we have a chat history, size the window dynamically to show it
         if !self.chat_display.is_empty() {
-            // Each message entry roughly: user ~40px, assistant ~60px; add input bar 56px + padding
-            let msg_count = self.chat_display.len();
-            let estimated_h = 56.0 + (msg_count as f32 * 72.0) + 24.0;
-            let clamped = estimated_h.min(560.0).max(200.0);
+            let total_lines: usize = self
+                .chat_display
+                .iter()
+                .map(|e| e.text.lines().count().max(1))
+                .sum();
+            let estimated_h = 56.0 + (total_lines as f32 * 26.0) + (self.chat_display.len() as f32 * 24.0) + 32.0;
+            let clamped = estimated_h.min(580.0).max(220.0);
             return Size {
                 width: px(640.0),
                 height: px(clamped),
@@ -1025,7 +1104,7 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
-                "v" if modifiers.secondary() => {
+                "v" if modifiers.secondary() || modifiers.control || modifiers.platform => {
                     if let Some(text) = cx
                         .read_from_clipboard()
                         .and_then(|clipboard| clipboard.text())
@@ -1077,11 +1156,18 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
-                ch if ch.len() == 1 && !modifiers.control && !modifiers.alt => {
+                ch if !is_named_control_key(ch) && !modifiers.control && !modifiers.alt => {
+                    let text = if ch.chars().count() == 1 {
+                        let c = ch.chars().next().unwrap();
+                        let typed = if modifiers.shift { shift_char(c) } else { c };
+                        typed.to_string()
+                    } else {
+                        ch.to_string()
+                    };
                     match self.settings_focused_field {
-                        0 => self.settings_api_key.push_str(ch),
-                        1 => self.settings_model.push_str(ch),
-                        2 => self.settings_base_url.push_str(ch),
+                        0 => self.settings_api_key.push_str(&text),
+                        1 => self.settings_model.push_str(&text),
+                        2 => self.settings_base_url.push_str(&text),
                         _ => {}
                     }
                     cx.notify();
@@ -1095,7 +1181,7 @@ impl FunctionView {
         // ==========================================
         // TEXT SELECTION & CLIPBOARD SHORTCUTS
         // ==========================================
-        if key == "a" && modifiers.secondary() {
+        if key == "a" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
             if !self.input_buffer.is_empty() {
                 self.is_text_selected = true;
                 self.play_sound_feedback(SoundEffect::Select);
@@ -1104,7 +1190,7 @@ impl FunctionView {
             return;
         }
 
-        if key == "c" && modifiers.secondary() {
+        if key == "c" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
             let text_to_copy = if !self.input_buffer.is_empty() {
                 self.input_buffer.as_str()
             } else if let Some(ref res) = self.latest_result {
@@ -1120,7 +1206,7 @@ impl FunctionView {
             return;
         }
 
-        if key == "x" && modifiers.secondary() {
+        if key == "x" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
             if !self.input_buffer.is_empty() {
                 copy_to_clipboard(&self.input_buffer);
                 self.input_buffer.clear();
@@ -1133,7 +1219,25 @@ impl FunctionView {
             return;
         }
 
-        if key == "v" && modifiers.secondary() {
+        if key == "v" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
+            if let Some(img_path) = read_clipboard_image() {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.is_text_selected = false;
+                }
+                let img_str = format!("[Photo: {}] ", img_path.display());
+                self.input_buffer.push_str(&img_str);
+                self.selected_index = 0;
+                self.cursor_visible = true;
+                let target_sz = self.target_window_size();
+                if window.bounds().size != target_sz {
+                    window.resize(target_sz);
+                }
+                self.play_sound_feedback(SoundEffect::Select);
+                cx.notify();
+                return;
+            }
+
             if let Some(text) = cx
                 .read_from_clipboard()
                 .and_then(|clipboard| clipboard.text())
@@ -1142,10 +1246,32 @@ impl FunctionView {
                     self.input_buffer.clear();
                     self.is_text_selected = false;
                 }
-                self.input_buffer.push_str(&text);
+                let trimmed = text.trim();
+                let path = std::path::Path::new(trimmed);
+                if path.exists() {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if matches!(
+                        ext.as_str(),
+                        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+                    ) {
+                        self.input_buffer
+                            .push_str(&format!("[Photo: {}] ", path.display()));
+                    } else {
+                        self.input_buffer.push_str(&text);
+                    }
+                } else {
+                    self.input_buffer.push_str(&text);
+                }
                 self.selected_index = 0;
                 self.cursor_visible = true;
-                window.resize(self.target_window_size());
+                let target_sz = self.target_window_size();
+                if window.bounds().size != target_sz {
+                    window.resize(target_sz);
+                }
                 cx.notify();
             }
             return;
@@ -1284,12 +1410,18 @@ impl FunctionView {
                 }
                 cx.notify();
             }
-            ch if ch.len() == 1 && !modifiers.control && !modifiers.alt => {
+            ch if !is_named_control_key(ch) && !modifiers.control && !modifiers.alt => {
                 if self.is_text_selected {
                     self.input_buffer.clear();
                     self.is_text_selected = false;
                 }
-                self.input_buffer.push_str(ch);
+                if ch.chars().count() == 1 {
+                    let c = ch.chars().next().unwrap();
+                    let typed = if modifiers.shift { shift_char(c) } else { c };
+                    self.input_buffer.push(typed);
+                } else {
+                    self.input_buffer.push_str(ch);
+                }
                 self.selected_index = 0;
                 self.cursor_visible = true;
                 let target_sz = self.target_window_size();
@@ -1464,13 +1596,7 @@ impl Render for FunctionView {
                                                 ..theme.accent_primary
                                             })
                                             .max_w(px(460.0))
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::NORMAL)
-                                                    .text_color(theme.text_primary)
-                                                    .child(entry.text),
-                                            ),
+                                            .child(render_inline_text(&entry.text, &theme)),
                                     )
                                     .into_any_element()
                             } else {
@@ -1489,14 +1615,7 @@ impl Render for FunctionView {
                                             .flex_1()
                                             .px(px(4.0))
                                             .py(px(2.0))
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .line_height(px(22.0))
-                                                    .font_weight(gpui::FontWeight::NORMAL)
-                                                    .text_color(theme.text_primary)
-                                                    .child(entry.text),
-                                            ),
+                                            .child(render_markdown(&entry.text, &theme)),
                                     )
                                     .into_any_element()
                             }

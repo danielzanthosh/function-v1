@@ -40,7 +40,7 @@ impl LlmProvider for OpenAiLlmProvider {
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let endpoint = format!("{}/chat/completions", self.base_url);
-        let model = if req.model.is_empty() {
+        let model = if req.model.is_empty() || req.model == "default" {
             &self.default_model
         } else {
             &req.model
@@ -116,12 +116,13 @@ impl LlmProvider for OpenAiLlmProvider {
 
         let body_str = payload.to_string();
 
-        // Perform HTTP request asynchronously via tokio::process or std::process in spawn_blocking
+        // Perform HTTP request asynchronously via piped curl stdin to prevent Windows quote mangling
         let base_url = endpoint.clone();
         let api_key = self.api_key.clone();
 
         let response_body =
             tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
+                use std::io::Write;
                 let curl_bin = if cfg!(target_os = "windows") {
                     "curl.exe"
                 } else {
@@ -141,11 +142,25 @@ impl LlmProvider for OpenAiLlmProvider {
                     }
                 }
 
-                cmd.arg("--data-raw").arg(&body_str);
+                cmd.arg("--data-binary").arg("@-");
+                cmd.stdin(std::process::Stdio::piped());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
 
-                let output = cmd
-                    .output()
+                let mut child = cmd
+                    .spawn()
                     .map_err(|e| ProviderError::Network(e.to_string()))?;
+
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin
+                        .write_all(body_str.as_bytes())
+                        .map_err(|e| ProviderError::Network(e.to_string()))?;
+                }
+
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| ProviderError::Network(e.to_string()))?;
+
                 if !output.status.success() {
                     return Err(ProviderError::Network(format!(
                         "curl exited with code {:?}",
@@ -157,6 +172,7 @@ impl LlmProvider for OpenAiLlmProvider {
             })
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))??;
+
 
         let parsed: serde_json::Value = serde_json::from_str(&response_body)?;
 
@@ -241,6 +257,144 @@ impl LlmProvider for OpenAiLlmProvider {
                 tool_calls,
             },
             finish_reason,
+        })
+    }
+
+    async fn complete_stream(
+        &self,
+        req: CompletionRequest,
+        mut on_token: Box<dyn FnMut(String) + Send>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        if !req.tools.is_empty() {
+            let res = self.complete(req).await?;
+            if !res.message.content.is_empty() {
+                on_token(res.message.content.clone());
+            }
+            return Ok(res);
+        }
+
+        let endpoint = format!("{}/chat/completions", self.base_url);
+        let model = if req.model.is_empty() || req.model == "default" {
+            &self.default_model
+        } else {
+            &req.model
+        };
+
+        let messages_json: Vec<serde_json::Value> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let role_str = match m.role {
+                    MessageRole::System => "system",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                };
+                json!({
+                    "role": role_str,
+                    "content": m.content,
+                })
+            })
+            .collect();
+
+        let mut payload = json!({
+            "model": model,
+            "messages": messages_json,
+            "stream": true,
+        });
+
+        if let Some(temp) = req.temperature {
+            payload["temperature"] = json!(temp);
+        }
+
+        let body_str = payload.to_string();
+        let base_url = endpoint.clone();
+        let api_key = self.api_key.clone();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        let stream_task = tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
+            use std::io::{BufRead, BufReader, Write};
+            let curl_bin = if cfg!(target_os = "windows") {
+                "curl.exe"
+            } else {
+                "curl"
+            };
+            let mut cmd = Command::new(curl_bin);
+            cmd.arg("-s")
+                .arg("-N")
+                .arg("-X")
+                .arg("POST")
+                .arg(&base_url)
+                .arg("-H")
+                .arg("Content-Type: application/json");
+
+            if let Some(ref key) = api_key {
+                if !key.is_empty() {
+                    cmd.arg("-H").arg(format!("Authorization: Bearer {}", key));
+                }
+            }
+
+            cmd.arg("--data-binary").arg("@-");
+            cmd.stdin(std::process::Stdio::piped());
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| ProviderError::Network(e.to_string()))?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(body_str.as_bytes())
+                    .map_err(|e| ProviderError::Network(e.to_string()))?;
+            }
+
+            let mut accumulated = String::new();
+            if let Some(stdout) = child.stdout.take() {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line_str) = line {
+                        let trimmed = line_str.trim();
+                        if trimmed.starts_with("data: ") {
+                            let data = &trimmed[6..];
+                            if data.trim() == "[DONE]" {
+                                break;
+                            }
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                                if let Some(delta) = val
+                                    .pointer("/choices/0/delta/content")
+                                    .and_then(|v| v.as_str())
+                                {
+                                    accumulated.push_str(delta);
+                                    let _ = tx.send(delta.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let _ = child.wait();
+            Ok(accumulated)
+        });
+
+        while let Some(chunk) = rx.recv().await {
+            on_token(chunk);
+        }
+
+        let full_content = stream_task
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))??;
+
+        Ok(CompletionResponse {
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: full_content,
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            finish_reason: Some("stop".to_string()),
         })
     }
 }
@@ -352,3 +506,20 @@ impl SpeechToTextProvider for WhisperSttProvider {
         .map_err(|e| ProviderError::Network(e.to_string()))?
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_openai_call_structure() {
+        let provider = OpenAiLlmProvider::new(
+            "https://api.openai.com/v1",
+            Some("test_key".to_string()),
+            "gpt-4o",
+        );
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+}
+
+

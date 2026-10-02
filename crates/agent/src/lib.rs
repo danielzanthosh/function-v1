@@ -31,6 +31,7 @@ pub enum AgentState {
     Idle,
     Listening,
     Processing { thought_summary: Option<String> },
+    Streaming { chunk: String, accumulated: String },
     Acting { action_description: String },
     WaitingForConfirmation { action: String, details: String },
     Completed { summary: String, new_history: Vec<ChatMessage> },
@@ -45,6 +46,10 @@ impl PartialEq for AgentState {
             (
                 AgentState::Processing { thought_summary: a },
                 AgentState::Processing { thought_summary: b },
+            ) => a == b,
+            (
+                AgentState::Streaming { accumulated: a, .. },
+                AgentState::Streaming { accumulated: b, .. },
             ) => a == b,
             (
                 AgentState::Acting { action_description: a },
@@ -187,13 +192,28 @@ Your primary role is to be a helpful conversational AI:
                 temperature: Some(0.7),
             };
 
-            let response = self.provider.complete(req).await.map_err(|e| {
-                let err = AgentError::Provider(e.to_string());
-                self.update_state(AgentState::Error {
-                    message: err.to_string(),
-                });
-                err
-            })?;
+            let state_tx_clone = self.state_tx.clone();
+            let mut stream_accumulated = String::new();
+            let response = self
+                .provider
+                .complete_stream(
+                    req,
+                    Box::new(move |token: String| {
+                        stream_accumulated.push_str(&token);
+                        let _ = state_tx_clone.send(AgentState::Streaming {
+                            chunk: token,
+                            accumulated: stream_accumulated.clone(),
+                        });
+                    }),
+                )
+                .await
+                .map_err(|e| {
+                    let err = AgentError::Provider(e.to_string());
+                    self.update_state(AgentState::Error {
+                        message: err.to_string(),
+                    });
+                    err
+                })?;
 
             let response_msg = response.message;
 

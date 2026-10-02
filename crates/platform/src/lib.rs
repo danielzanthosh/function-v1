@@ -2282,6 +2282,125 @@ pub fn copy_to_clipboard(text: &str) -> bool {
     }
 }
 
+/// Read an image from the clipboard, saving it to ~/.function/attachments/ if it's raw bitmap data,
+/// or resolving its path if an image file was copied.
+pub fn read_clipboard_image() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        extern "system" {
+            fn OpenClipboard(hWndNewOwner: isize) -> i32;
+            fn CloseClipboard() -> i32;
+            fn IsClipboardFormatAvailable(format: u32) -> i32;
+            fn GetClipboardData(uFormat: u32) -> isize;
+            fn DragQueryFileW(hDrop: isize, iFile: u32, lpszFile: *mut u16, cch: u32) -> u32;
+        }
+
+        const CF_BITMAP: u32 = 2;
+        const CF_DIB: u32 = 8;
+        const CF_HDROP: u32 = 15;
+
+        unsafe {
+            if OpenClipboard(0) != 0 {
+                // 1. Check for copied files (CF_HDROP)
+                if IsClipboardFormatAvailable(CF_HDROP) != 0 {
+                    let h_drop = GetClipboardData(CF_HDROP);
+                    if h_drop != 0 {
+                        let mut buf = [0u16; 1024];
+                        let len = DragQueryFileW(h_drop, 0, buf.as_mut_ptr(), 1024);
+                        if len > 0 {
+                            let path_str = String::from_utf16_lossy(&buf[..len as usize]);
+                            let path = std::path::PathBuf::from(path_str);
+                            let ext = path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if matches!(
+                                ext.as_str(),
+                                "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+                            ) {
+                                CloseClipboard();
+                                return Some(path);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Check for raw bitmap / DIB image data (screenshots, copied images from browser)
+                let has_image = IsClipboardFormatAvailable(CF_BITMAP) != 0
+                    || IsClipboardFormatAvailable(CF_DIB) != 0;
+                CloseClipboard();
+
+                if has_image {
+                    let home = std::env::var_os("USERPROFILE")
+                        .or_else(|| std::env::var_os("HOME"))
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let mut dir = home;
+                    dir.push(".function");
+                    dir.push("attachments");
+                    let _ = std::fs::create_dir_all(&dir);
+
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    let out_path = dir.join(format!("photo_{}.png", ts));
+
+                    let ps_script = format!(
+                        "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img -ne $null) {{ $img.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png); exit 0 }} else {{ exit 1 }}",
+                        out_path.display().to_string().replace('\\', "\\\\")
+                    );
+
+                    let res = std::process::Command::new("powershell")
+                        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+                        .output();
+
+                    if let Ok(out) = res {
+                        if out.status.success() && out_path.exists() {
+                            return Some(out_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let mut dir = home;
+        dir.push(".function");
+        dir.push("attachments");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let out_path = dir.join(format!("photo_{}.png", ts));
+
+        let osascript = format!(
+            "set png_data to the clipboard as «class PNGf»\nset fp to open for access POSIX file \"{}\" with write permission\nwrite png_data to fp\nclose access fp",
+            out_path.display()
+        );
+
+        let res = std::process::Command::new("osascript")
+            .args(["-e", &osascript])
+            .output();
+
+        if let Ok(out) = res {
+            if out.status.success() && out_path.exists() {
+                return Some(out_path);
+            }
+        }
+    }
+
+    None
+}
+
 /// Open a URL or shell command target with default system handler.
 pub fn open_url(url: &str) {
     #[cfg(target_os = "windows")]

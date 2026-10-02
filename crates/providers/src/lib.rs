@@ -126,6 +126,19 @@ pub trait LlmProvider: Send + Sync {
 
     /// Execute a chat completion request.
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
+
+    /// Execute a chat completion request with an optional token streaming callback.
+    async fn complete_stream(
+        &self,
+        req: CompletionRequest,
+        mut on_token: Box<dyn FnMut(String) + Send>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        let res = self.complete(req).await?;
+        if !res.message.content.is_empty() {
+            on_token(res.message.content.clone());
+        }
+        Ok(res)
+    }
 }
 
 /// Abstraction for Speech-to-Text providers (e.g. Whisper).

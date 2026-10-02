@@ -21,6 +21,7 @@ pub fn render_status_badge(state: &AgentState, theme: &Theme) -> impl IntoElemen
         AgentState::WaitingForConfirmation { .. } => {
             (theme.status_processing, "Confirmation Required".to_string())
         }
+        AgentState::Streaming { .. } => (theme.status_processing, "Generating...".to_string()),
         AgentState::Completed { .. } => (theme.status_success, "Done".to_string()),
         AgentState::Error { .. } => (theme.status_error, "Error".to_string()),
     };

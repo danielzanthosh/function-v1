@@ -29,7 +29,7 @@ impl MotifState {
         match state {
             AgentState::Idle | AgentState::Completed { .. } => Self::Idle,
             AgentState::Listening => Self::Listening,
-            AgentState::Processing { .. } => Self::Thinking,
+            AgentState::Processing { .. } | AgentState::Streaming { .. } => Self::Thinking,
             AgentState::Acting { .. } | AgentState::WaitingForConfirmation { .. } => Self::Acting,
             AgentState::Error { .. } => Self::Idle,
         }
