@@ -69,8 +69,19 @@ pub trait PlatformService: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformCommand {
     ToggleWindow,
+    DismissWindow,
     OpenSettings,
     Quit,
+}
+
+static WINDOW_IS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_window_visibility_state(visible: bool) {
+    WINDOW_IS_VISIBLE.store(visible, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn is_window_visible() -> bool {
+    WINDOW_IS_VISIBLE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 static GLOBAL_HOTKEY_TX: std::sync::RwLock<Option<broadcast::Sender<()>>> =
@@ -1637,7 +1648,16 @@ pub fn set_macos_activation_policy_accessory() {
 #[cfg(target_os = "macos")]
 static PREVIOUS_APP: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
-/// Activate the application on macOS, bringing it to the foreground even if another app is active.
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn objc_return_yes(
+    _this: *mut std::ffi::c_void,
+    _cmd: *mut std::ffi::c_void,
+) -> bool {
+    true
+}
+
+/// Activate the application on macOS, bringing it to the foreground even if another app is active,
+/// and ensuring the underlying window becomes key and interactive.
 pub fn macos_activate_app() {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -1651,9 +1671,26 @@ pub fn macos_activate_app() {
         type MsgSendPid = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
         type MsgSendActivate =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+        type MsgSendUsize =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendObjectAtIndex =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+        type MsgSendBool =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+        type MsgSendGetBool =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool;
+        type MsgSendIsize =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void;
 
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn object_getClass(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn class_replaceMethod(
+                cls: *mut std::ffi::c_void,
+                name: *mut std::ffi::c_void,
+                imp: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool,
+                types: *const std::os::raw::c_char,
+            ) -> *mut std::ffi::c_void;
             fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
             fn objc_msgSend();
         }
@@ -1662,6 +1699,16 @@ pub fn macos_activate_app() {
         let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_pid: MsgSendPid = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_activate: MsgSendActivate =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_usize: MsgSendUsize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_at_index: MsgSendObjectAtIndex =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_bool: MsgSendBool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_get_bool: MsgSendGetBool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_isize: MsgSendIsize =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         // 1. Capture the previously frontmost application so we can return focus to it on dismiss
@@ -1689,7 +1736,7 @@ pub fn macos_activate_app() {
             }
         }
 
-        // 2. Unhide and activate Function
+        // 2. Unhide and activate Function application
         let ns_app_class = objc_getClass(c"NSApplication".as_ptr());
         if !ns_app_class.is_null() {
             let shared_app_sel = sel_registerName(c"sharedApplication".as_ptr());
@@ -1700,7 +1747,76 @@ pub fn macos_activate_app() {
 
                 let activate_sel = sel_registerName(c"activateIgnoringOtherApps:".as_ptr());
                 let _ = msg_send_activate(app, activate_sel, true);
-                tracing::info!("Activated macOS application via activateIgnoringOtherApps");
+
+                // 3. Ensure windows can become key/main and order them front with focus
+                let windows_sel = sel_registerName(c"windows".as_ptr());
+                let windows = msg_send_0(app, windows_sel);
+                if !windows.is_null() {
+                    let count_sel = sel_registerName(c"count".as_ptr());
+                    let object_at_index_sel = sel_registerName(c"objectAtIndex:".as_ptr());
+                    let is_key_sel = sel_registerName(c"isKeyWindow".as_ptr());
+                    let is_main_sel = sel_registerName(c"isMainWindow".as_ptr());
+                    let is_visible_sel = sel_registerName(c"isVisible".as_ptr());
+                    let set_ignores_mouse_events_sel = sel_registerName(c"setIgnoresMouseEvents:".as_ptr());
+                    let set_level_sel = sel_registerName(c"setLevel:".as_ptr());
+                    let order_front_regardless_sel = sel_registerName(c"orderFrontRegardless".as_ptr());
+                    let make_key_and_order_front_sel = sel_registerName(c"makeKeyAndOrderFront:".as_ptr());
+                    let make_main_sel = sel_registerName(c"makeMainWindow".as_ptr());
+                    let can_become_key_sel = sel_registerName(c"canBecomeKeyWindow".as_ptr());
+                    let can_become_main_sel = sel_registerName(c"canBecomeMainWindow".as_ptr());
+
+                    let count = msg_send_usize(windows, count_sel);
+                    for i in 0..count {
+                        let win = msg_send_at_index(windows, object_at_index_sel, i);
+                        if !win.is_null() {
+                            // In Cocoa, borderless windows return NO to canBecomeKeyWindow by default.
+                            // Replace canBecomeKeyWindow and canBecomeMainWindow to return YES
+                            // so the spotlight-style window can receive keyboard events and focus.
+                            let win_cls = object_getClass(win);
+                            if !win_cls.is_null() {
+                                let _ = class_replaceMethod(
+                                    win_cls,
+                                    can_become_key_sel,
+                                    objc_return_yes,
+                                    c"B@:".as_ptr(),
+                                );
+                                let _ = class_replaceMethod(
+                                    win_cls,
+                                    can_become_main_sel,
+                                    objc_return_yes,
+                                    c"B@:".as_ptr(),
+                                );
+                            }
+
+                            // Ensure mouse events are enabled
+                            let _ = msg_send_bool(win, set_ignores_mouse_events_sel, false);
+
+                            // NSFloatingWindowLevel = 3 (stays above standard application windows)
+                            let _ = msg_send_isize(win, set_level_sel, 3isize);
+
+                            // Order window front regardless of other application states
+                            let _ = msg_send_0(win, order_front_regardless_sel);
+
+                            // Make window key and main if not already key
+                            let is_key: bool = msg_send_get_bool(win, is_key_sel);
+                            if !is_key {
+                                let _ = msg_send_1(win, make_key_and_order_front_sel, std::ptr::null_mut());
+                                let _ = msg_send_0(win, make_main_sel);
+                            }
+
+                            let final_is_key: bool = msg_send_get_bool(win, is_key_sel);
+                            let final_is_main: bool = msg_send_get_bool(win, is_main_sel);
+                            let final_is_vis: bool = msg_send_get_bool(win, is_visible_sel);
+                            tracing::info!(
+                                window_index = i,
+                                is_key = final_is_key,
+                                is_main = final_is_main,
+                                is_visible = final_is_vis,
+                                "macOS native window state after activation"
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -2330,6 +2446,15 @@ pub fn setup_macos_double_command_listener() {
         const NSEVENT_TYPE_FLAGS_CHANGED: usize = 12;
 
         if event_type == NSEVENT_TYPE_KEY_DOWN {
+            let key_code_sel = sel_registerName(c"keyCode".as_ptr());
+            let key_code = msg_send_u16(event, key_code_sel);
+            // Escape key code on macOS is 53 (0x35)
+            if key_code == 53 && is_window_visible() {
+                tracing::info!("macOS Escape key detected while Function window is visible - sending DismissWindow");
+                send_platform_command(PlatformCommand::DismissWindow);
+                return;
+            }
+
             // Any normal key down cancels an active Command double-tap candidate
             if let Ok(mut state) = TAP_STATE.lock() {
                 state.canceled = true;

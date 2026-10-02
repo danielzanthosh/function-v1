@@ -304,6 +304,22 @@ fn main() {
                                             tracing::error!(error = ?e, "Failed cx.update on toggle");
                                         }
                                     }
+                                    Ok(PlatformCommand::DismissWindow) => {
+                                        tracing::info!("PlatformCommand::DismissWindow received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                if view.is_visible {
+                                                    view.dismiss(window, cx);
+                                                }
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to update FunctionView on dismiss");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on dismiss");
+                                        }
+                                    }
                                     Ok(PlatformCommand::OpenSettings) => {
                                         tracing::info!("PlatformCommand::OpenSettings received");
                                         let update_res = cx.update(|cx| {

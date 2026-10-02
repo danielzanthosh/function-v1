@@ -270,6 +270,8 @@ impl FunctionView {
                                 if !this.is_active_window && this.is_visible {
                                     tracing::info!("Window confirmed inactive after runloop turn: dismissing");
                                     this.is_visible = false;
+                                    function_platform::set_window_visibility_state(false);
+                                    tracing::info!("Window transition: visible -> hidden");
                                     this.play_sound_feedback(SoundEffect::Select);
                                     #[cfg(target_os = "macos")]
                                     function_platform::macos_hide_app();
@@ -889,6 +891,13 @@ impl FunctionView {
     }
 
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // If window is visible but not active (e.g. backgrounded or un-focused), immediately dismiss it
+        if self.is_visible && !self.is_active_window {
+            tracing::info!("Escape: window is visible but inactive, dismissing directly");
+            self.dismiss(window, cx);
+            return;
+        }
+
         // 0. If voice error message is active, dismiss it
         if self.voice_error.is_some() {
             tracing::info!("Escape: dismissing voice error message");
@@ -975,8 +984,13 @@ impl FunctionView {
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
         tracing::info!("Dismissing Function window (hiding)");
+        let prev_visible = self.is_visible;
         self.is_visible = false;
         self.is_active_window = false;
+        function_platform::set_window_visibility_state(false);
+        if prev_visible {
+            tracing::info!("Window transition: visible -> hidden");
+        }
         self.play_sound_feedback(SoundEffect::Select);
         #[cfg(target_os = "macos")]
         function_platform::macos_hide_app();
@@ -986,9 +1000,14 @@ impl FunctionView {
     }
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let prev_visible = self.is_visible;
         self.is_visible = true;
         self.is_active_window = true;
         self.is_text_selected = false;
+        function_platform::set_window_visibility_state(true);
+        if !prev_visible {
+            tracing::info!("Window transition: hidden -> visible");
+        }
         let target_size = self.target_window_size();
         tracing::info!(
             ?target_size,
@@ -997,6 +1016,7 @@ impl FunctionView {
         tracing::info!("Activating Function window");
         // Preserve any previously typed input text so the user's thought is never lost
         self.cursor_offset = self.input_buffer.chars().count();
+        self.cursor_visible = true;
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
         self.play_sound_feedback(SoundEffect::Select);
@@ -1035,14 +1055,12 @@ impl FunctionView {
     }
 
     pub fn toggle_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let is_focused = self.is_visible && window.is_window_active();
         tracing::info!(
             current_visibility = self.is_visible,
             is_window_active = window.is_window_active(),
-            is_focused = is_focused,
             "Toggling Function window visibility"
         );
-        if is_focused {
+        if self.is_visible {
             self.dismiss(window, cx);
         } else {
             self.summon(window, cx);
