@@ -249,16 +249,28 @@ fn main() {
             cx.spawn(move |cx: &mut gpui::AsyncApp| {
                 let cx = cx.clone();
                 async move {
+                    tracing::info!("GPUI hotkey async listener started, awaiting hotkey events");
                     while let Ok(()) = hotkey_rx.recv().await {
-                        let _ = cx.update(|cx| {
-                            let _ = handle_clone.update(cx, |view, window, cx| {
+                        tracing::info!("🔔 GPUI hotkey event received by async listener");
+                        let update_res = cx.update(|cx| {
+                            let res = handle_clone.update(cx, |view, window, cx| {
+                                tracing::info!("⚡ Calling view.toggle_visibility(window, cx)");
                                 view.toggle_visibility(window, cx);
                             });
+                            if let Err(e) = res {
+                                tracing::error!(error = ?e, "Failed to update FunctionView from window handle");
+                            }
                         });
+                        if let Err(e) = update_res {
+                            tracing::error!(error = ?e, "Failed to run cx.update in hotkey async task");
+                        }
                     }
+                    tracing::warn!("GPUI hotkey async listener ended (hotkey channel closed)");
                 }
             })
             .detach();
+        } else if let Err(ref e) = _window {
+            tracing::error!(error = ?e, "Failed to open GPUI window on launch");
         }
 
         // On macOS, configure accessory policy so Function doesn't appear in the Dock,

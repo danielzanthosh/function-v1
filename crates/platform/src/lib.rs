@@ -512,7 +512,7 @@ pub mod macos {
             #[link(name = "Carbon", kind = "framework")]
             #[allow(non_snake_case)]
             extern "C" {
-                fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
+                fn GetApplicationEventTarget() -> *mut std::ffi::c_void;
                 fn InstallEventHandler(
                     inTarget: *mut std::ffi::c_void,
                     inHandler: unsafe extern "C" fn(
@@ -537,12 +537,31 @@ pub mod macos {
 
             unsafe extern "C" fn carbon_hotkey_handler(
                 _next: *mut std::ffi::c_void,
-                _event: *mut std::ffi::c_void,
+                the_event: *mut std::ffi::c_void,
                 user_data: *mut std::ffi::c_void,
             ) -> i32 {
+                tracing::info!("🔥 GLOBAL HOTKEY CALLBACK FIRED");
+                tracing::info!(
+                    event_ptr = ?the_event,
+                    "kEventHotKeyPressed event received in Carbon handler"
+                );
+
                 if !user_data.is_null() {
                     let tx = &*(user_data as *const broadcast::Sender<()>);
-                    let _ = tx.send(());
+                    tracing::info!(
+                        subscribers = tx.receiver_count(),
+                        "Carbon callback notifying application broadcast channel"
+                    );
+                    match tx.send(()) {
+                        Ok(num) => {
+                            tracing::info!(num, "Dispatched hotkey event to application broadcast channel");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "Failed to send hotkey event - no receivers listening");
+                        }
+                    }
+                } else {
+                    tracing::error!("Carbon hotkey callback received null user_data pointer");
                 }
                 0
             }
@@ -558,9 +577,25 @@ pub mod macos {
             };
 
             unsafe {
-                let target = GetEventDispatcherTarget();
+                let target = GetApplicationEventTarget();
+                if target.is_null() {
+                    tracing::error!("GetApplicationEventTarget() returned NULL!");
+                } else {
+                    tracing::info!(
+                        target = ?target,
+                        "Retrieved ApplicationEventTarget for Carbon hotkey handling"
+                    );
+                }
+
                 let mut handler_ref: *mut std::ffi::c_void = std::ptr::null_mut();
                 let mut hotkey_ref: *mut std::ffi::c_void = std::ptr::null_mut();
+
+                tracing::info!(
+                    shortcut,
+                    key_code,
+                    modifier_mask = format!("{:#06x}", modifiers),
+                    "Installing Carbon event handler on ApplicationEventTarget"
+                );
 
                 let h_res = InstallEventHandler(
                     target,
@@ -570,14 +605,31 @@ pub mod macos {
                     tx_ptr,
                     &mut handler_ref,
                 );
+                tracing::info!(
+                    h_res,
+                    handler_ref = ?handler_ref,
+                    "InstallEventHandler completed"
+                );
 
                 let hotkey_id = EventHotKeyID {
                     signature: 0x46554e43, // 'FUNC'
                     id: 1,
                 };
+                tracing::info!(
+                    signature = format!("{:#010x}", hotkey_id.signature),
+                    id = hotkey_id.id,
+                    key_code,
+                    modifier_mask = format!("{:#06x}", modifiers),
+                    "Registering EventHotKey with Carbon"
+                );
 
                 let r_res =
                     RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
+                tracing::info!(
+                    r_res,
+                    hotkey_ref = ?hotkey_ref,
+                    "RegisterEventHotKey completed"
+                );
 
                 if h_res == 0 && r_res == 0 {
                     self.handler_ref
@@ -1172,6 +1224,32 @@ pub fn set_macos_activation_policy_accessory() {
                 let set_policy_sel = sel_registerName(b"setActivationPolicy:\0".as_ptr() as _);
                 // NSApplicationActivationPolicyAccessory = 1
                 let _: *mut std::ffi::c_void = objc_msgSend(app, set_policy_sel, 1isize);
+            }
+        }
+    }
+}
+
+/// Activate the application on macOS, bringing it to the foreground even if another app is active.
+pub fn macos_activate_app() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend(
+                receiver: *mut std::ffi::c_void,
+                op: *mut std::ffi::c_void,
+                ...
+            ) -> *mut std::ffi::c_void;
+        }
+        let ns_app_class = objc_getClass(b"NSApplication\0".as_ptr() as _);
+        if !ns_app_class.is_null() {
+            let shared_app_sel = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+            let app = objc_msgSend(ns_app_class, shared_app_sel);
+            if !app.is_null() {
+                let activate_sel = sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
+                let _: *mut std::ffi::c_void = objc_msgSend(app, activate_sel, 1isize);
+                tracing::info!("Activated macOS application via activateIgnoringOtherApps");
             }
         }
     }
