@@ -57,9 +57,31 @@ impl LlmProvider for OpenAiLlmProvider {
                     MessageRole::Tool => "tool",
                 };
 
+                let content_val = if let Some(ref imgs) = m.images {
+                    if imgs.is_empty() {
+                        json!(m.content)
+                    } else {
+                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
+                        for img in imgs {
+                            let url = if img.starts_with("data:") {
+                                img.clone()
+                            } else {
+                                format!("data:image/png;base64,{}", img)
+                            };
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": url }
+                            }));
+                        }
+                        json!(parts)
+                    }
+                } else {
+                    json!(m.content)
+                };
+
                 let mut obj = json!({
                     "role": role_str,
-                    "content": m.content,
+                    "content": content_val,
                 });
 
                 if let Some(ref t_id) = m.tool_call_id {
@@ -253,6 +275,7 @@ impl LlmProvider for OpenAiLlmProvider {
             message: ChatMessage {
                 role: MessageRole::Assistant,
                 content,
+                images: None,
                 tool_call_id: None,
                 tool_calls,
             },
@@ -290,10 +313,38 @@ impl LlmProvider for OpenAiLlmProvider {
                     MessageRole::Assistant => "assistant",
                     MessageRole::Tool => "tool",
                 };
-                json!({
+                let content_val = if let Some(ref imgs) = m.images {
+                    if imgs.is_empty() {
+                        json!(m.content)
+                    } else {
+                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
+                        for img in imgs {
+                            let url = if img.starts_with("data:") {
+                                img.clone()
+                            } else {
+                                format!("data:image/png;base64,{}", img)
+                            };
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": url }
+                            }));
+                        }
+                        json!(parts)
+                    }
+                } else {
+                    json!(m.content)
+                };
+
+                let mut obj = json!({
                     "role": role_str,
-                    "content": m.content,
-                })
+                    "content": content_val,
+                });
+
+                if let Some(ref t_id) = m.tool_call_id {
+                    obj["tool_call_id"] = json!(t_id);
+                }
+
+                obj
             })
             .collect();
 
@@ -391,6 +442,7 @@ impl LlmProvider for OpenAiLlmProvider {
             message: ChatMessage {
                 role: MessageRole::Assistant,
                 content: full_content,
+                images: None,
                 tool_call_id: None,
                 tool_calls: None,
             },

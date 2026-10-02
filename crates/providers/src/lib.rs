@@ -43,6 +43,8 @@ pub struct ChatMessage {
     pub role: MessageRole,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -53,6 +55,7 @@ impl ChatMessage {
         Self {
             role: MessageRole::System,
             content: content.into(),
+            images: None,
             tool_call_id: None,
             tool_calls: None,
         }
@@ -62,6 +65,17 @@ impl ChatMessage {
         Self {
             role: MessageRole::User,
             content: content.into(),
+            images: None,
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    pub fn user_with_images(content: impl Into<String>, images: Vec<String>) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: content.into(),
+            images: Some(images),
             tool_call_id: None,
             tool_calls: None,
         }
@@ -71,6 +85,7 @@ impl ChatMessage {
         Self {
             role: MessageRole::Assistant,
             content: content.into(),
+            images: None,
             tool_call_id: None,
             tool_calls: None,
         }
@@ -80,6 +95,7 @@ impl ChatMessage {
         Self {
             role: MessageRole::Tool,
             content: content.into(),
+            images: None,
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: None,
         }

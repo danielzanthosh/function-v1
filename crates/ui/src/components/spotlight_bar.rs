@@ -9,10 +9,12 @@
 
 use crate::components::calculator::{evaluate_calculation, format_result};
 use crate::components::launcher_icons::{
-    calculator_icon, network_icon, settings_icon, terminal_icon, web_icon,
+    app_icon, calculator_icon, file_icon, folder_icon, network_icon, settings_icon, terminal_icon,
+    web_icon,
 };
 use crate::components::render_logo;
 use crate::theme::Theme;
+use function_platform::{search_apps_and_files, SearchItemKind};
 use gpui::prelude::*;
 use gpui::{div, px, rgba, IntoElement, Rgba};
 
@@ -24,6 +26,9 @@ pub enum LauncherIconType {
     Web,
     Network,
     Settings,
+    App,
+    Folder,
+    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +41,7 @@ pub enum LauncherAction {
     NewConversation,
     OpenConversations,
     RunTask(String),
+    OpenPath(String),
 }
 
 #[derive(Debug, Clone)]
@@ -264,23 +270,42 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
         ];
     }
 
-    // 7. Dynamic freeform task execution when user types anything
-    vec![
-        LauncherItem {
-            keyword: format!("Run Task: \"{}\"", trimmed),
-            description: "Execute autonomous computer action via Function agent".to_string(),
-            shortcut: "Enter".to_string(),
-            icon_type: LauncherIconType::Function,
-            action: LauncherAction::RunTask(trimmed.to_string()),
-        },
-        LauncherItem {
-            keyword: format!("Search Web: \"{}\"", trimmed),
-            description: "Query live web search in default browser".to_string(),
-            shortcut: "Alt+2".to_string(),
-            icon_type: LauncherIconType::Web,
-            action: LauncherAction::OpenUrl(format!("https://www.google.com/search?q={}", trimmed)),
-        },
-    ]
+    // 7. Dynamic freeform task execution & integrated app/folder/file search
+    let search_results = search_apps_and_files(trimmed);
+    let mut items = Vec::new();
+
+    for res in search_results {
+        let (icon, desc_prefix) = match res.kind {
+            SearchItemKind::Application => (LauncherIconType::App, "Application"),
+            SearchItemKind::Folder => (LauncherIconType::Folder, "Folder"),
+            SearchItemKind::File => (LauncherIconType::File, "File"),
+        };
+        items.push(LauncherItem {
+            keyword: res.name,
+            description: format!("{} • Hold Enter to Open • Press Enter for AI", desc_prefix),
+            shortcut: "Hold Enter".to_string(),
+            icon_type: icon,
+            action: LauncherAction::OpenPath(res.path),
+        });
+    }
+
+    items.push(LauncherItem {
+        keyword: format!("Ask AI: \"{}\"", trimmed),
+        description: "Send prompt directly to Function AI agent".to_string(),
+        shortcut: "Enter".to_string(),
+        icon_type: LauncherIconType::Function,
+        action: LauncherAction::RunTask(trimmed.to_string()),
+    });
+
+    items.push(LauncherItem {
+        keyword: format!("Search Web: \"{}\"", trimmed),
+        description: "Query live web search in default browser".to_string(),
+        shortcut: "Alt+2".to_string(),
+        icon_type: LauncherIconType::Web,
+        action: LauncherAction::OpenUrl(format!("https://www.google.com/search?q={}", trimmed)),
+    });
+
+    items
 }
 
 fn render_item_icon(icon_type: LauncherIconType) -> impl IntoElement {
@@ -291,6 +316,9 @@ fn render_item_icon(icon_type: LauncherIconType) -> impl IntoElement {
         LauncherIconType::Web => web_icon(18.0).into_any_element(),
         LauncherIconType::Network => network_icon(18.0).into_any_element(),
         LauncherIconType::Settings => settings_icon(18.0).into_any_element(),
+        LauncherIconType::App => app_icon(18.0).into_any_element(),
+        LauncherIconType::Folder => folder_icon(18.0).into_any_element(),
+        LauncherIconType::File => file_icon(18.0).into_any_element(),
     }
 }
 

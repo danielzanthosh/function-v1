@@ -5,8 +5,10 @@
 
 pub mod audio;
 pub mod computer;
+pub mod search;
 pub use audio::*;
 pub use computer::*;
+pub use search::*;
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -109,6 +111,113 @@ pub fn send_platform_command(cmd: PlatformCommand) {
 pub fn trigger_global_hotkey() {
     tracing::info!("Triggering global hotkey notification from UI / menu bar / tray");
     send_platform_command(PlatformCommand::ToggleWindow);
+}
+
+/// Ensure only a single instance of Function runs at a time.
+/// Returns true if this process is the primary instance, or false if an existing instance is already running.
+pub fn ensure_single_instance() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        extern "system" {
+            fn CreateMutexW(
+                lpMutexAttributes: *mut std::ffi::c_void,
+                bInitialOwner: i32,
+                lpName: *const u16,
+            ) -> isize;
+            fn GetLastError() -> u32;
+        }
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let name: Vec<u16> = OsStr::new("Local\\FunctionAssistantSingleInstanceMutex")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        unsafe {
+            let handle = CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr());
+            const ERROR_ALREADY_EXISTS: u32 = 183;
+            if handle != 0 && GetLastError() == ERROR_ALREADY_EXISTS {
+                tracing::warn!("Another instance of Function is already running. Activating existing instance and exiting.");
+                show_window_by_title("Function");
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn open(path: *const std::os::raw::c_char, oflag: i32, mode: u16) -> i32;
+            fn flock(fd: i32, operation: i32) -> i32;
+        }
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let lock_dir = format!("{}/.function", home);
+        let _ = std::fs::create_dir_all(&lock_dir);
+        let lock_path = format!("{}/function.lock\0", lock_dir);
+
+        // O_RDWR = 2, O_CREAT = 0x0200
+        const O_RDWR: i32 = 2;
+        const O_CREAT: i32 = 0x0200;
+        // LOCK_EX = 2, LOCK_NB = 4
+        const LOCK_EX: i32 = 2;
+        const LOCK_NB: i32 = 4;
+
+        unsafe {
+            let fd = open(lock_path.as_ptr() as *const _, O_RDWR | O_CREAT, 0o666);
+            if fd >= 0 {
+                if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+                    tracing::warn!("Another instance of Function is already running on macOS. Activating existing instance and exiting.");
+                    trigger_global_hotkey();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        true
+    }
+}
+
+/// Speak text using the operating system's native speech facilities (TTS fallback).
+pub fn speak_text(text: &str) {
+    let clean_text = text.replace(['"', '\\', '\n', '\r'], " ");
+    let text_owned = clean_text.trim().to_string();
+    if text_owned.is_empty() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("say")
+                .arg(&text_owned)
+                .spawn();
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::thread::spawn(move || {
+            let script = format!(
+                "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak('{}')",
+                text_owned.replace('\'', "''")
+            );
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .spawn();
+        });
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = text_owned;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2719,6 +2828,30 @@ pub fn open_url(url: &str) {
     {
         use std::process::Command;
         let _ = Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
+/// Open a local file, folder, or application in the default native system handler.
+pub fn open_path(path: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let p = std::path::Path::new(path);
+        if p.is_dir() {
+            let _ = Command::new("explorer").arg(path).spawn();
+        } else {
+            let _ = Command::new("cmd").args(["/c", "start", "", path]).spawn();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let _ = Command::new("open").arg(path).spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        use std::process::Command;
+        let _ = Command::new("xdg-open").arg(path).spawn();
     }
 }
 

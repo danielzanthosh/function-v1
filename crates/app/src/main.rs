@@ -23,6 +23,11 @@ use gpui::{
 use gpui::TitlebarOptions;
 
 fn main() {
+    if !function_platform::ensure_single_instance() {
+        eprintln!("Function is already running. Exiting duplicate instance.");
+        return;
+    }
+
     // 1. Initialize structured logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -230,7 +235,7 @@ fn main() {
                 }
             },
             window_decorations: Some(WindowDecorations::Client),
-            kind: WindowKind::PopUp,
+            kind: WindowKind::Normal,
             ..Default::default()
         };
 

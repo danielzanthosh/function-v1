@@ -29,7 +29,7 @@ impl Tool for ScreenTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect screen resolution and mouse cursor coordinates."
+        "Inspect screen resolution, mouse cursor coordinates, or capture a screen screenshot."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -38,7 +38,8 @@ impl Tool for ScreenTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["dimensions", "cursor_position"]
+                    "enum": ["dimensions", "cursor_position", "screenshot"],
+                    "description": "The screen action: 'screenshot' to capture visual screen content, 'dimensions' for screen resolution, or 'cursor_position' for coordinates."
                 }
             },
             "required": ["action"]
@@ -53,9 +54,49 @@ impl Tool for ScreenTool {
         let action = params
             .get("action")
             .and_then(|v| v.as_str())
-            .unwrap_or("dimensions");
+            .unwrap_or("screenshot");
 
         match action {
+            "screenshot" => {
+                let dims = self.control.get_screen_dimensions();
+                match self.control.take_screenshot() {
+                    Ok(bytes) => {
+                        let b64 = to_base64(&bytes);
+
+                        let home = std::env::var_os("USERPROFILE")
+                            .or_else(|| std::env::var_os("HOME"))
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| std::path::PathBuf::from("."));
+                        let mut dir = home;
+                        dir.push(".function");
+                        dir.push("attachments");
+                        let _ = std::fs::create_dir_all(&dir);
+
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis();
+                        let path = dir.join(format!("screenshot_{}.png", ts));
+                        let path_str = path.display().to_string();
+                        let _ = std::fs::write(&path, &bytes);
+
+                        Ok(ToolResult::success(
+                            format!("Screenshot captured successfully ({}x{}, {} KB)", dims.width, dims.height, bytes.len() / 1024),
+                            json!({
+                                "status": "success",
+                                "width": dims.width,
+                                "height": dims.height,
+                                "path": path_str,
+                                "base64": b64,
+                            }),
+                        ))
+                    }
+                    Err(e) => Ok(ToolResult::failure(
+                        "Failed to capture screen",
+                        format!("{}", e),
+                    )),
+                }
+            }
             "dimensions" => {
                 let dims = self.control.get_screen_dimensions();
                 Ok(ToolResult::success(
@@ -76,4 +117,28 @@ impl Tool for ScreenTool {
             }),
         }
     }
+}
+
+fn to_base64(data: &[u8]) -> String {
+    const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARSET[(triple >> 18) & 0x3F] as char);
+        result.push(CHARSET[(triple >> 12) & 0x3F] as char);
+        if chunk.len() > 1 {
+            result.push(CHARSET[(triple >> 6) & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARSET[triple & 0x3F] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }
