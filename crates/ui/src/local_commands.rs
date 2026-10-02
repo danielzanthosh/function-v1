@@ -5,26 +5,45 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalCommand {
     Configure,
+    NewConversation,
+    OpenConversations,
 }
 
 /// Resolve user input to a local command.
 ///
 /// Recognizes (case-insensitive, ignoring leading and trailing whitespace):
-/// - "Settings"
-/// - "Configure"
-/// - "Preferences"
-/// - "Config"
+/// - Settings: "settings", "configure", "preferences", "config"
+/// - New Chat: "conversation new", "new chat", "new conversation", "clear chat"
+/// - Conversations List: "conversation", "conversations", "history", "chats", "chat history"
 ///
 /// Returns `Some(LocalCommand)` if recognized, or `None` so unrecognized input
 /// continues through the AI agent pipeline.
 pub fn resolve_local_command(input: &str) -> Option<LocalCommand> {
     let trimmed = input.trim();
-    if trimmed.eq_ignore_ascii_case("settings")
-        || trimmed.eq_ignore_ascii_case("configure")
-        || trimmed.eq_ignore_ascii_case("preferences")
-        || trimmed.eq_ignore_ascii_case("config")
+    let lower = trimmed.to_lowercase();
+
+    if lower == "settings"
+        || lower == "configure"
+        || lower == "preferences"
+        || lower == "config"
     {
         Some(LocalCommand::Configure)
+    } else if lower == "conversation new"
+        || lower == "new chat"
+        || lower == "new conversation"
+        || lower == "clear chat"
+        || lower == "/new"
+    {
+        Some(LocalCommand::NewConversation)
+    } else if lower == "conversation"
+        || lower == "conversations"
+        || lower == "history"
+        || lower == "chats"
+        || lower == "chat history"
+        || lower == "/conversation"
+        || lower == "/chats"
+    {
+        Some(LocalCommand::OpenConversations)
     } else {
         None
     }
@@ -71,6 +90,34 @@ mod tests {
         assert_eq!(
             resolve_local_command("Config"),
             Some(LocalCommand::Configure)
+        );
+    }
+
+    #[test]
+    fn test_resolve_conversation_commands() {
+        assert_eq!(
+            resolve_local_command("conversation"),
+            Some(LocalCommand::OpenConversations)
+        );
+        assert_eq!(
+            resolve_local_command("conversations"),
+            Some(LocalCommand::OpenConversations)
+        );
+        assert_eq!(
+            resolve_local_command("history"),
+            Some(LocalCommand::OpenConversations)
+        );
+        assert_eq!(
+            resolve_local_command("chats"),
+            Some(LocalCommand::OpenConversations)
+        );
+        assert_eq!(
+            resolve_local_command("conversation new"),
+            Some(LocalCommand::NewConversation)
+        );
+        assert_eq!(
+            resolve_local_command("new chat"),
+            Some(LocalCommand::NewConversation)
         );
     }
 

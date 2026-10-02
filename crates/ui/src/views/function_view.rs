@@ -25,9 +25,10 @@ use crate::components::{
     render_brand_mark, render_inline_text, render_logo, render_markdown, ActivityEntry,
     ActivityStatus,
 };
+use crate::conversation::{ChatEntry, ConversationStore, SavedConversation};
 use crate::local_commands::{resolve_local_command, LocalCommand};
 use crate::theme::Theme;
-use crate::views::render_settings_view;
+use crate::views::{render_conversation_view, render_settings_view};
 use function_agent::AgentState;
 use function_config::AppConfig;
 use function_platform::{
@@ -36,8 +37,8 @@ use function_platform::{
 use function_providers::ChatMessage;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba, Size,
-    Task, Timer, WeakEntity, Window,
+    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba,
+    ScrollHandle, Size, Task, Timer, WeakEntity, Window,
 };
 /// Checks if a key string represents a named control key rather than text to type.
 fn is_named_control_key(k: &str) -> bool {
@@ -80,13 +81,6 @@ fn shift_char(c: char) -> char {
     }
 }
 
-/// A single message in the visible chat log.
-#[derive(Debug, Clone)]
-pub struct ChatEntry {
-    pub is_user: bool,
-    pub text: String,
-}
-
 /// Display mode for the function window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionMode {
@@ -94,6 +88,8 @@ pub enum FunctionMode {
     Command,
     /// Settings view
     Settings,
+    /// Conversations and chat history view
+    Conversations,
     /// Compatibility aliases
     Compact,
     Spotlight,
@@ -142,6 +138,12 @@ pub struct FunctionView {
     pub chat_display: Vec<ChatEntry>,
     /// API-level message history passed to `execute_with_history` (persists across turns)
     pub chat_history_api: Vec<ChatMessage>,
+    /// Persistent conversation store for chat history
+    pub conversation_store: ConversationStore,
+    pub active_conversation_id: Option<String>,
+    pub conversation_selected_index: usize,
+    pub conversation_status_message: Option<String>,
+    pub chat_scroll_handle: ScrollHandle,
 }
 
 pub type AssistantView = FunctionView;
@@ -217,6 +219,11 @@ impl FunctionView {
             settings_status_message: None,
             chat_display: Vec::new(),
             chat_history_api: Vec::new(),
+            conversation_store: ConversationStore::load(),
+            active_conversation_id: None,
+            conversation_selected_index: 0,
+            conversation_status_message: None,
+            chat_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -283,6 +290,7 @@ impl FunctionView {
                                             text: accumulated.clone(),
                                         });
                                     }
+                                    view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
                                 }
                                 AgentState::Completed { summary, new_history } => {
                                     view.state = state_clone.clone();
@@ -307,6 +315,8 @@ impl FunctionView {
                                     view.active_task = None;
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
+                                    view.save_current_conversation();
+                                    view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
                                 }
                                 AgentState::Error { message } => {
                                     view.state = state_clone.clone();
@@ -389,6 +399,13 @@ impl FunctionView {
 
     pub fn target_window_size(&self) -> Size<gpui::Pixels> {
         if self.mode == FunctionMode::Settings {
+            return Size {
+                width: px(640.0),
+                height: px(460.0),
+            };
+        }
+
+        if self.mode == FunctionMode::Conversations {
             return Size {
                 width: px(640.0),
                 height: px(460.0),
@@ -633,11 +650,101 @@ impl FunctionView {
         }
     }
 
-    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 1. If in Settings mode, go back to Command mode
-        if self.mode == FunctionMode::Settings {
-            tracing::info!("Escape: going back from Settings to Command mode");
+    /// Save the active conversation to the persistent ConversationStore.
+    pub fn save_current_conversation(&mut self) {
+        if self.chat_display.is_empty() {
+            return;
+        }
+        let conv = if let Some(ref id) = self.active_conversation_id {
+            if let Some(existing) = self.conversation_store.get(id).cloned() {
+                let mut c = existing;
+                c.display_messages = self.chat_display.clone();
+                c.api_messages = self.chat_history_api.clone();
+                if c.title == "New Conversation" {
+                    c.title = SavedConversation::derive_title(&self.chat_display);
+                }
+                c
+            } else {
+                SavedConversation::new(self.chat_display.clone(), self.chat_history_api.clone())
+            }
+        } else {
+            SavedConversation::new(self.chat_display.clone(), self.chat_history_api.clone())
+        };
+        self.active_conversation_id = Some(conv.id.clone());
+        self.conversation_store.save_conversation(conv);
+    }
+
+    /// Reset to the pristine home state (like when the app starts the first time).
+    pub fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.chat_display.is_empty() {
+            self.save_current_conversation();
+        }
+        self.mode = FunctionMode::Command;
+        self.input_buffer.clear();
+        self.chat_display.clear();
+        self.chat_history_api.clear();
+        self.active_conversation_id = None;
+        self.latest_result = None;
+        self.active_task = None;
+        self.activities.clear();
+        self.state = AgentState::Idle;
+        self.voice_error = None;
+        self.selected_index = 0;
+        self.is_text_selected = false;
+        self.cursor_visible = true;
+        self.listening = false;
+        self.conversation_status_message = None;
+        self.play_sound_feedback(SoundEffect::Select);
+        window.resize(self.target_window_size());
+        cx.notify();
+    }
+
+    /// Start a new conversation, saving the current one if not empty.
+    pub fn start_new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.go_home(window, cx);
+    }
+
+    /// Open the Conversations history view.
+    pub fn open_conversations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.chat_display.is_empty() {
+            self.save_current_conversation();
+        }
+        self.mode = FunctionMode::Conversations;
+        self.conversation_selected_index = 0;
+        self.conversation_status_message = None;
+        self.conversation_store = ConversationStore::load();
+        self.play_sound_feedback(SoundEffect::Select);
+        window.resize(self.target_window_size());
+        cx.notify();
+    }
+
+    /// Load a past conversation by ID.
+    pub fn load_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(conv) = self.conversation_store.get(id).cloned() {
+            self.chat_display = conv.display_messages;
+            self.chat_history_api = conv.api_messages;
+            self.active_conversation_id = Some(conv.id);
             self.mode = FunctionMode::Command;
+            self.input_buffer.clear();
+            self.selected_index = 0;
+            self.latest_result = None;
+            self.active_task = None;
+            self.activities.clear();
+            self.state = AgentState::Idle;
+            self.voice_error = None;
+            self.play_sound_feedback(SoundEffect::Select);
+            window.resize(self.target_window_size());
+            self.chat_scroll_handle.scroll_to_item(self.chat_display.len().saturating_sub(1));
+            cx.notify();
+        }
+    }
+
+    pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 1. If in Settings or Conversations mode, go back to Command mode
+        if self.mode == FunctionMode::Settings || self.mode == FunctionMode::Conversations {
+            tracing::info!("Escape: going back to Command mode");
+            self.mode = FunctionMode::Command;
+            self.conversation_status_message = None;
             window.resize(self.target_window_size());
             self.play_sound_feedback(SoundEffect::Select);
             cx.notify();
@@ -680,27 +787,9 @@ impl FunctionView {
             return;
         }
 
-        // 5. If there is a task, result, or activity history showing, go back to fresh idle prompt
-        if self.active_task.is_some()
-            || self.latest_result.is_some()
-            || !self.activities.is_empty()
-            || self.state != AgentState::Idle
-        {
-            tracing::info!("Escape: clearing task/result/activities to return to clean idle prompt");
-            self.active_task = None;
-            self.latest_result = None;
-            self.activities.clear();
-            self.state = AgentState::Idle;
-            self.voice_error = None;
-            self.selected_index = 0;
-            self.play_sound_feedback(SoundEffect::Select);
-            window.resize(self.target_window_size());
-            cx.notify();
-            return;
-        }
-
-        // 6. Already at root idle prompt: do NOT hide the window
-        tracing::debug!("Escape pressed at root prompt - window remains open");
+        // 5. At the root prompt or with active chat/results: return to home like first launch
+        tracing::info!("Escape: returning to home state like first launch");
+        self.go_home(window, cx);
     }
 
     pub fn close(&mut self, _: &CloseFunction, window: &mut Window, cx: &mut Context<Self>) {
@@ -835,6 +924,12 @@ impl FunctionView {
                 self.play_sound_feedback(SoundEffect::Select);
                 cx.notify();
             }
+            LauncherAction::NewConversation => {
+                self.start_new_conversation(window, cx);
+            }
+            LauncherAction::OpenConversations => {
+                self.open_conversations(window, cx);
+            }
             LauncherAction::RunTask(prompt) => {
                 self.input_buffer = prompt;
                 self.submit(&SubmitRequest, window, cx);
@@ -860,6 +955,14 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
+                LocalCommand::NewConversation => {
+                    self.start_new_conversation(window, cx);
+                    return;
+                }
+                LocalCommand::OpenConversations => {
+                    self.open_conversations(window, cx);
+                    return;
+                }
             }
         }
 
@@ -877,6 +980,7 @@ impl FunctionView {
         // Retain command surface and adapt window height to show execution progress
         self.mode = FunctionMode::Command;
         window.resize(self.target_window_size());
+        self.chat_scroll_handle.scroll_to_item(self.chat_display.len().saturating_sub(1));
 
         self.activities.clear();
         self.activities.push(ActivityEntry {
@@ -1179,6 +1283,71 @@ impl FunctionView {
         }
 
         // ==========================================
+        // CONVERSATIONS MODE KEY HANDLING
+        // ==========================================
+        if self.mode == FunctionMode::Conversations {
+            let convs = self.conversation_store.list();
+            let total_items = convs.len() + 1;
+
+            match key {
+                "escape" => {
+                    self.mode = FunctionMode::Command;
+                    self.conversation_status_message = None;
+                    window.resize(self.target_window_size());
+                    self.play_sound_feedback(SoundEffect::Select);
+                    cx.notify();
+                }
+                "up" => {
+                    self.conversation_selected_index = self.conversation_selected_index.saturating_sub(1);
+                    self.play_sound_feedback(SoundEffect::Navigate);
+                    cx.notify();
+                }
+                "down" => {
+                    if self.conversation_selected_index + 1 < total_items {
+                        self.conversation_selected_index += 1;
+                    }
+                    self.play_sound_feedback(SoundEffect::Navigate);
+                    cx.notify();
+                }
+                "enter" | "return" => {
+                    if self.conversation_selected_index == 0 {
+                        self.start_new_conversation(window, cx);
+                    } else {
+                        let idx = self.conversation_selected_index - 1;
+                        if let Some(conv) = convs.get(idx) {
+                            let id = conv.id.clone();
+                            self.load_conversation(&id, window, cx);
+                        }
+                    }
+                }
+                "n" if !modifiers.control && !modifiers.alt => {
+                    self.start_new_conversation(window, cx);
+                }
+                "delete" | "backspace" => {
+                    if self.conversation_selected_index > 0 {
+                        let idx = self.conversation_selected_index - 1;
+                        if let Some(conv) = convs.get(idx) {
+                            let id = conv.id.clone();
+                            if self.conversation_store.delete_conversation(&id) {
+                                if self.active_conversation_id.as_deref() == Some(&id) {
+                                    self.active_conversation_id = None;
+                                    self.chat_display.clear();
+                                    self.chat_history_api.clear();
+                                }
+                                self.conversation_status_message = Some("Conversation removed.".to_string());
+                                self.conversation_selected_index = self.conversation_selected_index.min(self.conversation_store.list().len());
+                                self.play_sound_feedback(SoundEffect::Select);
+                                cx.notify();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // ==========================================
         // TEXT SELECTION & CLIPBOARD SHORTCUTS
         // ==========================================
         if key == "a" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
@@ -1326,11 +1495,27 @@ impl FunctionView {
                     cx.notify();
                 }
             }
+            "pageup" => {
+                let current = self.chat_scroll_handle.top_item();
+                self.chat_scroll_handle.scroll_to_item(current.saturating_sub(2));
+                cx.notify();
+                return;
+            }
+            "pagedown" => {
+                let current = self.chat_scroll_handle.bottom_item();
+                self.chat_scroll_handle.scroll_to_item(current + 2);
+                cx.notify();
+                return;
+            }
             "up" => {
                 self.is_text_selected = false;
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                     self.play_sound_feedback(SoundEffect::Navigate);
+                    cx.notify();
+                } else if !self.chat_display.is_empty() {
+                    let current = self.chat_scroll_handle.top_item();
+                    self.chat_scroll_handle.scroll_to_item(current.saturating_sub(1));
                     cx.notify();
                 }
             }
@@ -1340,6 +1525,10 @@ impl FunctionView {
                 if self.selected_index + 1 < items.len() {
                     self.selected_index += 1;
                     self.play_sound_feedback(SoundEffect::Navigate);
+                    cx.notify();
+                } else if !self.chat_display.is_empty() {
+                    let current = self.chat_scroll_handle.bottom_item();
+                    self.chat_scroll_handle.scroll_to_item(current + 1);
                     cx.notify();
                 }
             }
@@ -1355,6 +1544,14 @@ impl FunctionView {
                             self.play_sound_feedback(SoundEffect::Select);
                             window.resize(self.target_window_size());
                             cx.notify();
+                            return;
+                        }
+                        LocalCommand::NewConversation => {
+                            self.start_new_conversation(window, cx);
+                            return;
+                        }
+                        LocalCommand::OpenConversations => {
+                            self.open_conversations(window, cx);
                             return;
                         }
                     }
@@ -1470,6 +1667,25 @@ impl Render for FunctionView {
                 .into_any_element();
         }
 
+        if self.mode == FunctionMode::Conversations {
+            let conv_list = self.conversation_store.list();
+            return div()
+                .track_focus(&self.focus_handle)
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.handle_key_down(event, window, cx);
+                }))
+                .w_full()
+                .h_full()
+                .child(render_conversation_view(
+                    &conv_list,
+                    self.conversation_selected_index,
+                    self.active_conversation_id.as_deref(),
+                    &theme,
+                    self.conversation_status_message.as_deref(),
+                ))
+                .into_any_element();
+        }
+
         // ==========================================
         // UNIFIED FUNCTION COMMAND LAYER
         // ==========================================
@@ -1572,10 +1788,12 @@ impl Render for FunctionView {
 
                 parent.child(
                     div()
+                        .id("chat_scroll_area")
+                        .track_scroll(&self.chat_scroll_handle)
                         .flex()
                         .flex_col()
                         .flex_1()
-                        .overflow_hidden()
+                        .overflow_y_scroll()
                         .px(px(20.0))
                         .pt(px(12.0))
                         .pb(px(8.0))

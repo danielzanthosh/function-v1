@@ -174,6 +174,11 @@ impl AppConfig {
         Self::function_dir().join("memory.json")
     }
 
+    /// Return standard conversations file path in `~/.function/conversations.json`.
+    pub fn conversations_path() -> std::path::PathBuf {
+        Self::function_dir().join("conversations.json")
+    }
+
     /// Load configuration from disk, falling back to default if file doesn't exist or is invalid.
     pub fn load() -> Self {
         let path = Self::config_path();
@@ -413,9 +418,12 @@ mod tests {
         assert_eq!(cfg_path, dir.join("config.json"));
         let mem_path = memory_path();
         assert_eq!(mem_path, dir.join("memory.json"));
+        let conv_path = conversations_path();
+        assert_eq!(conv_path, dir.join("conversations.json"));
         assert_eq!(AppConfig::function_dir(), dir);
         assert_eq!(AppConfig::config_path(), cfg_path);
         assert_eq!(AppConfig::memory_path(), mem_path);
+        assert_eq!(AppConfig::conversations_path(), conv_path);
     }
 }
 
@@ -432,6 +440,11 @@ pub fn config_path() -> std::path::PathBuf {
 /// Return standard memory file path in `~/.function/memory.json`.
 pub fn memory_path() -> std::path::PathBuf {
     AppConfig::memory_path()
+}
+
+/// Return standard conversations file path in `~/.function/conversations.json`.
+pub fn conversations_path() -> std::path::PathBuf {
+    AppConfig::conversations_path()
 }
 
 /// Redact sensitive API keys, authorization tokens, and credentials from text strings before logging.

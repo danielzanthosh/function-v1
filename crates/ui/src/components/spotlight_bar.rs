@@ -33,6 +33,8 @@ pub enum LauncherAction {
     CopyResult(String),
     OpenUrl(String),
     OpenSettings,
+    NewConversation,
+    OpenConversations,
     RunTask(String),
 }
 
@@ -188,7 +190,34 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
         }];
     }
 
-    // 6. Default assistant actions when input is empty
+    // 6. Conversation & Chat History query
+    if lower == "conversation"
+        || lower == "conversations"
+        || lower == "history"
+        || lower == "chats"
+        || lower == "chat"
+        || lower == "new chat"
+        || lower.starts_with("conversation ")
+    {
+        return vec![
+            LauncherItem {
+                keyword: "Start New Conversation".to_string(),
+                description: "Save active chat and start fresh with a clean prompt".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::NewConversation,
+            },
+            LauncherItem {
+                keyword: "Browse Past Conversations".to_string(),
+                description: "View and restore previous conversations from chat history".to_string(),
+                shortcut: "Alt+2".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::OpenConversations,
+            },
+        ];
+    }
+
+    // 7. Default assistant actions when input is empty
     if trimmed.is_empty() {
         return vec![
             LauncherItem {
