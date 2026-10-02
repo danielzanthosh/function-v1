@@ -81,6 +81,20 @@ impl Agent {
 
     /// Execute a task given a user prompt.
     pub async fn execute_task(&self, user_prompt: &str) -> Result<String, AgentError> {
+        let (reply, _) = self.execute_with_history(user_prompt, vec![]).await?;
+        Ok(reply)
+    }
+
+    /// Execute with persistent chat history.
+    ///
+    /// `prior_history` contains only the User/Assistant turn pairs from previous exchanges
+    /// (no system message — this function prepends one). Returns the assistant reply text
+    /// and the updated history to store for the next turn.
+    pub async fn execute_with_history(
+        &self,
+        user_prompt: &str,
+        prior_history: Vec<ChatMessage>,
+    ) -> Result<(String, Vec<ChatMessage>), AgentError> {
         self.update_state(AgentState::Processing {
             thought_summary: None,
         });
@@ -92,18 +106,24 @@ impl Agent {
             .await
             .unwrap_or_default();
 
-        let mut system_prompt = "You are Function, a native desktop computer assistant. You turn intent into action on the user's computer. Use the registered computer tools (screen, mouse, keyboard, apps, files, terminal) to accomplish tasks directly. Be concise, direct, and technical. Do not output conversational filler. Execute requested actions decisively.".to_string();
+        let mut system_prompt = "\
+You are Function, a smart desktop AI assistant — similar to Siri or Copilot but running natively on this computer.
+
+Your primary role is to be a helpful conversational AI:
+- Answer questions, explain concepts, write text, brainstorm, and help with any intellectual task directly in your response.
+- Engage in natural back-and-forth conversation; remember the chat history provided.
+- Only use the registered computer-control tools (screen, mouse, keyboard, apps, files, terminal) when the user's request genuinely requires controlling the computer (e.g. \"open Chrome\", \"type this in VS Code\", \"take a screenshot\").
+- For conversational, informational, or creative requests, respond with clear natural-language text — do NOT call tools just because they exist.
+- Be concise but thorough. Use markdown formatting where it adds clarity (lists, bold, code blocks).
+- Do not claim you cannot do things that you can answer conversationally."
+            .to_string();
+
         if !context_items.is_empty() {
-            system_prompt.push_str("\nRelevant Context:\n");
+            system_prompt.push_str("\n\nRelevant Context:\n");
             for item in context_items {
                 system_prompt.push_str(&format!("- {}: {}\n", item.key, item.value));
             }
         }
-
-        let mut messages = vec![
-            ChatMessage::system(system_prompt),
-            ChatMessage::user(user_prompt),
-        ];
 
         let tool_definitions: Vec<ToolDefinition> = self
             .tools
@@ -116,6 +136,17 @@ impl Agent {
             })
             .collect();
 
+        // Build the full message list: system + prior history + new user turn
+        let mut messages = Vec::with_capacity(prior_history.len() + 2);
+        messages.push(ChatMessage::system(system_prompt));
+        messages.extend(prior_history.clone());
+        messages.push(ChatMessage::user(user_prompt));
+
+        // history_tail tracks just the conversation turns (no system msg, no tool internals)
+        // so the caller can persist and pass them back next time.
+        let mut history_tail = prior_history;
+        history_tail.push(ChatMessage::user(user_prompt));
+
         let mut step = 0;
         let mut final_result = String::new();
 
@@ -126,7 +157,7 @@ impl Agent {
                 model: "default".to_string(),
                 messages: messages.clone(),
                 tools: tool_definitions.clone(),
-                temperature: Some(0.2),
+                temperature: Some(0.7),
             };
 
             let response = self.provider.complete(req).await.map_err(|e| {
@@ -204,10 +235,15 @@ impl Agent {
             return Err(err);
         }
 
+        // Append the assistant reply to the history tail for the caller to store
+        if !final_result.is_empty() {
+            history_tail.push(ChatMessage::assistant(final_result.clone()));
+        }
+
         self.update_state(AgentState::Completed {
             summary: final_result.clone(),
         });
-        Ok(final_result)
+        Ok((final_result, history_tail))
     }
 }
 

@@ -27,12 +27,20 @@ use crate::views::render_settings_view;
 use function_agent::AgentState;
 use function_config::AppConfig;
 use function_platform::{copy_to_clipboard, open_url, play_sound, SoundEffect};
+use function_providers::ChatMessage;
 use gpui::prelude::*;
 use gpui::{
     div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, Render, Rgba, Size,
     Task, Timer, WeakEntity, Window,
 };
 use std::time::Duration;
+
+/// A single message in the visible chat log.
+#[derive(Debug, Clone)]
+pub struct ChatEntry {
+    pub is_user: bool,
+    pub text: String,
+}
 
 /// Display mode for the function window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +93,10 @@ pub struct FunctionView {
     pub settings_show_key: bool,
     pub settings_focused_field: usize,
     pub settings_status_message: Option<String>,
+    /// Visible chat log (User + Assistant turns, for rendering)
+    pub chat_display: Vec<ChatEntry>,
+    /// API-level message history passed to `execute_with_history` (persists across turns)
+    pub chat_history_api: Vec<ChatMessage>,
 }
 
 pub type AssistantView = FunctionView;
@@ -158,6 +170,8 @@ impl FunctionView {
             settings_show_key: false,
             settings_focused_field: 0,
             settings_status_message: None,
+            chat_display: Vec::new(),
+            chat_history_api: Vec::new(),
         }
     }
 
@@ -297,6 +311,18 @@ impl FunctionView {
             };
         }
 
+        // If we have a chat history, size the window to show it
+        if !self.chat_display.is_empty() {
+            // Each message entry roughly: user ~40px, assistant ~60px; add input bar 56px + padding
+            let msg_count = self.chat_display.len();
+            let estimated_h = 56.0 + (msg_count as f32 * 72.0) + 24.0;
+            let clamped = estimated_h.min(560.0).max(200.0);
+            return Size {
+                width: px(640.0),
+                height: px(clamped),
+            };
+        }
+
         if self.latest_result.is_some() {
             Size {
                 width: px(640.0),
@@ -335,6 +361,7 @@ impl FunctionView {
             }
         }
     }
+
 
     pub fn toggle_expanded(
         &mut self,
@@ -754,6 +781,12 @@ impl FunctionView {
         self.input_buffer.clear();
         self.cursor_visible = true;
 
+        // Push user message to the visible chat log immediately
+        self.chat_display.push(ChatEntry {
+            is_user: true,
+            text: prompt.clone(),
+        });
+
         // Retain command surface and adapt window height to show execution progress
         self.mode = FunctionMode::Command;
         window.resize(self.target_window_size());
@@ -761,12 +794,7 @@ impl FunctionView {
         self.activities.clear();
         self.activities.push(ActivityEntry {
             step: 1,
-            description: format!("Interpreting task: \"{}\"", prompt),
-            status: ActivityStatus::Done,
-        });
-        self.activities.push(ActivityEntry {
-            step: 2,
-            description: "Orchestrating computer capabilities".to_string(),
+            description: format!("Thinking…"),
             status: ActivityStatus::Running,
         });
 
@@ -774,43 +802,73 @@ impl FunctionView {
             self.state = AgentState::Processing {
                 thought_summary: None,
             };
-            self.activities.push(ActivityEntry {
-                step: 2,
-                description: "Running agent Observe-Think-Act cycle".to_string(),
-                status: ActivityStatus::Running,
-            });
 
+            // Snapshot the API history to send into the async closure
+            let history_snapshot = self.chat_history_api.clone();
             let prompt_clone = prompt.clone();
-            let task = async move {
-                let _ = agent.execute_task(&prompt_clone).await;
-            };
 
-            if let Some(handle) = crate::get_runtime_handle() {
-                handle.spawn(task);
-            } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(task);
-            } else {
-                std::thread::spawn(move || {
-                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    {
-                        rt.block_on(task);
+            // Spawn with access to the view handle so we can write results back
+            let task = cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    match agent.execute_with_history(&prompt_clone, history_snapshot).await {
+                        Ok((reply, new_history)) => {
+                            let _ = cx.update(|cx| {
+                                this.update(cx, |view, cx| {
+                                    // Update the API history for the next turn
+                                    view.chat_history_api = new_history;
+                                    // Push the AI reply to the visible chat log
+                                    if !reply.is_empty() {
+                                        view.chat_display.push(ChatEntry {
+                                            is_user: false,
+                                            text: reply.clone(),
+                                        });
+                                        view.latest_result = Some(reply);
+                                    }
+                                    view.active_task = None;
+                                    view.activities.clear();
+                                    let target_sz = view.target_window_size();
+                                    cx.notify();
+                                    target_sz
+                                })
+                            });
+                            // Resize on the GPUI thread
+                            // (resize called in render via cx.notify → layout recalculation)
+                        }
+                        Err(e) => {
+                            let err_text = format!("Error: {}", e);
+                            let _ = cx.update(|cx| {
+                                this.update(cx, |view, cx| {
+                                    view.chat_display.push(ChatEntry {
+                                        is_user: false,
+                                        text: err_text,
+                                    });
+                                    view.active_task = None;
+                                    view.activities.clear();
+                                    view.state = AgentState::Idle;
+                                    cx.notify();
+                                })
+                            });
+                        }
                     }
-                });
-            }
+                }
+            });
+            task.detach();
         } else {
             self.state = AgentState::Acting {
                 action_description: "Executing task".to_string(),
             };
-            self.latest_result = Some(format!(
-                "Task \"{}\" initiated. Computer tools ready.",
-                prompt
-            ));
+            let no_agent_reply = "No AI provider configured. Go to Settings (Ctrl+,) to add your API key.".to_string();
+            self.chat_display.push(ChatEntry {
+                is_user: false,
+                text: no_agent_reply.clone(),
+            });
+            self.latest_result = Some(no_agent_reply);
         }
 
         cx.notify();
     }
+
 
     pub fn handle_key_down(
         &mut self,
@@ -1303,14 +1361,13 @@ impl Render for FunctionView {
         // UNIFIED FUNCTION COMMAND LAYER
         // ==========================================
         let has_query = !self.input_buffer.is_empty();
-        let has_task = self.active_task.is_some();
-        let has_result = self.latest_result.is_some();
         let is_busy = matches!(
             self.state,
             AgentState::Processing { .. }
                 | AgentState::Acting { .. }
                 | AgentState::WaitingForConfirmation { .. }
         );
+        let has_chat = !self.chat_display.is_empty();
 
         let bg_surface = Rgba {
             a: 1.0,
@@ -1323,11 +1380,13 @@ impl Render for FunctionView {
             "Transcribing speech with Whisper...".to_string()
         } else if let Some(ref err) = self.voice_error {
             format!("Voice error: {}. Type request", err)
+        } else if has_chat {
+            "Ask a follow-up…".to_string()
         } else {
             "Type a command or ask Function...".to_string()
         };
 
-        let launcher_items = if has_query && !has_task && !has_result && !is_busy {
+        let launcher_items = if has_query && !has_chat && !is_busy {
             get_launcher_items(&self.input_buffer)
         } else {
             Vec::new()
@@ -1377,165 +1436,163 @@ impl Render for FunctionView {
             .border_color(rgba(0xf1f0ef1f))
             .shadow_xl()
             .overflow_hidden()
-            // Upper area: conversational request, execution state, response
-            .when(has_task || has_result || is_busy, |parent| {
+            // ── CHAT LOG ──────────────────────────────────────────────────────────
+            // Shown whenever there is at least one message in the display history.
+            .when(!self.chat_display.is_empty() || is_busy, |parent| {
+                let chat_entries = self.chat_display.clone();
+                let busy_state_text: Option<String> = if is_busy {
+                    Some(match &self.state {
+                        AgentState::Processing { thought_summary } => thought_summary
+                            .clone()
+                            .unwrap_or_else(|| "Thinking…".into()),
+                        AgentState::Acting { action_description } => {
+                            format!("→ {}", action_description)
+                        }
+                        AgentState::WaitingForConfirmation { action, .. } => {
+                            format!("Confirm: {}", action)
+                        }
+                        _ => "Thinking…".into(),
+                    })
+                } else {
+                    None
+                };
+
                 parent.child(
                     div()
                         .flex()
                         .flex_col()
                         .flex_1()
                         .overflow_hidden()
-                        // Conversational user request element (lightweight & secondary)
-                        .when(has_task, |p| {
-                            let task_str = self.active_task.as_deref().unwrap_or("").to_string();
+                        .px(px(20.0))
+                        .pt(px(12.0))
+                        .pb(px(8.0))
+                        .gap(px(8.0))
+                        .children(chat_entries.into_iter().map(|entry| {
+                            if entry.is_user {
+                                // User bubble — right-aligned, muted background
+                                div()
+                                    .flex()
+                                    .justify_end()
+                                    .child(
+                                        div()
+                                            .px(px(12.0))
+                                            .py(px(7.0))
+                                            .rounded_xl()
+                                            .bg(Rgba {
+                                                a: 0.15,
+                                                ..theme.accent_primary
+                                            })
+                                            .max_w(px(460.0))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_primary)
+                                                    .child(entry.text),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                // Assistant reply — left-aligned with brand mark
+                                div()
+                                    .flex()
+                                    .items_start()
+                                    .gap(px(8.0))
+                                    .child(
+                                        div()
+                                            .mt(px(2.0))
+                                            .child(render_brand_mark(16.0)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .px(px(4.0))
+                                            .py(px(2.0))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .line_height(px(22.0))
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_primary)
+                                                    .child(entry.text),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            }
+                        }))
+                        // "Thinking…" indicator at bottom of chat when agent is busy
+                        .when_some(busy_state_text, |p, status| {
                             p.child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap_3()
-                                    .px_6()
-                                    .pt_4()
-                                    .pb_2()
+                                    .gap(px(8.0))
+                                    .child(render_brand_mark(16.0))
                                     .child(
                                         div()
                                             .text_xs()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_muted)
-                                            .child("User"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_secondary)
-                                            .child(task_str),
+                                            .child(status),
                                     ),
-                            )
-                        })
-                        // Compact Function-native execution state
-                        .when(is_busy, |p| {
-                            let status_text = match &self.state {
-                                AgentState::Processing { thought_summary } => thought_summary
-                                    .clone()
-                                    .unwrap_or_else(|| "Interpreting request".into()),
-                                AgentState::Acting { action_description } => {
-                                    format!("→ {}", action_description)
-                                }
-                                AgentState::WaitingForConfirmation { action, .. } => {
-                                    format!("Confirmation needed: {}", action)
-                                }
-                                AgentState::Completed { .. } => "→ Ready".into(),
-                                _ => "→ Ready".into(),
-                            };
-
-                            p.child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .px_6()
-                                    .py_2()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(render_brand_mark(18.0))
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(gpui::FontWeight::BOLD)
-                                                    .text_color(theme.text_muted)
-                                                    .child("FUNCTION"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_secondary)
-                                            .child(status_text),
-                                    ),
-                            )
-                        })
-                        // Security confirmation prompt
-                        .when(
-                            matches!(self.state, AgentState::WaitingForConfirmation { .. }),
-                            |p| {
-                                if let AgentState::WaitingForConfirmation { action, details } =
-                                    &self.state
-                                {
-                                    p.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .mx_6()
-                                            .my_2()
-                                            .p_3()
-                                            .rounded_lg()
-                                            .bg(theme.surface_elevated)
-                                            .border_1()
-                                            .border_color(theme.status_error)
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .font_weight(gpui::FontWeight::BOLD)
-                                                            .text_color(theme.status_error)
-                                                            .child(format!(
-                                                                "CONFIRMATION: {}",
-                                                                action
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.text_muted)
-                                                            .child(
-                                                                "Enter to allow  •  Esc to deny",
-                                                            ),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.text_secondary)
-                                                    .child(details.clone()),
-                                            ),
-                                    )
-                                } else {
-                                    p
-                                }
-                            },
-                        )
-                        // Typography-led spacious response
-                        .when(has_result, |p| {
-                            let result_str =
-                                self.latest_result.as_deref().unwrap_or("").to_string();
-                            p.child(
-                                div().flex_1().px_6().py_3().overflow_hidden().child(
-                                    div()
-                                        .text_base()
-                                        .line_height(px(24.0))
-                                        .font_weight(gpui::FontWeight::NORMAL)
-                                        .text_color(theme.text_primary)
-                                        .child(result_str),
-                                ),
                             )
                         }),
                 )
             })
-            // Hairline separator before input if upper content exists
-            .when(has_task || has_result || is_busy, |parent| {
+            // Security confirmation prompt (shown on top of chat when needed)
+            .when(
+                matches!(self.state, AgentState::WaitingForConfirmation { .. }),
+                |p| {
+                    if let AgentState::WaitingForConfirmation { action, details } = &self.state {
+                        p.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .mx_6()
+                                .my_2()
+                                .p_3()
+                                .rounded_lg()
+                                .bg(theme.surface_elevated)
+                                .border_1()
+                                .border_color(theme.status_error)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .text_color(theme.status_error)
+                                                .child(format!("CONFIRMATION: {}", action)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.text_muted)
+                                                .child("Enter to allow  •  Esc to deny"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.text_secondary)
+                                        .child(details.clone()),
+                                ),
+                        )
+                    } else {
+                        p
+                    }
+                },
+            )
+            // Hairline separator before input bar when content is showing
+            .when(!self.chat_display.is_empty() || is_busy, |parent| {
                 parent.child(div().w_full().h(px(1.0)).bg(theme.border_subtle))
             })
-            // Brand mark header when idle
-            .when(!has_task && !has_result && !is_busy, |parent| {
+            // Brand mark / motif header — shown only when chat is empty and idle
+            .when(self.chat_display.is_empty() && !is_busy, |parent| {
                 parent.child(
                     div()
                         .flex()
