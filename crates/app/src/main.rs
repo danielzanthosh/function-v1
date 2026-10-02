@@ -255,6 +255,7 @@ fn main() {
                     tracing::info!("GPUI hotkey async listener started, awaiting hotkey events");
                     while let Ok(()) = hotkey_rx.recv().await {
                         tracing::info!("🔔 GPUI hotkey event received by async listener");
+                        tracing::info!("Activating Function window");
                         let update_res = cx.update(|cx| {
                             let res = handle_clone.update(cx, |view, window, cx| {
                                 tracing::info!("⚡ Calling view.toggle_visibility(window, cx)");

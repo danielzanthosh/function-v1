@@ -474,6 +474,7 @@ pub mod macos {
         audio_capture: Arc<dyn AudioCapture>,
         hotkey_ref: Arc<AtomicIsize>,
         handler_ref: Arc<AtomicIsize>,
+        tx_ptr_ref: Arc<AtomicIsize>,
     }
 
     impl MacOsPlatformService {
@@ -486,12 +487,14 @@ pub mod macos {
                 audio_capture: Arc::new(CpalAudioCapture::new()),
                 hotkey_ref: Arc::new(AtomicIsize::new(0)),
                 handler_ref: Arc::new(AtomicIsize::new(0)),
+                tx_ptr_ref: Arc::new(AtomicIsize::new(0)),
             }
         }
 
         fn cleanup_hotkey_sync(&self) {
             let hk = self.hotkey_ref.swap(0, Ordering::SeqCst);
             let hr = self.handler_ref.swap(0, Ordering::SeqCst);
+            let tx_ptr = self.tx_ptr_ref.swap(0, Ordering::SeqCst);
             if hk != 0 || hr != 0 {
                 unsafe {
                     #[link(name = "Carbon", kind = "framework")]
@@ -505,6 +508,11 @@ pub mod macos {
                     if hr != 0 {
                         RemoveEventHandler(hr as *mut std::ffi::c_void);
                     }
+                }
+            }
+            if tx_ptr != 0 {
+                unsafe {
+                    let _ = Box::from_raw(tx_ptr as *mut broadcast::Sender<()>);
                 }
             }
         }
@@ -607,6 +615,7 @@ pub mod macos {
             #[allow(non_snake_case)]
             extern "C" {
                 fn GetApplicationEventTarget() -> *mut std::ffi::c_void;
+                fn GetEventDispatcherTarget() -> *mut std::ffi::c_void;
                 fn InstallEventHandler(
                     inTarget: *mut std::ffi::c_void,
                     inHandler: unsafe extern "C" fn(
@@ -635,10 +644,13 @@ pub mod macos {
                 user_data: *mut std::ffi::c_void,
             ) -> i32 {
                 tracing::info!("🔥 GLOBAL HOTKEY CALLBACK FIRED");
+                tracing::info!("Hotkey event received: Command+;");
                 tracing::info!(
                     event_ptr = ?the_event,
                     "kEventHotKeyPressed event received in Carbon handler"
                 );
+
+                trigger_global_hotkey();
 
                 if !user_data.is_null() {
                     let tx = &*(user_data as *const broadcast::Sender<()>);
@@ -671,13 +683,18 @@ pub mod macos {
             };
 
             unsafe {
-                let target = GetApplicationEventTarget();
+                let mut target = GetEventDispatcherTarget();
                 if target.is_null() {
-                    tracing::error!("GetApplicationEventTarget() returned NULL!");
+                    tracing::warn!("GetEventDispatcherTarget() returned NULL, falling back to GetApplicationEventTarget()");
+                    target = GetApplicationEventTarget();
+                }
+
+                if target.is_null() {
+                    tracing::error!("Both GetEventDispatcherTarget() and GetApplicationEventTarget() returned NULL!");
                 } else {
                     tracing::info!(
                         target = ?target,
-                        "Retrieved ApplicationEventTarget for Carbon hotkey handling"
+                        "Retrieved EventTarget for Carbon hotkey handling"
                     );
                 }
 
@@ -688,7 +705,7 @@ pub mod macos {
                     shortcut,
                     key_code,
                     modifier_mask = format!("{:#06x}", modifiers),
-                    "Installing Carbon event handler on ApplicationEventTarget"
+                    "Installing Carbon event handler on EventDispatcherTarget"
                 );
 
                 let h_res = InstallEventHandler(
@@ -726,6 +743,7 @@ pub mod macos {
                 );
 
                 if h_res == 0 && r_res == 0 {
+                    self.tx_ptr_ref.store(tx_ptr as isize, Ordering::SeqCst);
                     self.handler_ref
                         .store(handler_ref as isize, Ordering::SeqCst);
                     self.hotkey_ref.store(hotkey_ref as isize, Ordering::SeqCst);
@@ -1372,10 +1390,54 @@ pub fn macos_hide_app() {
     }
 }
 
-/// Setup macOS menu bar status item (top bar icon) that toggles Function when clicked.
+/// Helper to find icon.png for macOS menu bar icon
+#[cfg(target_os = "macos")]
+fn find_macos_icon_path() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidates = [
+                dir.join("../Resources/icon.png"),
+                dir.join("Resources/icon.png"),
+                dir.join("icon.png"),
+                dir.join("assets/icon.png"),
+                dir.join("../assets/icon.png"),
+                dir.join("../../assets/icon.png"),
+                dir.join("../../../assets/icon.png"),
+            ];
+            for c in candidates {
+                if c.exists() {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    let cwd_candidates = [
+        std::path::PathBuf::from("assets/icon.png"),
+        std::path::PathBuf::from("Resources/icon.png"),
+        std::path::PathBuf::from("icon.png"),
+    ];
+    for c in cwd_candidates {
+        if c.exists() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Setup macOS menu bar status item (top bar icon) that displays the template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
     unsafe {
+        static STATUS_ITEM_INITIALIZED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        static G_STATUS_ITEM: std::sync::atomic::AtomicIsize =
+            std::sync::atomic::AtomicIsize::new(0);
+
+        if STATUS_ITEM_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("macOS menu bar icon already initialized, skipping duplicate setup");
+            return;
+        }
+
         type MsgSend0 =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
         type MsgSend1 = unsafe extern "C" fn(
@@ -1392,6 +1454,31 @@ pub fn setup_macos_menu_bar_icon() {
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
             f64,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendBool = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            std::os::raw::c_schar,
+        ) -> *mut std::ffi::c_void;
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct NSSize {
+            width: f64,
+            height: f64,
+        }
+        type MsgSendSize = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            NSSize,
+        ) -> *mut std::ffi::c_void;
+
+        type MsgSendInitItem = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
         ) -> *mut std::ffi::c_void;
 
         extern "C" {
@@ -1422,6 +1509,16 @@ pub fn setup_macos_menu_bar_icon() {
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_float: MsgSendFloat =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_bool: MsgSendBool =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_size: MsgSendSize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_init_item: MsgSendInitItem =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+        let alloc_sel = sel_registerName(c"alloc".as_ptr());
+        let init_sel = sel_registerName(c"init".as_ptr());
+        let retain_sel = sel_registerName(c"retain".as_ptr());
 
         // Register FunctionStatusItemTarget class if not already registered
         let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
@@ -1433,16 +1530,50 @@ pub fn setup_macos_menu_bar_icon() {
                 0,
             );
             if !target_cls.is_null() {
-                unsafe extern "C" fn on_click(
+                unsafe extern "C" fn on_show_function(
                     _this: *mut std::ffi::c_void,
                     _cmd: *mut std::ffi::c_void,
                     _sender: *mut std::ffi::c_void,
                 ) {
-                    tracing::info!("Top bar (menu bar) status item clicked");
+                    tracing::info!("Menu item 'Show Function' clicked");
                     trigger_global_hotkey();
                 }
-                let sel = sel_registerName(c"onStatusItemClick:".as_ptr());
-                class_addMethod(target_cls, sel, on_click, c"v@:@".as_ptr());
+
+                unsafe extern "C" fn on_settings_click(
+                    _this: *mut std::ffi::c_void,
+                    _cmd: *mut std::ffi::c_void,
+                    _sender: *mut std::ffi::c_void,
+                ) {
+                    tracing::info!("Menu item 'Settings' clicked");
+                    trigger_global_hotkey();
+                }
+
+                unsafe extern "C" fn on_quit_function(
+                    _this: *mut std::ffi::c_void,
+                    _cmd: *mut std::ffi::c_void,
+                    _sender: *mut std::ffi::c_void,
+                ) {
+                    tracing::info!("Function quit requested");
+                    std::process::exit(0);
+                }
+
+                let show_sel = sel_registerName(c"onShowFunction:".as_ptr());
+                class_addMethod(target_cls, show_sel, on_show_function, c"v@:@".as_ptr());
+
+                let settings_sel = sel_registerName(c"onSettingsClick:".as_ptr());
+                class_addMethod(target_cls, settings_sel, on_settings_click, c"v@:@".as_ptr());
+
+                let quit_sel = sel_registerName(c"onQuitFunction:".as_ptr());
+                class_addMethod(target_cls, quit_sel, on_quit_function, c"v@:@".as_ptr());
+
+                // Backward-compatible selector for button click
+                class_addMethod(
+                    target_cls,
+                    sel_registerName(c"onStatusItemClick:".as_ptr()),
+                    on_show_function,
+                    c"v@:@".as_ptr(),
+                );
+
                 objc_registerClassPair(target_cls);
             }
         }
@@ -1452,9 +1583,10 @@ pub fn setup_macos_menu_bar_icon() {
             return;
         }
 
-        let alloc_sel = sel_registerName(c"alloc".as_ptr());
-        let init_sel = sel_registerName(c"init".as_ptr());
         let target_inst = msg_send_0(msg_send_0(target_cls, alloc_sel), init_sel);
+        if !target_inst.is_null() {
+            let _ = msg_send_0(target_inst, retain_sel);
+        }
 
         let ns_status_bar = objc_getClass(c"NSStatusBar".as_ptr());
         if ns_status_bar.is_null() {
@@ -1473,18 +1605,51 @@ pub fn setup_macos_menu_bar_icon() {
             tracing::warn!("Failed to create NSStatusItem on systemStatusBar");
             return;
         }
+        // Crucial: Retain status_item so AppKit autorelease pool does not deallocate it!
+        let _ = msg_send_0(status_item, retain_sel);
+        G_STATUS_ITEM.store(status_item as isize, std::sync::atomic::Ordering::SeqCst);
 
         let button_sel = sel_registerName(c"button".as_ptr());
         let button = msg_send_0(status_item, button_sel);
-        if !button.is_null() {
-            let ns_string = objc_getClass(c"NSString".as_ptr());
-            let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
+        let ns_string = objc_getClass(c"NSString".as_ptr());
+        let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
 
-            static TITLE_CSTR: &std::ffi::CStr = c"Function";
-            let title = msg_send_cstr(ns_string, utf8_sel, TITLE_CSTR.as_ptr());
-            if !title.is_null() {
-                let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
-                msg_send_1(button, set_title_sel, title);
+        let mut icon_loaded = false;
+        if let Some(icon_path) = find_macos_icon_path() {
+            if let Ok(c_path) = std::ffi::CString::new(icon_path.to_string_lossy().as_bytes()) {
+                let path_str = msg_send_cstr(ns_string, utf8_sel, c_path.as_ptr());
+                if !path_str.is_null() {
+                    let ns_image = objc_getClass(c"NSImage".as_ptr());
+                    let image_alloc = msg_send_0(ns_image, alloc_sel);
+                    let init_file_sel = sel_registerName(c"initWithContentsOfFile:".as_ptr());
+                    let image = msg_send_1(image_alloc, init_file_sel, path_str);
+                    if !image.is_null() {
+                        let _ = msg_send_0(image, retain_sel);
+                        let set_template_sel = sel_registerName(c"setTemplate:".as_ptr());
+                        msg_send_bool(image, set_template_sel, 1);
+
+                        let set_size_sel = sel_registerName(c"setSize:".as_ptr());
+                        msg_send_size(image, set_size_sel, NSSize { width: 18.0, height: 18.0 });
+
+                        if !button.is_null() {
+                            let set_image_sel = sel_registerName(c"setImage:".as_ptr());
+                            msg_send_1(button, set_image_sel, image);
+                            icon_loaded = true;
+                            tracing::info!(path = %icon_path.display(), "Loaded template icon for macOS menu bar item");
+                        }
+                    }
+                }
+            }
+        }
+
+        if !button.is_null() {
+            if !icon_loaded {
+                static TITLE_CSTR: &std::ffi::CStr = c"ƒ";
+                let title = msg_send_cstr(ns_string, utf8_sel, TITLE_CSTR.as_ptr());
+                if !title.is_null() {
+                    let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
+                    msg_send_1(button, set_title_sel, title);
+                }
             }
 
             static TIP_CSTR: &std::ffi::CStr = c"Function (Command+;)";
@@ -1493,16 +1658,104 @@ pub fn setup_macos_menu_bar_icon() {
                 let set_tip_sel = sel_registerName(c"setToolTip:".as_ptr());
                 msg_send_1(button, set_tip_sel, tip);
             }
-
-            let set_target_sel = sel_registerName(c"setTarget:".as_ptr());
-            msg_send_1(button, set_target_sel, target_inst);
-
-            let set_action_sel = sel_registerName(c"setAction:".as_ptr());
-            let action_sel = sel_registerName(c"onStatusItemClick:".as_ptr());
-            msg_send_1(button, set_action_sel, action_sel);
-
-            tracing::info!("macOS top bar (menu bar) Function status item created successfully");
         }
+
+        // Build native NSMenu
+        let ns_menu_cls = objc_getClass(c"NSMenu".as_ptr());
+        let ns_menu_item_cls = objc_getClass(c"NSMenuItem".as_ptr());
+        if !ns_menu_cls.is_null() && !ns_menu_item_cls.is_null() {
+            let menu_alloc = msg_send_0(ns_menu_cls, alloc_sel);
+            let menu_init_sel = sel_registerName(c"initWithTitle:".as_ptr());
+            let menu_title = msg_send_cstr(ns_string, utf8_sel, c"FunctionMenu".as_ptr());
+            let menu = msg_send_1(menu_alloc, menu_init_sel, menu_title);
+            if !menu.is_null() {
+                let _ = msg_send_0(menu, retain_sel);
+
+                let set_autoenables_sel = sel_registerName(c"setAutoenablesItems:".as_ptr());
+                msg_send_bool(menu, set_autoenables_sel, 0);
+
+                let add_item_sel = sel_registerName(c"addItem:".as_ptr());
+                let sep_sel = sel_registerName(c"separatorItem".as_ptr());
+                let init_item_sel = sel_registerName(c"initWithTitle:action:keyEquivalent:".as_ptr());
+                let set_target_sel = sel_registerName(c"setTarget:".as_ptr());
+                let set_enabled_sel = sel_registerName(c"setEnabled:".as_ptr());
+
+                // 1. "Function" (disabled header)
+                let f_title = msg_send_cstr(ns_string, utf8_sel, c"Function".as_ptr());
+                let empty_key = msg_send_cstr(ns_string, utf8_sel, c"".as_ptr());
+                let header_item = msg_send_init_item(
+                    msg_send_0(ns_menu_item_cls, alloc_sel),
+                    init_item_sel,
+                    f_title,
+                    std::ptr::null_mut(),
+                    empty_key,
+                );
+                msg_send_bool(header_item, set_enabled_sel, 0);
+                msg_send_1(menu, add_item_sel, header_item);
+
+                // Separator
+                let sep1 = msg_send_0(ns_menu_item_cls, sep_sel);
+                msg_send_1(menu, add_item_sel, sep1);
+
+                // 2. "Show Function" (action: onShowFunction:, key: ";")
+                let show_title = msg_send_cstr(ns_string, utf8_sel, c"Show Function".as_ptr());
+                let semi_key = msg_send_cstr(ns_string, utf8_sel, c";".as_ptr());
+                let show_act = sel_registerName(c"onShowFunction:".as_ptr());
+                let show_item = msg_send_init_item(
+                    msg_send_0(ns_menu_item_cls, alloc_sel),
+                    init_item_sel,
+                    show_title,
+                    show_act,
+                    semi_key,
+                );
+                msg_send_1(show_item, set_target_sel, target_inst);
+                msg_send_bool(show_item, set_enabled_sel, 1);
+                msg_send_1(menu, add_item_sel, show_item);
+
+                // Separator
+                let sep2 = msg_send_0(ns_menu_item_cls, sep_sel);
+                msg_send_1(menu, add_item_sel, sep2);
+
+                // 3. "Settings" (action: onSettingsClick:, key: ",")
+                let settings_title = msg_send_cstr(ns_string, utf8_sel, c"Settings".as_ptr());
+                let comma_key = msg_send_cstr(ns_string, utf8_sel, c",".as_ptr());
+                let settings_act = sel_registerName(c"onSettingsClick:".as_ptr());
+                let settings_item = msg_send_init_item(
+                    msg_send_0(ns_menu_item_cls, alloc_sel),
+                    init_item_sel,
+                    settings_title,
+                    settings_act,
+                    comma_key,
+                );
+                msg_send_1(settings_item, set_target_sel, target_inst);
+                msg_send_bool(settings_item, set_enabled_sel, 1);
+                msg_send_1(menu, add_item_sel, settings_item);
+
+                // Separator
+                let sep3 = msg_send_0(ns_menu_item_cls, sep_sel);
+                msg_send_1(menu, add_item_sel, sep3);
+
+                // 4. "Quit Function" (action: onQuitFunction:, key: "q")
+                let quit_title = msg_send_cstr(ns_string, utf8_sel, c"Quit Function".as_ptr());
+                let q_key = msg_send_cstr(ns_string, utf8_sel, c"q".as_ptr());
+                let quit_act = sel_registerName(c"onQuitFunction:".as_ptr());
+                let quit_item = msg_send_init_item(
+                    msg_send_0(ns_menu_item_cls, alloc_sel),
+                    init_item_sel,
+                    quit_title,
+                    quit_act,
+                    q_key,
+                );
+                msg_send_1(quit_item, set_target_sel, target_inst);
+                msg_send_bool(quit_item, set_enabled_sel, 1);
+                msg_send_1(menu, add_item_sel, quit_item);
+
+                let set_menu_sel = sel_registerName(c"setMenu:".as_ptr());
+                msg_send_1(status_item, set_menu_sel, menu);
+            }
+        }
+
+        tracing::info!("Function menu bar item initialized");
     }
 }
 
@@ -1664,7 +1917,65 @@ pub fn copy_to_clipboard(text: &str) -> bool {
             true
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendCStr = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *const std::os::raw::c_char,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendSetString = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> std::os::raw::c_schar;
+
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+        }
+
+        unsafe {
+            let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let msg_send_cstr: MsgSendCStr =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let msg_send_set_string: MsgSendSetString =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+            let ns_pasteboard = objc_getClass(c"NSPasteboard".as_ptr());
+            let ns_string = objc_getClass(c"NSString".as_ptr());
+            if !ns_pasteboard.is_null() && !ns_string.is_null() {
+                let general_sel = sel_registerName(c"generalPasteboard".as_ptr());
+                let pb = msg_send_0(ns_pasteboard, general_sel);
+                if !pb.is_null() {
+                    let clear_sel = sel_registerName(c"clearContents".as_ptr());
+                    let _ = msg_send_0(pb, clear_sel);
+
+                    let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
+                    if let Ok(c_text) = std::ffi::CString::new(text) {
+                        let str_obj = msg_send_cstr(ns_string, utf8_sel, c_text.as_ptr());
+                        let pboard_type = msg_send_cstr(
+                            ns_string,
+                            utf8_sel,
+                            c"public.utf8-plain-text".as_ptr(),
+                        );
+
+                        if !str_obj.is_null() && !pboard_type.is_null() {
+                            let set_str_sel = sel_registerName(c"setString:forType:".as_ptr());
+                            let res = msg_send_set_string(pb, set_str_sel, str_obj, pboard_type);
+                            return res != 0;
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = text;
         false

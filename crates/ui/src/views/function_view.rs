@@ -71,6 +71,7 @@ pub struct FunctionView {
     pub agent: Option<std::sync::Arc<function_agent::Agent>>,
     pub cursor_visible: bool,
     pub selected_index: usize,
+    pub is_text_selected: bool,
     pub current_time: String,
     pub _cursor_task: Option<Task<()>>,
     pub _agent_sub_task: Option<Task<()>>,
@@ -144,6 +145,7 @@ impl FunctionView {
             agent: None,
             cursor_visible: true,
             selected_index: 0,
+            is_text_selected: false,
             current_time: get_current_time_string(),
             _cursor_task: Some(cursor_task),
             _agent_sub_task: None,
@@ -539,11 +541,13 @@ impl FunctionView {
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.is_visible = true;
+        self.is_text_selected = false;
         let target_size = self.target_window_size();
         tracing::info!(
             ?target_size,
             "✨ Summoning Function window (showing and focusing)"
         );
+        tracing::info!("Activating Function window");
         self.input_buffer.clear();
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
@@ -885,6 +889,44 @@ impl FunctionView {
                     cx.notify();
                     return;
                 }
+                "c" if modifiers.secondary() => {
+                    let text = match self.settings_focused_field {
+                        0 => &self.settings_api_key,
+                        1 => &self.settings_model,
+                        2 => &self.settings_base_url,
+                        _ => "",
+                    };
+                    if !text.is_empty() {
+                        copy_to_clipboard(text);
+                        self.play_sound_feedback(SoundEffect::Select);
+                    }
+                    return;
+                }
+                "x" if modifiers.secondary() => {
+                    let text = match self.settings_focused_field {
+                        0 => std::mem::take(&mut self.settings_api_key),
+                        1 => std::mem::take(&mut self.settings_model),
+                        2 => std::mem::take(&mut self.settings_base_url),
+                        _ => String::new(),
+                    };
+                    if !text.is_empty() {
+                        copy_to_clipboard(&text);
+                        self.play_sound_feedback(SoundEffect::Select);
+                        cx.notify();
+                    }
+                    return;
+                }
+                "a" if modifiers.secondary() => {
+                    match self.settings_focused_field {
+                        0 => self.settings_api_key.clear(),
+                        1 => self.settings_model.clear(),
+                        2 => self.settings_base_url.clear(),
+                        _ => {}
+                    }
+                    self.play_sound_feedback(SoundEffect::Select);
+                    cx.notify();
+                    return;
+                }
                 "v" if modifiers.secondary() => {
                     if let Some(text) = cx
                         .read_from_clipboard()
@@ -953,14 +995,59 @@ impl FunctionView {
         }
 
         // ==========================================
-        // GLOBAL SETTINGS SHORTCUT (Ctrl+,)
+        // TEXT SELECTION & CLIPBOARD SHORTCUTS
         // ==========================================
+        if key == "a" && modifiers.secondary() {
+            if !self.input_buffer.is_empty() {
+                self.is_text_selected = true;
+                self.play_sound_feedback(SoundEffect::Select);
+                cx.notify();
+            }
+            return;
+        }
+
+        if key == "c" && modifiers.secondary() {
+            let text_to_copy = if !self.input_buffer.is_empty() {
+                self.input_buffer.as_str()
+            } else if let Some(ref res) = self.latest_result {
+                res.as_str()
+            } else {
+                ""
+            };
+            if !text_to_copy.is_empty() {
+                copy_to_clipboard(text_to_copy);
+                self.play_sound_feedback(SoundEffect::Select);
+                cx.notify();
+            }
+            return;
+        }
+
+        if key == "x" && modifiers.secondary() {
+            if !self.input_buffer.is_empty() {
+                copy_to_clipboard(&self.input_buffer);
+                self.input_buffer.clear();
+                self.is_text_selected = false;
+                self.selected_index = 0;
+                self.play_sound_feedback(SoundEffect::Select);
+                window.resize(self.target_window_size());
+                cx.notify();
+            }
+            return;
+        }
+
         if key == "v" && modifiers.secondary() {
             if let Some(text) = cx
                 .read_from_clipboard()
                 .and_then(|clipboard| clipboard.text())
             {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.is_text_selected = false;
+                }
                 self.input_buffer.push_str(&text);
+                self.selected_index = 0;
+                self.cursor_visible = true;
+                window.resize(self.target_window_size());
                 cx.notify();
             }
             return;
@@ -1009,7 +1096,14 @@ impl FunctionView {
         }
 
         match key {
+            "left" | "right" => {
+                if self.is_text_selected {
+                    self.is_text_selected = false;
+                    cx.notify();
+                }
+            }
             "up" => {
+                self.is_text_selected = false;
                 if self.selected_index > 0 {
                     self.selected_index -= 1;
                     self.play_sound_feedback(SoundEffect::Navigate);
@@ -1017,6 +1111,7 @@ impl FunctionView {
                 }
             }
             "down" => {
+                self.is_text_selected = false;
                 let items = get_launcher_items(&self.input_buffer);
                 if self.selected_index + 1 < items.len() {
                     self.selected_index += 1;
@@ -1025,6 +1120,7 @@ impl FunctionView {
                 }
             }
             "enter" => {
+                self.is_text_selected = false;
                 let prompt = self.input_buffer.trim().to_string();
                 if let Some(cmd) = resolve_local_command(&prompt) {
                     match cmd {
@@ -1048,12 +1144,27 @@ impl FunctionView {
                 }
             }
             "tab" => {
+                self.is_text_selected = false;
                 self.toggle_expanded(&ToggleExpanded, window, cx);
             }
             "escape" => {
+                if self.is_text_selected {
+                    self.is_text_selected = false;
+                    cx.notify();
+                    return;
+                }
                 self.cancel(&CancelTask, window, cx);
             }
             "backspace" => {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.is_text_selected = false;
+                    self.selected_index = 0;
+                    self.cursor_visible = true;
+                    window.resize(self.target_window_size());
+                    cx.notify();
+                    return;
+                }
                 self.input_buffer.pop();
                 self.selected_index = 0;
                 self.cursor_visible = true;
@@ -1061,6 +1172,10 @@ impl FunctionView {
                 cx.notify();
             }
             "space" => {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.is_text_selected = false;
+                }
                 self.input_buffer.push(' ');
                 self.selected_index = 0;
                 self.cursor_visible = true;
@@ -1068,6 +1183,10 @@ impl FunctionView {
                 cx.notify();
             }
             ch if ch.len() == 1 && !modifiers.control && !modifiers.alt => {
+                if self.is_text_selected {
+                    self.input_buffer.clear();
+                    self.is_text_selected = false;
+                }
                 self.input_buffer.push_str(ch);
                 self.selected_index = 0;
                 self.cursor_visible = true;
@@ -1176,6 +1295,12 @@ impl Render for FunctionView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, _| {
+                    this.focus_handle.focus(window);
+                }),
+            )
             .flex()
             .flex_col()
             .w_full()
@@ -1352,6 +1477,14 @@ impl Render for FunctionView {
                         .justify_center()
                         .pt_3()
                         .pb_1()
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.focus_handle.focus(window);
+                                this.toggle_voice(&ToggleVoice, window, cx);
+                            }),
+                        )
                         .child(render_function_motif(
                             motif_state,
                             &theme,
@@ -1374,20 +1507,44 @@ impl Render for FunctionView {
                             .items_center()
                             .gap_4()
                             .flex_1()
+                            .cursor_text()
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.focus_handle.focus(window);
+                                    this.is_text_selected = false;
+                                    cx.notify();
+                                }),
+                            )
                             .child(if has_query {
                                 div()
                                     .flex()
                                     .items_center()
                                     .flex_1()
-                                    .child(
+                                    .child(if self.is_text_selected {
+                                        div()
+                                            .bg(Rgba {
+                                                a: 0.35,
+                                                ..theme.accent_primary
+                                            })
+                                            .rounded_sm()
+                                            .px_1()
+                                            .child(
+                                                div()
+                                                    .text_lg()
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_primary)
+                                                    .child(self.input_buffer.clone()),
+                                            )
+                                    } else {
                                         div()
                                             .text_lg()
                                             .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_primary)
-                                            .child(self.input_buffer.clone()),
-                                    )
+                                            .child(self.input_buffer.clone())
+                                    })
                                     .child(div().w(px(2.0)).h(px(20.0)).bg(
-                                        if self.cursor_visible {
+                                        if self.cursor_visible && !self.is_text_selected {
                                             theme.text_primary
                                         } else {
                                             rgba(0x00000000)
@@ -1420,6 +1577,33 @@ impl Render for FunctionView {
                             .flex()
                             .items_center()
                             .gap_3()
+                            .when(has_query, |p| {
+                                p.child(
+                                    div()
+                                        .cursor_pointer()
+                                        .p_1()
+                                        .rounded_full()
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _, window, cx| {
+                                                this.input_buffer.clear();
+                                                this.is_text_selected = false;
+                                                this.selected_index = 0;
+                                                this.focus_handle.focus(window);
+                                                window.resize(this.target_window_size());
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::BOLD)
+                                                .text_color(theme.text_muted)
+                                                .child("✕"),
+                                        ),
+                                )
+                            })
                             .when(is_listening, |p| {
                                 p.child(
                                     div()
@@ -1494,6 +1678,7 @@ impl Render for FunctionView {
                         .on_mouse_down(
                             gpui::MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {
+                                this.focus_handle.focus(window);
                                 this.execute_launcher_action(action_clone.clone(), window, cx);
                             }),
                         )
