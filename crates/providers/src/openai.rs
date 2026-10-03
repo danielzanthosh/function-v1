@@ -8,6 +8,35 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::process::Command;
 
+const CURL_STATUS_MARKER: &str = "\n__FUNCTION_HTTP_STATUS__:";
+
+fn provider_error_message(parsed: &serde_json::Value, raw_body: &str) -> String {
+    if let Some(error) = parsed.get("error") {
+        if let Some(message) = error.get("message").and_then(|value| value.as_str()) {
+            return message.to_string();
+        }
+
+        if !error.is_null() {
+            return error.to_string();
+        }
+    }
+
+    let fallback = raw_body.trim();
+    if fallback.is_empty() {
+        "Empty provider response".to_string()
+    } else {
+        fallback.chars().take(1000).collect()
+    }
+}
+
+fn split_curl_response(raw_response: String) -> (String, Option<u16>) {
+    if let Some((body, status)) = raw_response.rsplit_once(CURL_STATUS_MARKER) {
+        return (body.to_string(), status.trim().parse().ok());
+    }
+
+    (raw_response, None)
+}
+
 pub struct OpenAiLlmProvider {
     base_url: String,
     api_key: Option<String>,
@@ -164,7 +193,10 @@ impl LlmProvider for OpenAiLlmProvider {
                     }
                 }
 
-                cmd.arg("--data-binary").arg("@-");
+                cmd.arg("--data-binary")
+                    .arg("@-")
+                    .arg("-w")
+                    .arg(format!("{}%{{http_code}}", CURL_STATUS_MARKER));
                 cmd.stdin(std::process::Stdio::piped());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
@@ -196,16 +228,14 @@ impl LlmProvider for OpenAiLlmProvider {
             .map_err(|e| ProviderError::Network(e.to_string()))??;
 
 
+        let (response_body, http_status) = split_curl_response(response_body);
         let parsed: serde_json::Value = serde_json::from_str(&response_body)?;
 
-        if let Some(err) = parsed.get("error") {
-            let msg = err
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown provider error");
+        if parsed.get("error").is_some() {
+            let msg = provider_error_message(&parsed, &response_body);
             return Err(ProviderError::Api {
-                code: 400,
-                message: msg.to_string(),
+                code: http_status.unwrap_or(400),
+                message: msg,
             });
         }
 
@@ -571,6 +601,17 @@ mod tests {
             "gpt-4o",
         );
         assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn test_provider_error_message_preserves_structured_error_details() {
+        let body = r#"{"error":{"type":"invalid_request_error","code":"model_not_found"}}"#;
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+
+        let message = provider_error_message(&parsed, body);
+
+        assert!(message.contains("model_not_found"));
+        assert_ne!(message, "Unknown provider error");
     }
 }
 

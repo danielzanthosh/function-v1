@@ -638,12 +638,29 @@ impl FunctionView {
 
                         let stt = self.stt_provider.clone();
                         let agent = self.agent.clone();
+                        let runtime_handle = crate::get_runtime_handle();
 
                         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                             let cx = cx.clone();
                             async move {
                                 let result = if let Some(stt) = stt {
-                                    stt.transcribe_audio(&wav_bytes, 16000).await
+                                    if let Some(handle) = runtime_handle {
+                                        match handle
+                                            .spawn(async move {
+                                                stt.transcribe_audio(&wav_bytes, 16000).await
+                                            })
+                                            .await
+                                        {
+                                            Ok(result) => result,
+                                            Err(error) => Err(function_providers::ProviderError::Network(
+                                                format!("Transcription task failed: {error}"),
+                                            )),
+                                        }
+                                    } else {
+                                        Err(function_providers::ProviderError::Network(
+                                            "Tokio runtime unavailable for transcription".to_string(),
+                                        ))
+                                    }
                                 } else {
                                     Err(function_providers::ProviderError::NotConfigured(
                                         "Speech-to-text provider not configured".to_string(),
