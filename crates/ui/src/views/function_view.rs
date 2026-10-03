@@ -1002,6 +1002,54 @@ impl FunctionView {
         cx.notify();
     }
 
+    pub fn begin_chatgpt_login(&mut self, cx: &mut Context<Self>) {
+        let authorization = function_providers::chatgpt_oauth::begin_authorization();
+        if let Err(error) = function_providers::chatgpt_oauth::open_authorization_url(&authorization.url) {
+            self.settings_status_message = Some(format!("Could not open ChatGPT login: {error}"));
+            cx.notify();
+            return;
+        }
+        self.settings_status_message = Some("Complete ChatGPT sign-in in your browser...".into());
+        let state = authorization.state().to_string();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    let code = function_providers::chatgpt_oauth::wait_for_callback(state)?;
+                    function_providers::chatgpt_oauth::exchange_code(authorization, code)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result);
+                let _ = cx.update(|cx| {
+                    this.update(cx, |view, cx| {
+                        match result {
+                            Ok(tokens) => {
+                                let save_result = function_providers::chatgpt_oauth::save_tokens(&tokens);
+                                let install_result = function_providers::chatgpt_oauth::install_access_token_in_codex(&tokens.access_token);
+                                if let Err(error) = save_result.or(install_result) {
+                                    view.settings_status_message = Some(format!("Could not save ChatGPT login: {error}"));
+                                } else {
+                                    view.settings_provider = "chatgpt-plan".into();
+                                    view.settings_model = "gpt-5".into();
+                                    view.settings_base_url.clear();
+                                    view.config.ai_provider.provider_name = "chatgpt-plan".into();
+                                    view.config.ai_provider.model = "gpt-5".into();
+                                    view.config.ai_provider.api_key = None;
+                                    view.apply_saved_provider_config();
+                                    view.settings_status_message = Some("ChatGPT connected. Save & Apply to use it as the main AI.".into());
+                                }
+                            }
+                            Err(error) => view.settings_status_message = Some(format!("ChatGPT login failed: {error}")),
+                        }
+                        cx.notify();
+                    })
+                });
+            }
+        }).detach();
+        cx.notify();
+    }
+
     fn apply_saved_provider_config(&mut self) {
         let credentials = function_config::InMemoryCredentialStore::new();
         let api_key = self.config.ai_provider.resolve_api_key(&credentials);

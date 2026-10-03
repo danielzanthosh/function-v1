@@ -8,6 +8,7 @@ pub mod search;
 pub mod context_limits;
 pub mod gemini;
 pub mod codex;
+pub mod chatgpt_oauth;
 
 pub use openai::{OpenAiLlmProvider, OpenAiTtsProvider, WhisperSttProvider};
 pub use gemini::GeminiLlmProvider;

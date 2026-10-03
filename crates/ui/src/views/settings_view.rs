@@ -545,7 +545,23 @@ pub fn render_settings_view(
                                                         cx.notify();
                                                     }),
                                                 ),
-                                        ),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(accent_col)
+                                                .text_xs()
+                                                .text_color(card_bg)
+                                                .child("Sign in with ChatGPT")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.begin_chatgpt_login(cx);
+                                                    }),
+                                                ),
+                                        )
                                 )
                                 .child(provider_field(view, cx, "AI PROVIDER", &view.settings_provider, 3))
                                 .child(provider_field(view, cx, "STT API KEY", &view.settings_stt_api_key, 4))
