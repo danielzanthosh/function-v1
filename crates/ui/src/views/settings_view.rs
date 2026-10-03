@@ -9,7 +9,7 @@
 //! - Persistent saving to `~/.function/config.json`
 //! - Interactive mouse click triggers and scrollable content area
 
-use crate::components::render_logo;
+use crate::components::render_logo_with_mode;
 use crate::views::function_view::FunctionView;
 use function_config::{AccentColor, ThemeStyle, WindowPositionMode};
 use gpui::prelude::*;
@@ -124,7 +124,7 @@ pub fn render_settings_view(
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(render_logo(18.0))
+                        .child(render_logo_with_mode(18.0, theme.mode == crate::theme::ThemeMode::Light))
                         .child(
                             div()
                                 .flex()

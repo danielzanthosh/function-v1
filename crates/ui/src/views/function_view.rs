@@ -23,7 +23,8 @@ use crate::components::spotlight_bar::{
     get_current_time_string, get_launcher_items, LauncherAction, LauncherIconType,
 };
 use crate::components::{
-    render_brand_mark, render_inline_text, render_logo, render_markdown, ActivityEntry,
+    render_brand_mark_with_mode, render_inline_text, render_logo, render_markdown,
+    ActivityEntry,
     ActivityStatus,
 };
 use crate::conversation::{ChatEntry, ConversationStore, SavedConversation};
@@ -2543,7 +2544,7 @@ impl Render for FunctionView {
                                                     .flex()
                                                     .items_center()
                                                     .gap_2()
-                                                    .child(render_brand_mark(14.0))
+                                                    .child(render_brand_mark_with_mode(14.0, theme.mode == crate::theme::ThemeMode::Light))
                                                     .child(
                                                         div()
                                                             .text_xs()
@@ -2600,7 +2601,7 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
-                                    .child(render_brand_mark(16.0))
+                                    .child(render_brand_mark_with_mode(16.0, theme.mode == crate::theme::ThemeMode::Light))
                                     .child(
                                         div()
                                             .text_xs()

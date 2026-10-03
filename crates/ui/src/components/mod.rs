@@ -13,7 +13,8 @@ pub use activity_list::{render_activity_list, ActivityEntry, ActivityStatus};
 pub use calculator::{evaluate_calculation, format_result};
 pub use function_motif::{render_function_motif, MotifState};
 pub use logo::{
-    render_app_icon, render_brand_lockup, render_brand_lockup_small, render_brand_mark, render_logo,
+    render_app_icon, render_brand_lockup, render_brand_lockup_small, render_brand_mark,
+    render_brand_mark_with_mode, render_logo, render_logo_with_mode,
 };
 pub use markdown::{format_latex, render_inline_text, render_markdown};
 pub use spotlight_bar::{

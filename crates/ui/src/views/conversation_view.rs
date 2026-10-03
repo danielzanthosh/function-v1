@@ -3,7 +3,7 @@
 //! Provides a dedicated interface to browse past chats, resume previous conversations,
 //! or initiate fresh chats. Controlled via the "conversation" command.
 
-use crate::components::render_brand_mark;
+use crate::components::render_brand_mark_with_mode;
 use crate::conversation::SavedConversation;
 use crate::theme::Theme;
 use gpui::prelude::*;
@@ -68,7 +68,7 @@ pub fn render_conversation_view(
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(render_brand_mark(18.0))
+                        .child(render_brand_mark_with_mode(18.0, theme.mode == crate::theme::ThemeMode::Light))
                         .child(
                             div()
                                 .flex()

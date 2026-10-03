@@ -51,10 +51,10 @@ impl Theme {
                     rgb(0xf1f0ef)
                 }
             }
-            AccentColor::Cyan => rgb(0xd1cdc7),    // Warm stone
-            AccentColor::Emerald => rgb(0xc4bfb5), // Warm sand
-            AccentColor::Violet => rgb(0xa8a49c),  // Warm ash
-            AccentColor::Amber => rgb(0xdedad1),   // Warm parchment
+            AccentColor::Cyan => if is_light { rgb(0x007aff) } else { rgb(0x64d2ff) },
+            AccentColor::Emerald => if is_light { rgb(0x16803c) } else { rgb(0x30d158) },
+            AccentColor::Violet => if is_light { rgb(0x7a3db8) } else { rgb(0xbf8cff) },
+            AccentColor::Amber => if is_light { rgb(0xb05a00) } else { rgb(0xffb340) },
         };
 
         match config.theme_style {
