@@ -1,7 +1,7 @@
 use crate::{ChatMessage, CompletionRequest, CompletionResponse, LlmProvider, MessageRole, ProviderError};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// GUI applications on macOS do not inherit the interactive shell's PATH.
 /// Resolve Codex through the user's login shell and common package-manager
@@ -49,6 +49,20 @@ pub fn resolve_codex_executable() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|candidate| candidate.to_string_lossy() == "codex" || candidate.is_file())
 }
 
+/// Windows cannot execute a `.cmd` shim directly with CreateProcess.
+pub fn codex_command(executable: std::path::PathBuf) -> Command {
+    #[cfg(target_os = "windows")]
+    if executable.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    }) {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/S", "/C"]);
+        command.arg(executable);
+        return command;
+    }
+    Command::new(executable)
+}
+
 /// Uses the locally authenticated Codex CLI session. The OAuth credential is
 /// never read or copied by Function; Codex owns its storage and renewal.
 pub struct CodexChatGptProvider {
@@ -79,7 +93,7 @@ fn prompt_from_messages(messages: &[ChatMessage]) -> String {
 
 fn run_codex(model: String, prompt: String) -> Result<String, ProviderError> {
     let executable = resolve_codex_executable().ok_or_else(|| ProviderError::NotConfigured("Codex CLI was not found. Install it or add its directory to your login shell PATH.".into()))?;
-    let output = Command::new(executable)
+    let output = codex_command(executable)
         .args([
             "exec",
             "--json",
@@ -89,8 +103,10 @@ fn run_codex(model: String, prompt: String) -> Result<String, ProviderError> {
             "--skip-git-repo-check",
             "--model",
             &model,
+            "--",
             &prompt,
         ])
+        .stdin(Stdio::null())
         .output()
         .map_err(|error| ProviderError::NotConfigured(format!("Codex CLI is unavailable: {error}")))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
