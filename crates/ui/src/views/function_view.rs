@@ -898,6 +898,7 @@ impl FunctionView {
 
         match self.config.save() {
             Ok(_) => {
+                self.apply_saved_provider_config();
                 self.settings_status_message =
                     Some("Preferences saved to ~/.function/config.json".into());
                 self.play_sound_feedback(SoundEffect::Success);
@@ -908,6 +909,44 @@ impl FunctionView {
             }
         }
         cx.notify();
+    }
+
+    fn apply_saved_provider_config(&mut self) {
+        let credentials = function_config::InMemoryCredentialStore::new();
+        let api_key = self.config.ai_provider.resolve_api_key(&credentials);
+
+        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self
+            .config
+            .ai_provider
+            .is_configured()
+        {
+            std::sync::Arc::new(function_providers::OpenAiLlmProvider::new(
+                &self.config.ai_provider.base_url,
+                api_key.clone(),
+                &self.config.ai_provider.model,
+            ))
+        } else {
+            std::sync::Arc::new(function_providers::MockLlmProvider::new(
+                "Function computer assistant ready. Configure your API key in settings or run computer tools directly.",
+            ))
+        };
+
+        if let Some(agent) = &self.agent {
+            agent.set_provider(provider);
+        }
+
+        self.stt_provider = if self.config.ai_provider.is_configured() {
+            Some(std::sync::Arc::new(
+                function_providers::WhisperSttProvider::new(
+                    &self.config.ai_provider.base_url,
+                    api_key,
+                ),
+            ))
+        } else {
+            Some(std::sync::Arc::new(function_providers::MockSttProvider::new(
+                "Open my browser and navigate to YouTube",
+            )))
+        };
     }
 
     pub fn cycle_theme_style(&mut self, cx: &mut Context<Self>) {
@@ -1467,29 +1506,7 @@ impl FunctionView {
                     return;
                 }
                 "enter" => {
-                    // Save and apply settings
-                    self.config.ai_provider.api_key = if self.settings_api_key.trim().is_empty() {
-                        None
-                    } else {
-                        Some(self.settings_api_key.trim().to_string())
-                    };
-                    self.config.ai_provider.model = self.settings_model.trim().to_string();
-                    self.config.ai_provider.base_url = self.settings_base_url.trim().to_string();
-                    self.config.sound_enabled = self.settings_sound_enabled;
-                    self.theme = Theme::from_config(&self.config);
-
-                    match self.config.save() {
-                        Ok(_) => {
-                            self.settings_status_message =
-                                Some("Preferences saved to ~/.function/config.json".into());
-                            self.play_sound_feedback(SoundEffect::Success);
-                        }
-                        Err(e) => {
-                            self.settings_status_message = Some(format!("Save error: {}", e));
-                            self.play_sound_feedback(SoundEffect::Error);
-                        }
-                    }
-                    cx.notify();
+                    self.save_settings(cx);
                     return;
                 }
                 "t" if modifiers.control => {

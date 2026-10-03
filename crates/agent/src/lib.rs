@@ -8,7 +8,7 @@ use function_memory::MemoryStore;
 use function_providers::{ChatMessage, CompletionRequest, LlmProvider, ToolDefinition};
 use function_tools::{ToolContext, ToolRegistry, ToolResult};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -79,7 +79,7 @@ pub struct AgentActionEvent {
 
 /// Core agent orchestrator.
 pub struct Agent {
-    provider: Arc<dyn LlmProvider>,
+    provider: RwLock<Arc<dyn LlmProvider>>,
     tools: ToolRegistry,
     memory: Arc<dyn MemoryStore>,
     state_tx: broadcast::Sender<AgentState>,
@@ -95,7 +95,7 @@ impl Agent {
     ) -> Self {
         let (state_tx, _) = broadcast::channel(32);
         Self {
-            provider,
+            provider: RwLock::new(provider),
             tools,
             memory,
             state_tx,
@@ -114,6 +114,14 @@ impl Agent {
     pub fn is_canceled(&self) -> bool {
         self.cancel_requested
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Replace the active provider without rebuilding the agent or losing its
+    /// tools, memory, state subscription, or cancellation state.
+    pub fn set_provider(&self, provider: Arc<dyn LlmProvider>) {
+        if let Ok(mut active_provider) = self.provider.write() {
+            *active_provider = provider;
+        }
     }
 
     /// Subscribe to state updates (used by GPUI views).
@@ -236,8 +244,12 @@ Agentic Multi-Step & Observation Loop:
 
             let state_tx_clone = self.state_tx.clone();
             let mut stream_accumulated = String::new();
-            let response = self
+            let provider = self
                 .provider
+                .read()
+                .map_err(|e| AgentError::Provider(format!("Provider lock poisoned: {e}")))?
+                .clone();
+            let response = provider
                 .complete_stream(
                     req,
                     Box::new(move |token: String| {
@@ -554,5 +566,19 @@ mod tests {
 
         let state = rx.recv().await.unwrap();
         assert!(matches!(state, AgentState::Processing { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_agent_can_replace_provider_at_runtime() {
+        let initial = Arc::new(MockLlmProvider::new("initial response"));
+        let replacement = Arc::new(MockLlmProvider::new("replacement response"));
+        let tools = ToolRegistry::new();
+        let memory = Arc::new(InMemoryMemoryStore::new());
+        let agent = Agent::new(initial, tools, memory);
+
+        agent.set_provider(replacement);
+
+        let response = agent.execute_task("hello").await.unwrap();
+        assert_eq!(response, "replacement response");
     }
 }
