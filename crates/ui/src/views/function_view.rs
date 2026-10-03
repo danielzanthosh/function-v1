@@ -1014,8 +1014,12 @@ impl FunctionView {
         } else {
             self.config.ai_provider.base_url.clone()
         };
-        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self.config.ai_provider.is_configured() {
-            if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini") {
+        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self.config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") || self.config.ai_provider.is_configured() {
+            if self.config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") {
+                std::sync::Arc::new(function_providers::CodexChatGptProvider::new(
+                    &self.config.ai_provider.model,
+                ))
+            } else if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini") {
                 std::sync::Arc::new(function_providers::GeminiLlmProvider::new(
                     ai_base_url,
                     api_key.clone(),

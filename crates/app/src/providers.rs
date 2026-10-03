@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use function_config::AppConfig;
 use function_providers::{
-    GeminiLlmProvider, LlmProvider, MockLlmProvider, MockSttProvider, OpenAiLlmProvider,
+    CodexChatGptProvider, GeminiLlmProvider, LlmProvider, MockLlmProvider, MockSttProvider, OpenAiLlmProvider,
     OpenAiTtsProvider, SpeechToTextProvider, TextToSpeechProvider, WhisperSttProvider,
 };
 
@@ -18,6 +18,9 @@ fn ai_base_url(config: &AppConfig) -> String {
 }
 
 pub fn build_llm_provider(config: &AppConfig) -> Arc<dyn LlmProvider> {
+    if config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") {
+        return Arc::new(CodexChatGptProvider::new(&config.ai_provider.model));
+    }
     let api_key = config.ai_provider.resolve_api_key(&function_config::InMemoryCredentialStore::new());
     if !config.ai_provider.is_configured() {
         return Arc::new(MockLlmProvider::new(

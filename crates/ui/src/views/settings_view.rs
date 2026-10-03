@@ -472,6 +472,81 @@ pub fn render_settings_view(
                                                 })),
                                         ),
                                 )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(text_muted)
+                                                .child("MODEL PRESETS"),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(card_bg)
+                                                .border_1()
+                                                .border_color(card_border)
+                                                .text_xs()
+                                                .text_color(text_primary)
+                                                .child("ChatGPT")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.settings_provider = "chatgpt-plan".into();
+                                                        this.settings_model = "gpt-5".into();
+                                                        this.settings_base_url.clear();
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(card_bg)
+                                                .border_1()
+                                                .border_color(card_border)
+                                                .text_xs()
+                                                .text_color(text_primary)
+                                                .child("OpenAI API")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.settings_provider = "openai-compatible".into();
+                                                        this.settings_model = "gpt-4o".into();
+                                                        this.settings_base_url = "https://api.openai.com/v1".into();
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .bg(card_bg)
+                                                .border_1()
+                                                .border_color(card_border)
+                                                .text_xs()
+                                                .text_color(text_primary)
+                                                .child("Gemini")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _, _, cx| {
+                                                        this.settings_provider = "gemini".into();
+                                                        this.settings_model = "gemini-2.5-flash".into();
+                                                        this.settings_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/".into();
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        ),
+                                )
                                 .child(provider_field(view, cx, "AI PROVIDER", &view.settings_provider, 3))
                                 .child(provider_field(view, cx, "STT API KEY", &view.settings_stt_api_key, 4))
                                 .child(provider_field(view, cx, "STT MODEL", &view.settings_stt_model, 5))
