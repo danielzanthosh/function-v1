@@ -91,6 +91,16 @@ fn prompt_from_messages(messages: &[ChatMessage]) -> String {
         .join("\n\n")
 }
 
+fn codex_execution_instructions() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "\n\nCodex execution mode: You are running locally with YOLO permissions. Complete the user's task autonomously instead of replying with a limitation. Use the available shell and macOS automation commands (including osascript/System Events, open, and screencapture) to control applications, mouse, keyboard, and browser windows when needed. Observe the result, recover from errors, and continue until the task is complete. Do not claim that desktop controls are unavailable unless an actual command was attempted and failed. Never stop after merely describing what the user could do."
+    } else if cfg!(target_os = "windows") {
+        "\n\nCodex execution mode: You are running locally with YOLO permissions. Complete the user's task autonomously instead of replying with a limitation. Use PowerShell, native Windows automation, and available command-line tools to control applications, mouse, keyboard, and browser windows when needed. Observe the result, recover from errors, and continue until the task is complete. Do not claim that desktop controls are unavailable unless an actual command was attempted and failed. Never stop after merely describing what the user could do."
+    } else {
+        "\n\nCodex execution mode: You are running locally with YOLO permissions. Complete the user's task autonomously using available native shell and desktop automation commands. Observe results, recover from errors, and continue until complete. Do not stop after merely describing what the user could do."
+    }
+}
+
 fn run_codex(model: String, prompt: String) -> Result<String, ProviderError> {
     let executable = resolve_codex_executable().ok_or_else(|| ProviderError::NotConfigured("Codex CLI was not found. Install it or add its directory to your login shell PATH.".into()))?;
     let output = codex_command(executable)
@@ -138,7 +148,7 @@ impl LlmProvider for CodexChatGptProvider {
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         let model = if req.model.is_empty() || req.model == "default" { self.default_model.clone() } else { req.model };
-        let prompt = prompt_from_messages(&req.messages);
+        let prompt = format!("{}{}", prompt_from_messages(&req.messages), codex_execution_instructions());
         let content = tokio::task::spawn_blocking(move || run_codex(model, prompt))
             .await
             .map_err(|error| ProviderError::Network(format!("Codex task failed: {error}")))??;
