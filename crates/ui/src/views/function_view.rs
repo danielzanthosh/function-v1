@@ -275,7 +275,6 @@ impl FunctionView {
                         .await;
                         let _ = cx.update(|cx| {
                             let _ = this.update(cx, |this, cx| {
-                                pending_flag.store(false, std::sync::atomic::Ordering::SeqCst);
                                 let same_transition = generation_guard.load(
                                     std::sync::atomic::Ordering::SeqCst,
                                 ) == transition_generation;
@@ -287,22 +286,59 @@ impl FunctionView {
                                         activated_once,
                                         this.activation_settling,
                                     )
-                                    && !function_platform::macos_menu_is_active()
                                     && !this.is_active_window
                                 {
-                                    tracing::info!("Window confirmed inactive after runloop turn: dismissing");
-                                    this.activation_generation
-                                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    this.activation_settling = false;
-                                    this.is_visible = false;
-                                    this.is_active_window = false;
-                                    function_platform::set_window_visibility_state(false);
-                                    this.play_sound_feedback(SoundEffect::Select);
-                                    #[cfg(target_os = "macos")]
-                                    function_platform::macos_hide_app();
-                                    #[cfg(not(target_os = "macos"))]
-                                    function_platform::hide_window_by_title("Function");
-                                    cx.notify();
+                                    if function_platform::macos_menu_is_active() {
+                                        let retry_generation = transition_generation;
+                                        let retry_guard = generation_guard.clone();
+                                        let retry_pending = pending_flag.clone();
+                                        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                                            let cx = cx.clone();
+                                            async move {
+                                                for _ in 0..20 {
+                                                    Timer::after(Duration::from_millis(100)).await;
+                                                    let done = cx
+                                                        .update(|cx| {
+                                                            this.update(cx, |this, cx| {
+                                                                if retry_guard.load(
+                                                                    std::sync::atomic::Ordering::SeqCst,
+                                                                ) != retry_generation
+                                                                    || !this.is_visible
+                                                                    || this.is_active_window
+                                                                {
+                                                                    return true;
+                                                                }
+                                                                if !function_platform::macos_menu_is_active() {
+                                                                    tracing::info!(
+                                                                        "Window confirmed inactive after menu transition: dismissing"
+                                                                    );
+                                                                    this.dismiss_after_external_deactivation(cx);
+                                                                    true
+                                                                } else {
+                                                                    false
+                                                                }
+                                                            })
+                                                            .unwrap_or(true)
+                                                        })
+                                                        .unwrap_or(true);
+                                                    if done {
+                                                        break;
+                                                    }
+                                                }
+                                                retry_pending.store(
+                                                    false,
+                                                    std::sync::atomic::Ordering::SeqCst,
+                                                );
+                                            }
+                                        })
+                                        .detach();
+                                    } else {
+                                        tracing::info!("Window confirmed inactive after runloop turn: dismissing");
+                                        this.dismiss_after_external_deactivation(cx);
+                                        pending_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    }
+                                } else {
+                                    pending_flag.store(false, std::sync::atomic::Ordering::SeqCst);
                                 }
                             });
                         });
@@ -1019,6 +1055,21 @@ impl FunctionView {
         if prev_visible {
             tracing::info!("Window transition: visible -> hidden");
         }
+        self.play_sound_feedback(SoundEffect::Select);
+        #[cfg(target_os = "macos")]
+        function_platform::macos_hide_app();
+        #[cfg(not(target_os = "macos"))]
+        function_platform::hide_window_by_title("Function");
+        cx.notify();
+    }
+
+    fn dismiss_after_external_deactivation(&mut self, cx: &mut Context<Self>) {
+        self.activation_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.activation_settling = false;
+        self.is_visible = false;
+        self.is_active_window = false;
+        function_platform::set_window_visibility_state(false);
         self.play_sound_feedback(SoundEffect::Select);
         #[cfg(target_os = "macos")]
         function_platform::macos_hide_app();

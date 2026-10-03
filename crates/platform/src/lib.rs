@@ -1698,6 +1698,9 @@ pub fn macos_activate_app() {
                             let is_key: bool = msg_send_get_bool(win, is_key_sel);
                             if !is_key {
                                 let _ = msg_send_1(win, make_key_and_order_front_sel, std::ptr::null_mut());
+                            }
+                            let is_main: bool = msg_send_get_bool(win, is_main_sel);
+                            if !is_main {
                                 let _ = msg_send_0(win, make_main_sel);
                             }
 
