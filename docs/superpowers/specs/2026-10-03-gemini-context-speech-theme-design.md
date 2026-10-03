@@ -19,6 +19,7 @@ Extend Function V1 with reliable context-window management, Gemini support throu
 11. Remove decorative emoji from settings and theme controls.
 12. Improve theme selection with professional labels, swatches, selected states, contrast, and spacing.
 13. Any input beginning with `> ` executes the remainder as a shell command locally instead of being sent to an AI provider.
+14. Add a subtle, accessibility-aware Liquid Glass treatment to the macOS functional-control layer.
 
 ## Current Architecture and Constraints
 
@@ -94,6 +95,12 @@ Each section exposes only relevant fields when enabled. Model and endpoint field
 
 Remove decorative emoji from theme names, API-key visibility, sound controls, and other settings labels. Use existing vector/icon components or plain text labels. Theme choices use compact swatches and clear selected borders instead of emoji prefixes. Improve surface contrast, typography hierarchy, spacing, and focus/hover states while preserving the existing theme enum and serialized values.
 
+### 8. Subtle Liquid Glass layer
+
+On macOS, apply a restrained Liquid Glass-inspired material only to the top-level floating controls and navigation surfaces: the command shell, settings header/footer, and primary action controls. Keep conversation content and dense settings fields on standard materials so the glass layer establishes hierarchy instead of creating glass-on-glass clutter. Prefer the regular, legible material behavior; use translucency, soft edge highlights, depth shadows, and responsive hover/focus illumination rather than opaque decorative gradients.
+
+The treatment must respect reduced-transparency, increased-contrast, and reduced-motion accessibility settings. When native material effects are unavailable or disabled, fall back to the existing opaque theme surfaces with the same contrast and focus states. Windows and other platforms retain the professional theme system without pretending to provide macOS Liquid Glass.
+
 ## Error Handling
 
 - Context compaction is logged with provider, model, original estimate, final estimate, and discarded categories; prompt contents and secrets are not logged.
@@ -117,3 +124,4 @@ Remove decorative emoji from theme names, API-key visibility, sound controls, an
 - No remote model discovery or automatic model list downloads.
 - No redesign of the conversation view beyond settings and context-status feedback needed for this feature.
 - No decorative emoji in the settings experience.
+- No full-window blur, glass applied to every card, or glass stacked over other glass surfaces.
