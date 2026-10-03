@@ -393,7 +393,7 @@ impl Tool for ClickTool {
         let y_opt = params.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
 
         if let (Some(x), Some(y)) = (x_opt, y_opt) {
-            self.control.mouse_move(x, y).map_err(|e| ToolError::ExecutionFailed {
+            self.control.mouse_move_smooth(x, y).map_err(|e| ToolError::ExecutionFailed {
                 tool: self.name().into(),
                 details: e.to_string(),
             })?;
@@ -473,7 +473,7 @@ impl Tool for DoubleClickTool {
         let y_opt = params.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
 
         if let (Some(x), Some(y)) = (x_opt, y_opt) {
-            self.control.mouse_move(x, y).map_err(|e| ToolError::ExecutionFailed {
+            self.control.mouse_move_smooth(x, y).map_err(|e| ToolError::ExecutionFailed {
                 tool: self.name().into(),
                 details: e.to_string(),
             })?;
@@ -549,7 +549,7 @@ impl Tool for TypeTextTool {
                 details: "Missing 'text' parameter".into(),
             })?;
 
-        self.control.keyboard_type(text).map_err(|e| ToolError::ExecutionFailed {
+        self.control.keyboard_type_smooth(text).map_err(|e| ToolError::ExecutionFailed {
             tool: self.name().into(),
             details: e.to_string(),
         })?;

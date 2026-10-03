@@ -38,12 +38,57 @@ pub trait ComputerControl: Send + Sync {
         end_y: i32,
     ) -> Result<(), PlatformError>;
     fn keyboard_type(&self, text: &str) -> Result<(), PlatformError>;
+    /// Move through short interpolated steps so automation looks deliberate
+    /// and gives the target application time to process pointer events.
+    fn mouse_move_smooth(&self, x: i32, y: i32) -> Result<(), PlatformError> {
+        let (start_x, start_y) = self.get_cursor_position();
+        let steps = smooth_motion_steps(start_x, start_y, x, y);
+        for step in 1..=steps {
+            let progress = step as f32 / steps as f32;
+            let next_x = start_x as f32 + (x - start_x) as f32 * progress;
+            let next_y = start_y as f32 + (y - start_y) as f32 * progress;
+            self.mouse_move(next_x.round() as i32, next_y.round() as i32)?;
+            if step < steps {
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+        }
+        Ok(())
+    }
+    /// Type with a small inter-character cadence instead of injecting the
+    /// entire string in one burst.
+    fn keyboard_type_smooth(&self, text: &str) -> Result<(), PlatformError> {
+        let character_count = text.chars().count();
+        for (index, character) in text.chars().enumerate() {
+            self.keyboard_type(&character.to_string())?;
+            if index + 1 < character_count {
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
+        }
+        Ok(())
+    }
     fn keyboard_press(&self, key: &str) -> Result<(), PlatformError>;
     fn keyboard_shortcut(&self, keys: &[&str]) -> Result<(), PlatformError>;
     fn app_launch(&self, app_path: &str, args: &[&str]) -> Result<u32, PlatformError>;
     fn list_windows(&self) -> Vec<WindowInfo>;
     fn focus_window(&self, title_substring: &str) -> Result<bool, PlatformError>;
     fn take_screenshot(&self) -> Result<Vec<u8>, PlatformError>;
+}
+
+pub fn smooth_motion_steps(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> u32 {
+    let distance = (((end_x - start_x) as f64).powi(2) + ((end_y - start_y) as f64).powi(2)).sqrt();
+    (distance / 70.0).ceil().clamp(2.0, 24.0) as u32
+}
+
+#[cfg(test)]
+mod motion_tests {
+    use super::smooth_motion_steps;
+
+    #[test]
+    fn motion_uses_more_steps_for_longer_paths() {
+        assert_eq!(smooth_motion_steps(10, 10, 10, 10), 2);
+        assert!(smooth_motion_steps(0, 0, 1000, 0) > smooth_motion_steps(0, 0, 100, 0));
+        assert_eq!(smooth_motion_steps(0, 0, 10_000, 0), 24);
+    }
 }
 
 #[cfg(target_os = "windows")]

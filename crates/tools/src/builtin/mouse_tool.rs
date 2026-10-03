@@ -81,7 +81,7 @@ impl Tool for MouseTool {
                 })? as i32;
 
                 self.control
-                    .mouse_move(x, y)
+                    .mouse_move_smooth(x, y)
                     .map_err(|e| ToolError::ExecutionFailed {
                         tool: self.name().into(),
                         details: e.to_string(),

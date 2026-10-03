@@ -389,6 +389,11 @@ impl FunctionView {
                             match &state_clone {
                                 AgentState::Processing { thought_summary } => {
                                     view.state = state_clone.clone();
+                                    for activity in &mut view.activities {
+                                        if activity.status == ActivityStatus::Running {
+                                            activity.status = ActivityStatus::Done;
+                                        }
+                                    }
                                     if let Some(thought) = thought_summary {
                                         view.activities.push(ActivityEntry {
                                             step: view.activities.len() + 1,
@@ -399,6 +404,11 @@ impl FunctionView {
                                 }
                                 AgentState::Acting { action_description } => {
                                     view.state = state_clone.clone();
+                                    for activity in &mut view.activities {
+                                        if activity.status == ActivityStatus::Running {
+                                            activity.status = ActivityStatus::Done;
+                                        }
+                                    }
                                     view.activities.push(ActivityEntry {
                                         step: view.activities.len() + 1,
                                         description: action_description.clone(),

@@ -74,7 +74,7 @@ impl Tool for KeyboardTool {
                     }
                 })?;
                 self.control
-                    .keyboard_type(text)
+                    .keyboard_type_smooth(text)
                     .map_err(|e| ToolError::ExecutionFailed {
                         tool: self.name().into(),
                         details: e.to_string(),
