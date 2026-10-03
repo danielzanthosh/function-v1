@@ -86,6 +86,20 @@ pub fn should_dismiss_after_deactivation(
     is_visible && has_activated_once && !transition_settling
 }
 
+/// Return whether the modifier combination is the native file-search open shortcut.
+/// Windows uses Control+Enter; macOS uses Command+Enter.
+pub fn is_file_search_open_shortcut(control: bool, secondary: bool, alt: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        secondary && !control && !alt
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        control && !secondary && !alt
+    }
+}
+
 /// Status of system permissions required by the desktop assistant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PermissionStatus {
@@ -3187,6 +3201,24 @@ mod tests {
         assert!(!should_dismiss_after_deactivation(true, false, false));
         assert!(!should_dismiss_after_deactivation(true, true, true));
         assert!(should_dismiss_after_deactivation(true, true, false));
+    }
+
+    #[test]
+    fn test_file_search_open_shortcut_is_native_and_exact() {
+        #[cfg(target_os = "macos")]
+        {
+            assert!(is_file_search_open_shortcut(false, true, false));
+            assert!(!is_file_search_open_shortcut(true, false, false));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(is_file_search_open_shortcut(true, false, false));
+            assert!(!is_file_search_open_shortcut(false, true, false));
+        }
+
+        assert!(!is_file_search_open_shortcut(true, true, false));
+        assert!(!is_file_search_open_shortcut(true, false, true));
     }
 
     #[tokio::test]

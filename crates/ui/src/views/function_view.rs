@@ -38,7 +38,7 @@ use function_platform::{
 use function_providers::ChatMessage;
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton,
+    div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, Render, Rgba, ScrollHandle, Size, Task, Timer, WeakEntity, Window,
 };
 /// Checks if a key string represents a named control key rather than text to type.
@@ -148,9 +148,6 @@ pub struct FunctionView {
     pub chat_scroll_handle: ScrollHandle,
     pub settings_scroll_handle: ScrollHandle,
     pub cursor_offset: usize,
-    pub enter_press_time: Option<std::time::Instant>,
-    pub enter_hold_task: Option<Task<()>>,
-    pub enter_held_triggered: bool,
     pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub activation_settling: bool,
 }
@@ -236,9 +233,6 @@ impl FunctionView {
             conversation_status_message: None,
             chat_scroll_handle: ScrollHandle::new(),
             settings_scroll_handle: ScrollHandle::new(),
-            enter_press_time: None,
-            enter_hold_task: None,
-            enter_held_triggered: false,
             activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             activation_settling: false,
         }
@@ -1277,7 +1271,7 @@ impl FunctionView {
         }
     }
 
-    pub fn trigger_enter_held_open(&mut self, cx: &mut Context<Self>) {
+    pub fn open_selected_path(&mut self, cx: &mut Context<Self>) {
         let items = get_launcher_items(&self.input_buffer);
         let target_action = items
             .get(self.selected_index)
@@ -1305,27 +1299,6 @@ impl FunctionView {
             #[cfg(not(target_os = "macos"))]
             function_platform::hide_window_by_title("Function");
             cx.notify();
-        }
-    }
-
-    pub fn handle_key_up(
-        &mut self,
-        event: &KeyUpEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let key = event.keystroke.key.as_str();
-        if key == "enter" || key == "return" {
-            self.enter_hold_task = None;
-            if self.enter_press_time.take().is_some() {
-                if !self.enter_held_triggered {
-                    // Enter was released before hold threshold -> submit directly to AI!
-                    let prompt = self.input_buffer.trim().to_string();
-                    if !prompt.is_empty() {
-                        self.submit(&SubmitRequest, window, cx);
-                    }
-                }
-            }
         }
     }
 
@@ -1431,8 +1404,6 @@ impl FunctionView {
         self.cursor_visible = true;
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
-        let is_held = event.is_held;
-        let _ = is_held;
 
         // ==========================================
         // SECURITY CONFIRMATION INTERCEPTOR
@@ -1989,28 +1960,29 @@ impl FunctionView {
                     }
                 }
 
-                // 2. Modifiers shortcut (Cmd+Enter, Ctrl+Enter, Alt+Enter):
-                // Immediately opens the matched app/folder/file!
-                if modifiers.secondary() || modifiers.control || modifiers.platform || modifiers.alt {
-                    let items = get_launcher_items(&self.input_buffer);
-                    if let Some(item) = items.get(self.selected_index).or_else(|| items.first()).cloned() {
-                        self.execute_launcher_action(item.action, window, cx);
-                        return;
-                    }
-                }
+                let items = get_launcher_items(&self.input_buffer);
+                let has_openable = items.iter().any(|item| matches!(item.action, LauncherAction::OpenPath(_)));
 
-                // 3. If OS repeat keydown fires (is_held == true)
-                if is_held {
-                    if !self.enter_held_triggered {
-                        self.enter_held_triggered = true;
-                        self.trigger_enter_held_open(cx);
-                    }
+                // Control+Enter on Windows and Command+Enter on macOS open a
+                // matched file, folder, or application immediately.
+                if has_openable
+                    && function_platform::is_file_search_open_shortcut(
+                        modifiers.control,
+                        modifiers.secondary(),
+                        modifiers.alt,
+                    )
+                {
+                    self.open_selected_path(cx);
                     return;
                 }
 
-                // 4. Initial press (is_held == false)
-                let items = get_launcher_items(&self.input_buffer);
-                let has_openable = items.iter().any(|item| matches!(item.action, LauncherAction::OpenPath(_)));
+                // A plain Enter sends file/app/folder searches to the AI.
+                if has_openable {
+                    if !prompt.is_empty() {
+                        self.submit(&SubmitRequest, window, cx);
+                    }
+                    return;
+                }
 
                 if !has_openable {
                     // Standard action or AI query
@@ -2022,25 +1994,6 @@ impl FunctionView {
                     return;
                 }
 
-                // App/Folder/File matched! Hold Enter opens it, releasing Enter sends to AI.
-                self.enter_press_time = Some(std::time::Instant::now());
-                self.enter_held_triggered = false;
-
-                let hold_task = cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                    let cx = cx.clone();
-                    async move {
-                        Timer::after(Duration::from_millis(300)).await;
-                        let _ = cx.update(|cx| {
-                            let _ = this.update(cx, |view, cx| {
-                                if view.enter_press_time.is_some() && !view.enter_held_triggered {
-                                    view.enter_held_triggered = true;
-                                    view.trigger_enter_held_open(cx);
-                                }
-                            });
-                        });
-                    }
-                });
-                self.enter_hold_task = Some(hold_task);
             }
             "tab" => {
                 self.is_text_selected = false;
@@ -2274,9 +2227,6 @@ impl Render for FunctionView {
             ))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
-            }))
-            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
-                this.handle_key_up(event, window, cx);
             }))
             .on_mouse_down(
                 gpui::MouseButton::Left,

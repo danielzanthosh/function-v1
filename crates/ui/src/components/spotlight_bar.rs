@@ -33,6 +33,17 @@ fn activation_shortcut_label() -> &'static str {
     }
 }
 
+fn file_search_open_shortcut_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "⌘+Enter"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Ctrl+Enter"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherIconType {
     Function,
@@ -297,8 +308,12 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
         };
         items.push(LauncherItem {
             keyword: res.name,
-            description: format!("{} • Hold Enter to Open • Press Enter for AI", desc_prefix),
-            shortcut: "Hold Enter".to_string(),
+            description: format!(
+                "{} • {} to Open • Enter for AI",
+                desc_prefix,
+                file_search_open_shortcut_label()
+            ),
+            shortcut: file_search_open_shortcut_label().to_string(),
             icon_type: icon,
             action: LauncherAction::OpenPath(res.path),
         });
