@@ -2511,10 +2511,9 @@ impl Render for FunctionView {
                                             .px(px(12.0))
                                             .py(px(7.0))
                                             .rounded_xl()
-                                            .bg(Rgba {
-                                                a: 0.15,
-                                                ..theme.accent_primary
-                                            })
+                                            .bg(theme.surface_active)
+                                            .border_1()
+                                            .border_color(theme.border_subtle)
                                             .max_w(px(460.0))
                                             .child(render_inline_text(&entry.text, &theme)),
                                     )
@@ -2719,6 +2718,7 @@ impl Render for FunctionView {
                             .items_center()
                             .gap_4()
                             .flex_1()
+                            .overflow_hidden()
                             .cursor_text()
                             .on_mouse_down(
                                 gpui::MouseButton::Left,
@@ -2763,6 +2763,7 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .flex_1()
+                                    .overflow_hidden()
                                     .child(if self.is_text_selected {
                                         div()
                                             .bg(Rgba {
@@ -2782,9 +2783,11 @@ impl Render for FunctionView {
                                         div()
                                             .flex()
                                             .items_center()
+                                            .overflow_hidden()
                                             .child(
                                                 div()
                                                     .text_lg()
+                                                    .overflow_hidden()
                                                     .font_weight(gpui::FontWeight::NORMAL)
                                                     .text_color(theme.text_primary)
                                                     .child(before_cursor),
@@ -2801,6 +2804,7 @@ impl Render for FunctionView {
                                             .child(
                                                 div()
                                                     .text_lg()
+                                                    .overflow_hidden()
                                                     .font_weight(gpui::FontWeight::NORMAL)
                                                     .text_color(theme.text_primary)
                                                     .child(after_cursor),
@@ -2811,6 +2815,7 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .flex_1()
+                                    .overflow_hidden()
                                     .child(div().w(px(2.0)).h(px(20.0)).bg(
                                         if self.cursor_visible {
                                             theme.text_primary
