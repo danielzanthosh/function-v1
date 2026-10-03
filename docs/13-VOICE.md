@@ -12,11 +12,11 @@ The speech pipeline should use a Whisper-based service.
 
 macOS:
 
-Command + ;
+Double Command (⌘ ⌘)
 
 Windows:
 
-Alt + Space
+Ctrl + Space
 
 Pressing the shortcut opens the assistant.
 

@@ -13,7 +13,7 @@ Target:
 
 Global hotkey:
 
-Alt + Space
+Ctrl + Space
 
 ## macOS
 
@@ -21,7 +21,7 @@ Target modern supported macOS versions.
 
 Global hotkey:
 
-Command + ;
+Double Command (⌘ ⌘)
 
 ## Abstraction
 

@@ -151,6 +151,8 @@ pub struct FunctionView {
     pub enter_press_time: Option<std::time::Instant>,
     pub enter_hold_task: Option<Task<()>>,
     pub enter_held_triggered: bool,
+    pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub activation_settling: bool,
 }
 
 pub type AssistantView = FunctionView;
@@ -237,6 +239,8 @@ impl FunctionView {
             enter_press_time: None,
             enter_hold_task: None,
             enter_held_triggered: false,
+            activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            activation_settling: false,
         }
     }
 
@@ -244,6 +248,7 @@ impl FunctionView {
         let mut activated_once = false;
         let deactivation_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let deactivation_pending_sub = deactivation_pending.clone();
+        let activation_generation = self.activation_generation.clone();
         let _sub = cx.observe_window_activation(window, move |this, window, cx| {
             let is_active = window.is_window_active();
             this.is_active_window = is_active;
@@ -255,23 +260,42 @@ impl FunctionView {
                 && !deactivation_pending_sub.swap(true, std::sync::atomic::Ordering::SeqCst)
             {
                 let pending_flag = deactivation_pending_sub.clone();
+                let transition_generation = activation_generation.load(std::sync::atomic::Ordering::SeqCst);
+                let generation_guard = activation_generation.clone();
                 // Defer deactivation handling to the next run loop turn.
                 // This guarantees we never synchronously re-enter AppKit window management
                 // or lock GPUI mutexes while inside becomeKeyWindow / resignKeyWindow callbacks!
-                cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                     let cx = cx.clone();
                     async move {
-                        // Allow any active key-window exchange to settle on the main runloop
-                        Timer::after(Duration::from_millis(80)).await;
+                        // Allow AppKit key-window exchange and our summon settling guard to finish.
+                        Timer::after(Duration::from_millis(
+                            function_platform::MACOS_ACTIVATION_SETTLE_MS + 80,
+                        ))
+                        .await;
                         let _ = cx.update(|cx| {
                             let _ = this.update(cx, |this, cx| {
                                 pending_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                                // If the window is still inactive and visible, dismiss cleanly
-                                if !this.is_active_window && this.is_visible {
+                                let same_transition = generation_guard.load(
+                                    std::sync::atomic::Ordering::SeqCst,
+                                ) == transition_generation;
+                                // If the window is still inactive and visible after the transition,
+                                // dismiss cleanly. Summon/dismiss invalidates stale callbacks.
+                                if same_transition
+                                    && function_platform::should_dismiss_after_deactivation(
+                                        this.is_visible,
+                                        activated_once,
+                                        this.activation_settling,
+                                    )
+                                    && !this.is_active_window
+                                {
                                     tracing::info!("Window confirmed inactive after runloop turn: dismissing");
+                                    this.activation_generation
+                                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                    this.activation_settling = false;
                                     this.is_visible = false;
+                                    this.is_active_window = false;
                                     function_platform::set_window_visibility_state(false);
-                                    tracing::info!("Window transition: visible -> hidden");
                                     this.play_sound_feedback(SoundEffect::Select);
                                     #[cfg(target_os = "macos")]
                                     function_platform::macos_hide_app();
@@ -983,6 +1007,9 @@ impl FunctionView {
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
+        self.activation_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.activation_settling = false;
         tracing::info!("Dismissing Function window (hiding)");
         let prev_visible = self.is_visible;
         self.is_visible = false;
@@ -1000,6 +1027,32 @@ impl FunctionView {
     }
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let activation_generation = self
+            .activation_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        self.activation_settling = true;
+        let generation_guard = self.activation_generation.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                Timer::after(Duration::from_millis(
+                    function_platform::MACOS_ACTIVATION_SETTLE_MS,
+                ))
+                .await;
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |view, cx| {
+                        if generation_guard.load(std::sync::atomic::Ordering::SeqCst)
+                            == activation_generation
+                        {
+                            view.activation_settling = false;
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
         let prev_visible = self.is_visible;
         self.is_visible = true;
         self.is_active_window = true;
@@ -1107,24 +1160,33 @@ impl FunctionView {
             }
             LauncherAction::ExecuteShell(cmd) => {
                 self.play_sound_feedback(SoundEffect::Execute);
-                let cmd_str = cmd.clone();
-                std::thread::spawn(move || {
-                    let _ = std::process::Command::new("powershell")
-                        .args(["-NoProfile", "-Command", &cmd_str])
-                        .spawn();
-                });
-                self.input_buffer.clear();
-                self.active_task = Some(format!("Shell: {}", cmd));
                 self.mode = FunctionMode::Command;
                 window.resize(self.target_window_size());
 
                 self.activities.clear();
-                self.activities.push(ActivityEntry {
-                    step: 1,
-                    description: format!("Executing shell command: \"{}\"", cmd),
-                    status: ActivityStatus::Done,
-                });
-                self.latest_result = Some(format!("Shell command \"{}\" executed.", cmd));
+                match function_platform::spawn_shell_command(&cmd) {
+                    Ok(()) => {
+                        self.input_buffer.clear();
+                        self.active_task = Some(format!("Shell: {}", cmd));
+                        self.activities.push(ActivityEntry {
+                            step: 1,
+                            description: format!("Executing shell command: \"{}\"", cmd),
+                            status: ActivityStatus::Done,
+                        });
+                        self.latest_result = Some(format!("Shell command \"{}\" executed.", cmd));
+                    }
+                    Err(error) => {
+                        let message = format!("Could not launch shell command: {error}");
+                        self.active_task = None;
+                        self.activities.push(ActivityEntry {
+                            step: 1,
+                            description: message.clone(),
+                            status: ActivityStatus::Failed,
+                        });
+                        self.latest_result = Some(message);
+                        self.play_sound_feedback(SoundEffect::Error);
+                    }
+                }
                 cx.notify();
             }
             LauncherAction::CopyResult(val) => {

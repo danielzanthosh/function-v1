@@ -97,8 +97,8 @@ Important actions should have shortcuts.
 
 Examples:
 
-Command + ;
-Alt + Space
+Double Command (⌘ ⌘)
+Ctrl + Space
 
 Escape
 Cancel

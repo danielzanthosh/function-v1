@@ -6,9 +6,9 @@ A native AI computer assistant for Windows and macOS.
 
 Press:
 
-macOS: Command + ;
+macOS: Double Command (⌘ ⌘)
 
-Windows: Alt + Space
+Windows: Ctrl + Space
 
 Speak or type a task.
 

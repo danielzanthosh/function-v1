@@ -27,6 +27,65 @@ pub enum PlatformError {
     Unsupported(String),
 }
 
+/// Command invocation details for the platform's interactive shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCommandSpec {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// Build a shell command without launching it.
+pub fn shell_command_spec(command: &str) -> ShellCommandSpec {
+    #[cfg(target_os = "windows")]
+    {
+        ShellCommandSpec {
+            program: "powershell".to_string(),
+            args: vec!["-NoProfile".to_string(), "-Command".to_string(), command.to_string()],
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        ShellCommandSpec {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            args: vec!["-lc".to_string(), command.to_string()],
+        }
+    }
+}
+
+/// Launch a pre-built shell command specification.
+pub fn spawn_shell_spec(spec: &ShellCommandSpec) -> Result<(), PlatformError> {
+    std::process::Command::new(&spec.program)
+        .args(&spec.args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            PlatformError::SystemApi(format!(
+                "Failed to launch shell '{}': {error}",
+                spec.program
+            ))
+        })
+}
+
+/// Launch a command through the platform's interactive shell.
+pub fn spawn_shell_command(command: &str) -> Result<(), PlatformError> {
+    let spec = shell_command_spec(command);
+    spawn_shell_spec(&spec)
+}
+
+/// Duration used to let AppKit finish a summon/key-window transition before
+/// interpreting deactivation as a click-outside dismissal.
+pub const MACOS_ACTIVATION_SETTLE_MS: u64 = 180;
+
+/// Decide whether an inactive visible window represents a confirmed external dismissal.
+pub fn should_dismiss_after_deactivation(
+    is_visible: bool,
+    has_activated_once: bool,
+    transition_settling: bool,
+) -> bool {
+    is_visible && has_activated_once && !transition_settling
+}
+
 /// Status of system permissions required by the desktop assistant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PermissionStatus {
@@ -1453,6 +1512,11 @@ unsafe extern "C" fn objc_return_yes(
     true
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn should_skip_macos_window_class(class_name: &str) -> bool {
+    class_name.contains("StatusBar") || class_name.contains("Menu") || class_name.contains("Panel")
+}
+
 /// Activate the application on macOS, bringing it to the foreground even if another app is active,
 /// and ensuring the underlying window becomes key and interactive.
 pub fn macos_activate_app() {
@@ -1573,7 +1637,7 @@ pub fn macos_activate_app() {
                                 let cls_name_ptr = class_getName(win_cls);
                                 if !cls_name_ptr.is_null() {
                                     let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
-                                    if cls_name.contains("StatusBar") || cls_name.contains("Menu") || cls_name.contains("Panel") {
+                                    if should_skip_macos_window_class(&cls_name) {
                                         continue;
                                     }
                                 }
@@ -1623,6 +1687,9 @@ pub fn macos_activate_app() {
                                 is_visible = final_is_vis,
                                 "macOS native window state after activation"
                             );
+                            // Function owns one regular GPUI window. Never apply the
+                            // activation mutation to any additional native window.
+                            break;
                         }
                     }
                 }
@@ -1688,7 +1755,7 @@ pub fn macos_hide_app() {
                                 let cls_name_ptr = class_getName(win_cls);
                                 if !cls_name_ptr.is_null() {
                                     let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
-                                    if cls_name.contains("StatusBar") || cls_name.contains("Menu") || cls_name.contains("Panel") {
+                                    if should_skip_macos_window_class(&cls_name) {
                                         continue;
                                     }
                                 }
@@ -2965,6 +3032,65 @@ mod tests {
         assert_eq!(sc4.key_char, "f");
         assert_eq!(sc4.modifier_mask, 0x0010_0000 | 0x0002_0000);
         assert_eq!(sc4.display_label, "⌘⇧F");
+
+        for spelling in ["Command+Command", "cmd+cmd", "Double ⌘", "⌘ ⌘"] {
+            let parsed = parse_macos_shortcut(spelling).expect("Double Command spelling should parse");
+            assert_eq!(parsed.key_char, "");
+            assert_eq!(parsed.modifier_mask, 0);
+            assert_eq!(parsed.display_label, "⌘ ⌘");
+        }
+
+        assert_eq!(parse_macos_shortcut("Command+;"), Some(MacShortcutInfo {
+            key_char: ";".to_string(),
+            modifier_mask: 0x0010_0000,
+            display_label: "⌘;".to_string(),
+        }));
+    }
+
+    #[test]
+    fn test_macos_window_class_filter_preserves_function_window() {
+        assert!(should_skip_macos_window_class("NSStatusBarWindow"));
+        assert!(should_skip_macos_window_class("NSMenuWindow"));
+        assert!(should_skip_macos_window_class("NSPanel"));
+        assert!(!should_skip_macos_window_class("GPUIWindow"));
+    }
+
+    #[test]
+    fn test_shell_command_spec_uses_platform_shell() {
+        let spec = shell_command_spec("echo hello");
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(spec.program, "powershell");
+            assert_eq!(spec.args, vec!["-NoProfile", "-Command", "echo hello"]);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let expected_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            assert_eq!(spec.program, expected_shell);
+            assert_eq!(spec.args, vec!["-lc", "echo hello"]);
+        }
+    }
+
+    #[test]
+    fn test_shell_launch_errors_include_executable_name() {
+        let spec = ShellCommandSpec {
+            program: "function-test-command-that-does-not-exist".to_string(),
+            args: Vec::new(),
+        };
+
+        let error = spawn_shell_spec(&spec).expect_err("missing shell should fail to launch");
+        let message = error.to_string();
+        assert!(message.contains("function-test-command-that-does-not-exist"));
+    }
+
+    #[test]
+    fn test_should_dismiss_after_deactivation() {
+        assert!(!should_dismiss_after_deactivation(false, true, false));
+        assert!(!should_dismiss_after_deactivation(true, false, false));
+        assert!(!should_dismiss_after_deactivation(true, true, true));
+        assert!(should_dismiss_after_deactivation(true, true, false));
     }
 
     #[tokio::test]

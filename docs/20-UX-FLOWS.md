@@ -5,10 +5,10 @@
 User presses:
 
 macOS:
-Command + ;
+Double Command (⌘ ⌘)
 
 Windows:
-Alt + Space
+Ctrl + Space
 
 ↓
 
