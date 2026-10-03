@@ -151,7 +151,7 @@ mod tests {
         let (compacted, report) = compact_messages(
             &messages,
             ContextBudget {
-                context_limit: 900,
+                context_limit: 700,
                 output_reserve: 100,
             },
         );
@@ -159,7 +159,7 @@ mod tests {
         assert!(messages_fit(
             &compacted,
             ContextBudget {
-                context_limit: 900,
+                context_limit: 700,
                 output_reserve: 100,
             }
         ));
