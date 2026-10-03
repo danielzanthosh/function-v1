@@ -2,7 +2,7 @@
 
 use crate::{
     ChatMessage, CompletionRequest, CompletionResponse, LlmProvider, MessageRole, ProviderError,
-    SpeechToTextProvider, ToolCall,
+    SpeechToTextProvider, TextToSpeechProvider, ToolCall,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -65,6 +65,17 @@ impl OpenAiLlmProvider {
 impl LlmProvider for OpenAiLlmProvider {
     fn name(&self) -> &str {
         "openai-compatible"
+    }
+
+    fn context_limit(&self, model: &str) -> usize {
+        crate::context_limits::model_context_limit(
+            self.name(),
+            if model.is_empty() || model == "default" {
+                &self.default_model
+            } else {
+                model
+            },
+        )
     }
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
@@ -484,6 +495,7 @@ impl LlmProvider for OpenAiLlmProvider {
 pub struct WhisperSttProvider {
     base_url: String,
     api_key: Option<String>,
+    model: String,
 }
 
 impl WhisperSttProvider {
@@ -495,7 +507,18 @@ impl WhisperSttProvider {
         Self {
             base_url: url,
             api_key,
+            model: "whisper-1".to_string(),
         }
+    }
+
+    pub fn with_model(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let mut provider = Self::new(base_url, api_key);
+        provider.model = model.into();
+        provider
     }
 }
 
@@ -516,6 +539,7 @@ impl SpeechToTextProvider for WhisperSttProvider {
 
         let endpoint = format!("{}/audio/transcriptions", self.base_url);
         let api_key = self.api_key.clone();
+        let model = self.model.clone();
         let bytes = audio_pcm.to_vec();
 
         tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
@@ -544,7 +568,7 @@ impl SpeechToTextProvider for WhisperSttProvider {
                 .arg("-F")
                 .arg(format!("file=@{}", temp_file.display()))
                 .arg("-F")
-                .arg("model=whisper-1");
+                .arg(format!("model={model}"));
 
             if let Some(ref key) = api_key {
                 if !key.is_empty() {
@@ -583,6 +607,74 @@ impl SpeechToTextProvider for WhisperSttProvider {
             } else {
                 Ok(stdout.trim().to_string())
             }
+        })
+        .await
+        .map_err(|e| ProviderError::Network(e.to_string()))?
+    }
+}
+
+pub struct OpenAiTtsProvider {
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    voice: String,
+    output_format: String,
+}
+
+impl OpenAiTtsProvider {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        model: impl Into<String>,
+        voice: impl Into<String>,
+        output_format: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            api_key,
+            model: model.into(),
+            voice: voice.into(),
+            output_format: output_format.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl TextToSpeechProvider for OpenAiTtsProvider {
+    fn name(&self) -> &str {
+        "openai-compatible-tts"
+    }
+
+    async fn synthesize_speech(&self, text: &str) -> Result<Vec<u8>, ProviderError> {
+        let base_url = format!("{}/audio/speech", self.base_url);
+        let api_key = self.api_key.clone();
+        let payload = json!({
+            "model": self.model,
+            "input": text,
+            "voice": self.voice,
+            "response_format": self.output_format,
+        })
+        .to_string();
+
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let mut command = Command::new(if cfg!(target_os = "windows") { "curl.exe" } else { "curl" });
+            command
+                .args(["-s", "-X", "POST", &base_url, "-H", "Content-Type: application/json", "--data-binary", "@-"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped());
+            if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+                command.arg("-H").arg(format!("Authorization: Bearer {key}"));
+            }
+            let mut child = command.spawn().map_err(|e| ProviderError::Network(e.to_string()))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(payload.as_bytes()).map_err(|e| ProviderError::Network(e.to_string()))?;
+            }
+            let output = child.wait_with_output().map_err(|e| ProviderError::Network(e.to_string()))?;
+            if !output.status.success() {
+                return Err(ProviderError::Network(format!("curl exited with code {:?}", output.status.code())));
+            }
+            Ok(output.stdout)
         })
         .await
         .map_err(|e| ProviderError::Network(e.to_string()))?

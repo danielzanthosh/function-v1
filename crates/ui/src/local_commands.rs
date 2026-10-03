@@ -9,6 +9,13 @@ pub enum LocalCommand {
     OpenConversations,
 }
 
+/// Resolve an explicit shell command prefix before AI dispatch.
+pub fn resolve_shell_command(input: &str) -> Option<String> {
+    let trimmed = input.trim_start();
+    let command = trimmed.strip_prefix("> ")?.trim();
+    (!command.is_empty()).then(|| command.to_string())
+}
+
 /// Resolve user input to a local command.
 ///
 /// Recognizes (case-insensitive, ignoring leading and trailing whitespace):
@@ -127,5 +134,13 @@ mod tests {
         assert_eq!(resolve_local_command("settings for wifi"), None);
         assert_eq!(resolve_local_command("configure my terminal"), None);
         assert_eq!(resolve_local_command(""), None);
+    }
+
+    #[test]
+    fn test_resolve_explicit_shell_command_prefix() {
+        assert_eq!(resolve_shell_command("> echo hi"), Some("echo hi".to_string()));
+        assert_eq!(resolve_shell_command("  >  pwd"), Some("pwd".to_string()));
+        assert_eq!(resolve_shell_command("> "), None);
+        assert_eq!(resolve_shell_command("tell me about > shells"), None);
     }
 }

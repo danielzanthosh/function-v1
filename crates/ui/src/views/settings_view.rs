@@ -15,6 +15,38 @@ use function_config::{AccentColor, ThemeStyle, WindowPositionMode};
 use gpui::prelude::*;
 use gpui::{div, px, rgba, Context, IntoElement, MouseButton, Rgba};
 
+fn provider_field(
+    view: &FunctionView,
+    cx: &mut Context<FunctionView>,
+    label: &'static str,
+    value: &str,
+    index: usize,
+) -> impl IntoElement {
+    let focused = view.settings_focused_field == index;
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().text_xs().text_color(view.theme.text_muted).child(label))
+        .child(
+            div()
+                .cursor_text()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(view.theme.surface_input)
+                .border_1()
+                .border_color(if focused { view.theme.accent_primary } else { view.theme.border_subtle })
+                .text_sm()
+                .text_color(view.theme.text_primary)
+                .child(value.to_string())
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                    this.settings_focused_field = index;
+                    cx.notify();
+                })),
+        )
+}
+
 pub fn render_settings_view(
     view: &FunctionView,
     cx: &mut Context<FunctionView>,
@@ -124,7 +156,7 @@ pub fn render_settings_view(
                         .hover(|s| s.bg(theme.surface_active))
                         .text_xs()
                         .text_color(text_secondary)
-                        .child("✕ Close (Esc)")
+                        .child("Close (Esc)")
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
@@ -177,7 +209,7 @@ pub fn render_settings_view(
                                         .hover(|s| s.bg(theme.surface_active))
                                         .text_xs()
                                         .text_color(if show_key { accent_col } else { text_muted })
-                                        .child(if show_key { "👁 Revealed" } else { "👁‍🗨 Masked" })
+                                        .child(if show_key { "Revealed" } else { "Masked" })
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, _, cx| {
@@ -370,6 +402,86 @@ pub fn render_settings_view(
                                 ),
                         ),
                 )
+                // Expandable advanced provider settings
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .rounded_md()
+                        .bg(card_bg)
+                        .border_1()
+                        .border_color(card_border)
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                    this.toggle_advanced_settings(cx);
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .child(div().text_xs().font_weight(gpui::FontWeight::MEDIUM).text_color(text_primary).child("ADVANCED PROVIDERS"))
+                                        .child(div().text_xs().text_color(text_muted).child("AI, speech recognition, and speech synthesis")),
+                                )
+                                .child(div().text_sm().text_color(accent_col).child(if view.settings_advanced_expanded { "Hide" } else { "Show" })),
+                        )
+                        .when(view.settings_advanced_expanded, |section| {
+                            section
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(card_border)
+                                                .text_xs()
+                                                .text_color(if view.config.speech.enabled { accent_col } else { text_muted })
+                                                .child(if view.config.speech.enabled { "STT Enabled" } else { "STT Disabled" })
+                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                    this.config.speech.enabled = !this.config.speech.enabled;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(card_border)
+                                                .text_xs()
+                                                .text_color(if view.config.tts.enabled { accent_col } else { text_muted })
+                                                .child(if view.config.tts.enabled { "TTS Enabled" } else { "TTS Disabled" })
+                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                    this.config.tts.enabled = !this.config.tts.enabled;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .child(provider_field(view, cx, "AI PROVIDER", &view.settings_provider, 3))
+                                .child(provider_field(view, cx, "STT API KEY", &view.settings_stt_api_key, 4))
+                                .child(provider_field(view, cx, "STT MODEL", &view.settings_stt_model, 5))
+                                .child(provider_field(view, cx, "STT BASE URL", &view.settings_stt_base_url, 6))
+                                .child(provider_field(view, cx, "TTS API KEY", &view.settings_tts_api_key, 7))
+                                .child(provider_field(view, cx, "TTS MODEL", &view.settings_tts_model, 8))
+                                .child(provider_field(view, cx, "TTS BASE URL", &view.settings_tts_base_url, 9))
+                                .child(provider_field(view, cx, "TTS VOICE", &view.settings_tts_voice, 10))
+                        }),
+                )
                 // Customization Row: Theme Style & Accent Color
                 .child(
                     div()
@@ -417,10 +529,10 @@ pub fn render_settings_view(
                                         .text_xs()
                                         .text_color(text_primary)
                                         .child(match theme_style {
-                                            ThemeStyle::CarbonDark => "🎨 Carbon Dark",
-                                            ThemeStyle::ObsidianOled => "🎨 Obsidian OLED",
-                                            ThemeStyle::SlateMidnight => "🎨 Slate Midnight",
-                                            ThemeStyle::StudioLight => "🎨 Studio Light",
+                                            ThemeStyle::CarbonDark => "Carbon Dark",
+                                            ThemeStyle::ObsidianOled => "Obsidian OLED",
+                                            ThemeStyle::SlateMidnight => "Slate Midnight",
+                                            ThemeStyle::StudioLight => "Studio Light",
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
@@ -442,11 +554,11 @@ pub fn render_settings_view(
                                         .text_xs()
                                         .text_color(accent_col)
                                         .child(match accent_color {
-                                            AccentColor::White => "✨ White",
-                                            AccentColor::Cyan => "✨ Cyan",
-                                            AccentColor::Emerald => "✨ Emerald",
-                                            AccentColor::Violet => "✨ Violet",
-                                            AccentColor::Amber => "✨ Amber",
+                                            AccentColor::White => "White",
+                                            AccentColor::Cyan => "Cyan",
+                                            AccentColor::Emerald => "Emerald",
+                                            AccentColor::Violet => "Violet",
+                                            AccentColor::Amber => "Amber",
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
@@ -504,8 +616,8 @@ pub fn render_settings_view(
                                         .text_xs()
                                         .text_color(text_primary)
                                         .child(match window_position {
-                                            WindowPositionMode::Center => "📐 Center",
-                                            WindowPositionMode::UpperThird => "📐 Upper-Third",
+                                            WindowPositionMode::Center => "Center",
+                                            WindowPositionMode::UpperThird => "Upper-Third",
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
@@ -534,7 +646,7 @@ pub fn render_settings_view(
                                         } else {
                                             text_muted
                                         })
-                                        .child(if sound_enabled { "🔊 Sound: ON" } else { "🔇 Sound: OFF" })
+                                        .child(if sound_enabled { "Sound: ON" } else { "Sound: OFF" })
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _, _, cx| {

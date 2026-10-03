@@ -27,7 +27,7 @@ use crate::components::{
     ActivityStatus,
 };
 use crate::conversation::{ChatEntry, ConversationStore, SavedConversation};
-use crate::local_commands::{resolve_local_command, LocalCommand};
+use crate::local_commands::{resolve_local_command, resolve_shell_command, LocalCommand};
 use crate::theme::Theme;
 use crate::views::{render_conversation_view, render_settings_view};
 use function_agent::AgentState;
@@ -115,6 +115,7 @@ pub struct FunctionView {
     pub listening: bool,
     pub audio_capture: Option<std::sync::Arc<dyn function_platform::AudioCapture>>,
     pub stt_provider: Option<std::sync::Arc<dyn function_providers::SpeechToTextProvider>>,
+    pub tts_provider: Option<std::sync::Arc<dyn function_providers::TextToSpeechProvider>>,
     pub is_transcribing: bool,
     pub voice_error: Option<String>,
     pub theme: Theme,
@@ -132,6 +133,15 @@ pub struct FunctionView {
     pub settings_api_key: String,
     pub settings_model: String,
     pub settings_base_url: String,
+    pub settings_provider: String,
+    pub settings_stt_api_key: String,
+    pub settings_stt_model: String,
+    pub settings_stt_base_url: String,
+    pub settings_tts_api_key: String,
+    pub settings_tts_model: String,
+    pub settings_tts_base_url: String,
+    pub settings_tts_voice: String,
+    pub settings_advanced_expanded: bool,
     pub settings_sound_enabled: bool,
     pub settings_show_key: bool,
     pub settings_focused_field: usize,
@@ -161,6 +171,14 @@ impl FunctionView {
         let settings_api_key = config.ai_provider.api_key.clone().unwrap_or_default();
         let settings_model = config.ai_provider.model.clone();
         let settings_base_url = config.ai_provider.base_url.clone();
+        let settings_provider = config.ai_provider.provider_name.clone();
+        let settings_stt_api_key = config.speech.api_key.clone().unwrap_or_default();
+        let settings_stt_model = config.speech.model.clone();
+        let settings_stt_base_url = config.speech.base_url.clone();
+        let settings_tts_api_key = config.tts.api_key.clone().unwrap_or_default();
+        let settings_tts_model = config.tts.model.clone();
+        let settings_tts_base_url = config.tts.base_url.clone();
+        let settings_tts_voice = config.tts.voice.clone();
         let settings_sound_enabled = config.sound_enabled;
 
         // Spawn a background timer loop for subtle motif animation ticks (~150ms) and cursor blinking
@@ -205,6 +223,7 @@ impl FunctionView {
             listening: false,
             audio_capture: None,
             stt_provider: None,
+            tts_provider: None,
             is_transcribing: false,
             voice_error: None,
             theme: Theme::from_config(&config),
@@ -221,6 +240,15 @@ impl FunctionView {
             settings_api_key,
             settings_model,
             settings_base_url,
+            settings_provider,
+            settings_stt_api_key,
+            settings_stt_model,
+            settings_stt_base_url,
+            settings_tts_api_key,
+            settings_tts_model,
+            settings_tts_base_url,
+            settings_tts_voice,
+            settings_advanced_expanded: false,
             settings_sound_enabled,
             settings_show_key: false,
             settings_focused_field: 0,
@@ -420,8 +448,28 @@ impl FunctionView {
                                     view.active_task = None;
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
-                                    if view.config.speech.enabled && !summary.is_empty() {
-                                        function_platform::speak_text(&summary);
+                                    if view.config.tts.enabled && !summary.is_empty() {
+                                        if let Some(tts) = view.tts_provider.clone() {
+                                            let text = summary.clone();
+                                            let output_format = view.config.tts.output_format.clone();
+                                            if let Some(handle) = crate::get_runtime_handle() {
+                                                handle.spawn(async move {
+                                                    match tts.synthesize_speech(&text).await {
+                                                        Ok(audio) => {
+                                                            let _ = function_platform::play_audio_bytes(
+                                                                &audio,
+                                                                &output_format,
+                                                            );
+                                                        }
+                                                        Err(error) => eprintln!("TTS request failed: {}", error),
+                                                    }
+                                                });
+                                            } else {
+                                                function_platform::speak_text(&summary);
+                                            }
+                                        } else {
+                                            function_platform::speak_text(&summary);
+                                        }
                                     }
                                     view.save_current_conversation();
                                     view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
@@ -472,6 +520,14 @@ impl FunctionView {
         self.settings_api_key = config.ai_provider.api_key.clone().unwrap_or_default();
         self.settings_model = config.ai_provider.model.clone();
         self.settings_base_url = config.ai_provider.base_url.clone();
+        self.settings_provider = config.ai_provider.provider_name.clone();
+        self.settings_stt_api_key = config.speech.api_key.clone().unwrap_or_default();
+        self.settings_stt_model = config.speech.model.clone();
+        self.settings_stt_base_url = config.speech.base_url.clone();
+        self.settings_tts_api_key = config.tts.api_key.clone().unwrap_or_default();
+        self.settings_tts_model = config.tts.model.clone();
+        self.settings_tts_base_url = config.tts.base_url.clone();
+        self.settings_tts_voice = config.tts.voice.clone();
         self.settings_sound_enabled = config.sound_enabled;
         self.theme = Theme::from_config(&config);
         self.config = config;
@@ -491,6 +547,14 @@ impl FunctionView {
         stt: std::sync::Arc<dyn function_providers::SpeechToTextProvider>,
     ) -> Self {
         self.stt_provider = Some(stt);
+        self
+    }
+
+    pub fn with_tts_provider(
+        mut self,
+        tts: Option<std::sync::Arc<dyn function_providers::TextToSpeechProvider>>,
+    ) -> Self {
+        self.tts_provider = tts;
         self
     }
 
@@ -893,6 +957,23 @@ impl FunctionView {
         };
         self.config.ai_provider.model = self.settings_model.trim().to_string();
         self.config.ai_provider.base_url = self.settings_base_url.trim().to_string();
+        self.config.ai_provider.provider_name = self.settings_provider.trim().to_lowercase();
+        self.config.speech.api_key = (!self.settings_stt_api_key.trim().is_empty())
+            .then(|| self.settings_stt_api_key.trim().to_string());
+        self.config.speech.model = self.settings_stt_model.trim().to_string();
+        self.config.speech.base_url = self.settings_stt_base_url.trim().to_string();
+        self.config.tts.api_key = (!self.settings_tts_api_key.trim().is_empty())
+            .then(|| self.settings_tts_api_key.trim().to_string());
+        self.config.tts.model = self.settings_tts_model.trim().to_string();
+        self.config.tts.base_url = self.settings_tts_base_url.trim().to_string();
+        self.config.tts.voice = self.settings_tts_voice.trim().to_string();
+        if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini")
+            && (self.config.ai_provider.base_url.trim().is_empty()
+                || self.config.ai_provider.base_url.trim() == "https://api.openai.com/v1")
+        {
+            self.config.ai_provider.base_url =
+                function_providers::gemini::GEMINI_OPENAI_BASE_URL.to_string();
+        }
         self.config.sound_enabled = self.settings_sound_enabled;
         self.theme = Theme::from_config(&self.config);
 
@@ -915,16 +996,28 @@ impl FunctionView {
         let credentials = function_config::InMemoryCredentialStore::new();
         let api_key = self.config.ai_provider.resolve_api_key(&credentials);
 
-        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self
-            .config
-            .ai_provider
-            .is_configured()
+        let ai_base_url = if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini")
+            && (self.config.ai_provider.base_url.trim().is_empty()
+                || self.config.ai_provider.base_url.trim() == "https://api.openai.com/v1")
         {
-            std::sync::Arc::new(function_providers::OpenAiLlmProvider::new(
-                &self.config.ai_provider.base_url,
-                api_key.clone(),
-                &self.config.ai_provider.model,
-            ))
+            function_providers::gemini::GEMINI_OPENAI_BASE_URL.to_string()
+        } else {
+            self.config.ai_provider.base_url.clone()
+        };
+        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self.config.ai_provider.is_configured() {
+            if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini") {
+                std::sync::Arc::new(function_providers::GeminiLlmProvider::new(
+                    ai_base_url,
+                    api_key.clone(),
+                    &self.config.ai_provider.model,
+                ))
+            } else {
+                std::sync::Arc::new(function_providers::OpenAiLlmProvider::new(
+                    &self.config.ai_provider.base_url,
+                    api_key.clone(),
+                    &self.config.ai_provider.model,
+                ))
+            }
         } else {
             std::sync::Arc::new(function_providers::MockLlmProvider::new(
                 "Function computer assistant ready. Configure your API key in settings or run computer tools directly.",
@@ -935,17 +1028,31 @@ impl FunctionView {
             agent.set_provider(provider);
         }
 
-        self.stt_provider = if self.config.ai_provider.is_configured() {
+        self.stt_provider = if self.config.speech.is_configured() {
             Some(std::sync::Arc::new(
-                function_providers::WhisperSttProvider::new(
-                    &self.config.ai_provider.base_url,
-                    api_key,
+                function_providers::WhisperSttProvider::with_model(
+                    &self.config.speech.base_url,
+                    self.config.speech.resolve_api_key(),
+                    &self.config.speech.model,
                 ),
             ))
         } else {
             Some(std::sync::Arc::new(function_providers::MockSttProvider::new(
                 "Open my browser and navigate to YouTube",
             )))
+        };
+        self.tts_provider = if self.config.tts.enabled {
+            self.config.tts.resolve_api_key().map(|key| {
+                std::sync::Arc::new(function_providers::OpenAiTtsProvider::new(
+                    &self.config.tts.base_url,
+                    Some(key),
+                    &self.config.tts.model,
+                    &self.config.tts.voice,
+                    &self.config.tts.output_format,
+                )) as std::sync::Arc<dyn function_providers::TextToSpeechProvider>
+            })
+        } else {
+            None
         };
     }
 
@@ -959,6 +1066,46 @@ impl FunctionView {
         self.theme = Theme::from_config(&self.config);
         self.play_sound_feedback(SoundEffect::Navigate);
         cx.notify();
+    }
+
+    pub fn toggle_advanced_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_advanced_expanded = !self.settings_advanced_expanded;
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    fn focused_settings_value(&self) -> &str {
+        match self.settings_focused_field {
+            0 => &self.settings_api_key,
+            1 => &self.settings_model,
+            2 => &self.settings_base_url,
+            3 => &self.settings_provider,
+            4 => &self.settings_stt_api_key,
+            5 => &self.settings_stt_model,
+            6 => &self.settings_stt_base_url,
+            7 => &self.settings_tts_api_key,
+            8 => &self.settings_tts_model,
+            9 => &self.settings_tts_base_url,
+            10 => &self.settings_tts_voice,
+            _ => "",
+        }
+    }
+
+    fn focused_settings_value_mut(&mut self) -> &mut String {
+        match self.settings_focused_field {
+            0 => &mut self.settings_api_key,
+            1 => &mut self.settings_model,
+            2 => &mut self.settings_base_url,
+            3 => &mut self.settings_provider,
+            4 => &mut self.settings_stt_api_key,
+            5 => &mut self.settings_stt_model,
+            6 => &mut self.settings_stt_base_url,
+            7 => &mut self.settings_tts_api_key,
+            8 => &mut self.settings_tts_model,
+            9 => &mut self.settings_tts_base_url,
+            10 => &mut self.settings_tts_voice,
+            _ => &mut self.settings_model,
+        }
     }
 
     pub fn cycle_accent_color(&mut self, cx: &mut Context<Self>) {
@@ -1364,6 +1511,11 @@ impl FunctionView {
             return;
         }
 
+        if let Some(command) = resolve_shell_command(&prompt) {
+            self.execute_launcher_action(LauncherAction::ExecuteShell(command), window, cx);
+            return;
+        }
+
         // Local command resolver - intercepts BEFORE AI agent and does NOT require API key
         if let Some(cmd) = resolve_local_command(&prompt) {
             match cmd {
@@ -1500,7 +1652,7 @@ impl FunctionView {
                     return;
                 }
                 "tab" => {
-                    self.settings_focused_field = (self.settings_focused_field + 1) % 3;
+                    self.settings_focused_field = (self.settings_focused_field + 1) % 11;
                     self.play_sound_feedback(SoundEffect::Navigate);
                     cx.notify();
                     return;
@@ -1566,12 +1718,7 @@ impl FunctionView {
                     return;
                 }
                 "c" if modifiers.secondary() => {
-                    let text = match self.settings_focused_field {
-                        0 => &self.settings_api_key,
-                        1 => &self.settings_model,
-                        2 => &self.settings_base_url,
-                        _ => "",
-                    };
+                    let text = self.focused_settings_value();
                     if !text.is_empty() {
                         copy_to_clipboard(text);
                         self.play_sound_feedback(SoundEffect::Select);
@@ -1579,12 +1726,7 @@ impl FunctionView {
                     return;
                 }
                 "x" if modifiers.secondary() => {
-                    let text = match self.settings_focused_field {
-                        0 => std::mem::take(&mut self.settings_api_key),
-                        1 => std::mem::take(&mut self.settings_model),
-                        2 => std::mem::take(&mut self.settings_base_url),
-                        _ => String::new(),
-                    };
+                    let text = std::mem::take(self.focused_settings_value_mut());
                     if !text.is_empty() {
                         copy_to_clipboard(&text);
                         self.play_sound_feedback(SoundEffect::Select);
@@ -1593,12 +1735,7 @@ impl FunctionView {
                     return;
                 }
                 "a" if modifiers.secondary() => {
-                    match self.settings_focused_field {
-                        0 => self.settings_api_key.clear(),
-                        1 => self.settings_model.clear(),
-                        2 => self.settings_base_url.clear(),
-                        _ => {}
-                    }
+                    self.focused_settings_value_mut().clear();
                     self.play_sound_feedback(SoundEffect::Select);
                     cx.notify();
                     return;
@@ -1608,39 +1745,18 @@ impl FunctionView {
                         .read_from_clipboard()
                         .and_then(|clipboard| clipboard.text())
                     {
-                        match self.settings_focused_field {
-                            0 => self.settings_api_key.push_str(&text),
-                            1 => self.settings_model.push_str(&text),
-                            2 => self.settings_base_url.push_str(&text),
-                            _ => {}
-                        }
+                        self.focused_settings_value_mut().push_str(&text);
                         cx.notify();
                     }
                     return;
                 }
                 "backspace" => {
-                    match self.settings_focused_field {
-                        0 => {
-                            self.settings_api_key.pop();
-                        }
-                        1 => {
-                            self.settings_model.pop();
-                        }
-                        2 => {
-                            self.settings_base_url.pop();
-                        }
-                        _ => {}
-                    }
+                    self.focused_settings_value_mut().pop();
                     cx.notify();
                     return;
                 }
                 "space" => {
-                    match self.settings_focused_field {
-                        0 => self.settings_api_key.push(' '),
-                        1 => self.settings_model.push(' '),
-                        2 => self.settings_base_url.push(' '),
-                        _ => {}
-                    }
+                    self.focused_settings_value_mut().push(' ');
                     cx.notify();
                     return;
                 }
@@ -1663,12 +1779,7 @@ impl FunctionView {
                     } else {
                         ch.to_string()
                     };
-                    match self.settings_focused_field {
-                        0 => self.settings_api_key.push_str(&text),
-                        1 => self.settings_model.push_str(&text),
-                        2 => self.settings_base_url.push_str(&text),
-                        _ => {}
-                    }
+                    self.focused_settings_value_mut().push_str(&text);
                     cx.notify();
                     return;
                 }
@@ -2202,7 +2313,7 @@ impl Render for FunctionView {
         }
 
         let bg_surface = Rgba {
-            a: 1.0,
+            a: if cfg!(target_os = "macos") { 0.94 } else { 1.0 },
             ..theme.surface_base
         };
 
@@ -2382,7 +2493,7 @@ impl Render for FunctionView {
                                                     .hover(|s| s.bg(theme.surface_active))
                                                     .text_xs()
                                                     .text_color(theme.text_secondary)
-                                                    .child("⎘ Copy")
+                                                    .child("Copy")
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(move |this, _, _, cx| {
@@ -2669,7 +2780,7 @@ impl Render for FunctionView {
                                                 .text_xs()
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(theme.text_muted)
-                                                .child("✕"),
+                                                .child("Close"),
                                         ),
                                 )
                             })

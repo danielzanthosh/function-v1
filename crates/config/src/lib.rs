@@ -120,6 +120,8 @@ pub struct AppConfig {
     pub start_hidden: bool,
     pub ai_provider: AiProviderConfig,
     pub speech: SpeechConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
     pub search: SearchConfig,
     pub memory: MemoryConfig,
 }
@@ -148,6 +150,7 @@ impl Default for AppConfig {
             start_hidden: true,
             ai_provider: AiProviderConfig::default(),
             speech: SpeechConfig::default(),
+            tts: TtsConfig::default(),
             search: SearchConfig::default(),
             memory: MemoryConfig::default(),
         }
@@ -260,13 +263,21 @@ impl Default for AiProviderConfig {
 }
 
 impl AiProviderConfig {
+    pub fn api_key_environment_variable(&self) -> &'static str {
+        if self.provider_name.eq_ignore_ascii_case("gemini") {
+            "GEMINI_API_KEY"
+        } else {
+            "OPENAI_API_KEY"
+        }
+    }
+
     pub fn is_configured(&self) -> bool {
         if let Some(ref k) = self.api_key {
             if !k.trim().is_empty() {
                 return true;
             }
         }
-        std::env::var("OPENAI_API_KEY")
+        std::env::var(self.api_key_environment_variable())
             .map(|k| !k.trim().is_empty())
             .unwrap_or(false)
     }
@@ -278,7 +289,7 @@ impl AiProviderConfig {
                 return Some(trimmed.to_string());
             }
         }
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        if let Ok(key) = std::env::var(self.api_key_environment_variable()) {
             if !key.trim().is_empty() {
                 return Some(key);
             }
@@ -297,6 +308,14 @@ pub struct SpeechConfig {
     pub model: String,
     pub auto_detect_language: bool,
     pub api_key_reference: Option<String>,
+    #[serde(default = "default_speech_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+fn default_speech_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
 }
 
 impl Default for SpeechConfig {
@@ -307,17 +326,70 @@ impl Default for SpeechConfig {
             model: "whisper-1".to_string(),
             auto_detect_language: true,
             api_key_reference: None,
+            base_url: default_speech_base_url(),
+            api_key: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsConfig {
+    pub enabled: bool,
+    pub provider: String,
+    #[serde(default = "default_speech_base_url")]
+    pub base_url: String,
+    pub model: String,
+    pub api_key_reference: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub voice: String,
+    pub output_format: String,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "openai-compatible".to_string(),
+            base_url: default_speech_base_url(),
+            model: "gpt-4o-mini-tts".to_string(),
+            api_key_reference: None,
+            api_key: None,
+            voice: "alloy".to_string(),
+            output_format: "wav".to_string(),
         }
     }
 }
 
 impl SpeechConfig {
     pub fn is_configured(&self) -> bool {
-        self.enabled
-            && self
-                .api_key_reference
-                .as_ref()
-                .map_or(false, |k| !k.is_empty())
+        self.enabled && self.resolve_api_key().is_some()
+    }
+
+    pub fn resolve_api_key(&self) -> Option<String> {
+        self.api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var("OPENAI_API_KEY")
+                    .ok()
+                    .filter(|key| !key.trim().is_empty())
+            })
+    }
+}
+
+impl TtsConfig {
+    pub fn resolve_api_key(&self) -> Option<String> {
+        self.api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var("OPENAI_API_KEY")
+                    .ok()
+                    .filter(|key| !key.trim().is_empty())
+            })
     }
 }
 
@@ -384,6 +456,31 @@ mod tests {
             deserialized.ai_provider.api_key.as_deref(),
             Some("test-key")
         );
+    }
+
+    #[test]
+    fn test_legacy_config_gets_independent_speech_defaults() {
+        let json = r#"{
+            "hotkey":"Ctrl+Space",
+            "theme":"system",
+            "ai_provider":{"provider_name":"gemini","base_url":"https://generativelanguage.googleapis.com/v1beta/openai/","model":"gemini-2.5-flash","api_key_reference":"gemini_api_key"},
+            "speech":{"enabled":true,"provider":"whisper","model":"whisper-1","auto_detect_language":true,"api_key_reference":null},
+            "search":{"enabled":false,"provider":"duckduckgo"},
+            "memory":{"enabled":true,"database_path":null}
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.speech.base_url, "https://api.openai.com/v1");
+        assert_eq!(config.tts.base_url, "https://api.openai.com/v1");
+        assert!(!config.tts.enabled);
+    }
+
+    #[test]
+    fn test_gemini_uses_gemini_api_key_environment_variable() {
+        let config = AiProviderConfig {
+            provider_name: "gemini".to_string(),
+            ..AiProviderConfig::default()
+        };
+        assert_eq!(config.api_key_environment_variable(), "GEMINI_API_KEY");
     }
 
     #[test]

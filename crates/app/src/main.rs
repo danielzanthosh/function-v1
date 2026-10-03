@@ -14,6 +14,8 @@ use function_ui::{
     CloseFunction, FunctionView, OpenSettings, QuitFunction, SubmitRequest, ToggleExpanded,
     ToggleSpotlight, ToggleTheme, ToggleVoice,
 };
+
+mod providers;
 use gpui::{
     px, AppContext, Application, Bounds, KeyBinding, Point, Size, WindowBackgroundAppearance,
     WindowBounds, WindowDecorations, WindowKind, WindowOptions,
@@ -97,39 +99,9 @@ fn main() {
             }
         };
 
-    let credentials = function_config::InMemoryCredentialStore::new();
-    let api_key = config.ai_provider.resolve_api_key(&credentials);
-
-    let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if config
-        .ai_provider
-        .is_configured()
-    {
-        tracing::info!(model = %config.ai_provider.model, "Using configured OpenAI-compatible LLM provider");
-        std::sync::Arc::new(function_providers::OpenAiLlmProvider::new(
-            &config.ai_provider.base_url,
-            api_key.clone(),
-            &config.ai_provider.model,
-        ))
-    } else {
-        tracing::info!("AI provider not configured with API key: Using Mock/Standby LLM provider");
-        std::sync::Arc::new(function_providers::MockLlmProvider::new(
-            "Function computer assistant ready. Configure your API key in settings or run computer tools directly."
-        ))
-    };
-
-    let stt_provider: std::sync::Arc<dyn function_providers::SpeechToTextProvider> =
-        if config.ai_provider.is_configured() {
-            tracing::info!("Using Whisper STT provider");
-            std::sync::Arc::new(function_providers::WhisperSttProvider::new(
-                &config.ai_provider.base_url,
-                api_key,
-            ))
-        } else {
-            tracing::info!("Using Mock STT provider (fallback)");
-            std::sync::Arc::new(function_providers::MockSttProvider::new(
-                "Open my browser and navigate to YouTube",
-            ))
-        };
+    let provider = providers::build_llm_provider(&config);
+    let stt_provider = providers::build_stt_provider(&config);
+    let tts_provider = providers::build_tts_provider(&config);
 
     let audio_capture = platform.audio_capture();
     let agent = std::sync::Arc::new(function_agent::Agent::new(provider, tools, memory));
@@ -223,14 +195,13 @@ fn main() {
                     true
                 }
             },
-            // macOS: Opaque prevents the desktop wallpaper from bleeding through the
-            // Function surface.
-            // Windows/other: Transparent removes the opaque native background
-            // that would otherwise show through rounded corners.
+            // macOS uses a translucent native surface so the top-level rounded
+            // command shell can provide a restrained Liquid Glass treatment.
+            // Windows/other keeps the transparent native background for rounded corners.
             window_background: {
                 #[cfg(target_os = "macos")]
                 {
-                    WindowBackgroundAppearance::Opaque
+                    WindowBackgroundAppearance::Transparent
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -256,6 +227,7 @@ fn main() {
                     .with_config(config_clone)
                     .with_audio_capture(audio_capture_clone)
                     .with_stt_provider(stt_provider_clone)
+                    .with_tts_provider(tts_provider.clone())
                     .observe_activation(window, cx)
             })
         });

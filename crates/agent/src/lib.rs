@@ -12,6 +12,8 @@ use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use tokio::sync::broadcast;
 
+pub mod context;
+
 #[derive(Error, Debug)]
 pub enum AgentError {
     #[error("Provider error: {0}")]
@@ -235,20 +237,37 @@ Agentic Multi-Step & Observation Loop:
             }
             step += 1;
 
+            let provider = self
+                .provider
+                .read()
+                .map_err(|e| AgentError::Provider(format!("Provider lock poisoned: {e}")))?
+                .clone();
+            let context_budget = context::ContextBudget {
+                context_limit: provider.context_limit("default"),
+                output_reserve: 4_096,
+            };
+            let (request_messages, compaction) = context::compact_messages(&messages, context_budget);
+            if compaction.before_tokens != compaction.after_tokens {
+                tracing::info!(
+                    provider = %provider.name(),
+                    before_tokens = compaction.before_tokens,
+                    after_tokens = compaction.after_tokens,
+                    removed_messages = compaction.removed_messages,
+                    removed_images = compaction.removed_images,
+                    truncated_outputs = compaction.truncated_outputs,
+                    "Compacted model context before dispatch"
+                );
+            }
+
             let req = CompletionRequest {
                 model: "default".to_string(),
-                messages: messages.clone(),
+                messages: request_messages,
                 tools: tool_definitions.clone(),
                 temperature: Some(0.7),
             };
 
             let state_tx_clone = self.state_tx.clone();
             let mut stream_accumulated = String::new();
-            let provider = self
-                .provider
-                .read()
-                .map_err(|e| AgentError::Provider(format!("Provider lock poisoned: {e}")))?
-                .clone();
             let response = provider
                 .complete_stream(
                     req,

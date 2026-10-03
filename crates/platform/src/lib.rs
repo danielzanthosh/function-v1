@@ -310,6 +310,52 @@ pub fn speak_text(text: &str) {
     }
 }
 
+/// Play provider-produced audio bytes using the native system player.
+pub fn play_audio_bytes(bytes: &[u8], extension: &str) -> Result<(), PlatformError> {
+    if bytes.is_empty() {
+        return Err(PlatformError::Unsupported("empty audio response".to_string()));
+    }
+    let safe_extension = extension
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    let path = std::env::temp_dir().join(format!(
+        "function-tts-{}.{}",
+        std::process::id(),
+        if safe_extension.is_empty() { "wav" } else { &safe_extension }
+    ));
+    std::fs::write(&path, bytes).map_err(|error| PlatformError::SystemApi(error.to_string()))?;
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("afplay");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("powershell");
+        command.args(["-NoProfile", "-NonInteractive", "-Command"]);
+        command.arg(format!("(New-Object Media.SoundPlayer '{}').PlaySync()", path.display()));
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("ffplay");
+
+    #[cfg(any(target_os = "macos", not(any(target_os = "macos", target_os = "windows"))))]
+    command.arg(&path);
+
+    match command.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                let _ = std::fs::remove_file(path);
+            });
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            Err(PlatformError::SystemApi(error.to_string()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacShortcutInfo {
     pub key_char: String,

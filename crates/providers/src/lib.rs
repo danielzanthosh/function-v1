@@ -5,8 +5,11 @@
 
 pub mod openai;
 pub mod search;
+pub mod context_limits;
+pub mod gemini;
 
-pub use openai::{OpenAiLlmProvider, WhisperSttProvider};
+pub use openai::{OpenAiLlmProvider, OpenAiTtsProvider, WhisperSttProvider};
+pub use gemini::GeminiLlmProvider;
 pub use search::DuckDuckGoSearchProvider;
 
 use async_trait::async_trait;
@@ -139,6 +142,11 @@ pub struct CompletionResponse {
 pub trait LlmProvider: Send + Sync {
     /// Return the provider identifier name.
     fn name(&self) -> &str;
+
+    /// Context window size in tokens for the selected model.
+    fn context_limit(&self, _model: &str) -> usize {
+        32_000
+    }
 
     /// Execute a chat completion request.
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError>;
