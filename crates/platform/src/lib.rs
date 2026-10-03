@@ -1307,8 +1307,41 @@ pub fn center_window_by_title(title: &str, _width: i32, _height: i32, upper_thir
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        // Ask AppKit/System Events for the actual desktop and window
+        // dimensions. GPUI owns the window, so this keeps the settings toggle
+        // correct without assuming a fixed 1920x1080 display.
+        let y_fraction = if upper_third { 1.0 / 3.0 } else { 0.5 };
+        let script = format!(
+            r#"
+            tell application "Finder"
+                set desktopBounds to bounds of window of desktop
+            end tell
+            tell application "System Events"
+                tell process "{}"
+                    if (count of windows) is greater than 0 then
+                        set windowSize to size of window 1
+                        set desktopWidth to (item 3 of desktopBounds) - (item 1 of desktopBounds)
+                        set desktopHeight to (item 4 of desktopBounds) - (item 2 of desktopBounds)
+                        set xPosition to (item 1 of desktopBounds) + ((desktopWidth - (item 1 of windowSize)) / 2)
+                        set yPosition to (item 2 of desktopBounds) + ((desktopHeight - (item 2 of windowSize)) * {})
+                        set position of window 1 to {{xPosition, yPosition}}
+                    end if
+                end tell
+            end tell
+            "#,
+            title.replace('"', "\\\"")
+                .replace('\\', "\\\\"),
+            y_fraction
+        );
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .status();
+    }
     #[cfg(not(target_os = "windows"))]
     {
+        #[cfg(not(target_os = "macos"))]
         let _ = (title, _width, _height, upper_third);
     }
 }

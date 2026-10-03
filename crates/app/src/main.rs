@@ -122,27 +122,30 @@ fn main() {
             KeyBinding::new("cmd-q", QuitFunction, None),
         ]);
 
-        let (screen_w, screen_h) = {
-            #[cfg(target_os = "windows")]
-            unsafe {
-                extern "system" {
-                    fn GetSystemMetrics(nIndex: i32) -> i32;
-                }
-                (GetSystemMetrics(0) as f32, GetSystemMetrics(1) as f32)
-            }
-            #[cfg(not(target_os = "windows"))]
-            (1920.0, 1080.0)
-        };
+        // Use GPUI's active primary display instead of a fixed 1920x1080
+        // fallback. This respects Retina/logical points, display scaling, and
+        // non-standard monitor dimensions on macOS, Windows, and Linux.
+        let display_bounds = cx
+            .primary_display()
+            .map(|display| display.bounds())
+            .unwrap_or_else(|| Bounds {
+                origin: Point::new(px(0.0), px(0.0)),
+                size: Size::new(px(1920.0), px(1080.0)),
+            });
+        let screen_w = f32::from(display_bounds.size.width);
+        let screen_h = f32::from(display_bounds.size.height);
+        let screen_x = f32::from(display_bounds.origin.x);
+        let screen_y = f32::from(display_bounds.origin.y);
 
         let is_upper_third =
             config.window_position == function_config::WindowPositionMode::UpperThird;
         let init_w_f32 = f32::from(initial_size.width);
         let init_h_f32 = f32::from(initial_size.height);
-        let origin_x = ((screen_w - init_w_f32) / 2.0).max(0.0);
+        let origin_x = screen_x + ((screen_w - init_w_f32) / 2.0).max(0.0);
         let origin_y = if is_upper_third {
-            ((screen_h - init_h_f32) * 0.38).max(0.0)
+            screen_y + ((screen_h - init_h_f32) / 3.0).max(0.0)
         } else {
-            ((screen_h - init_h_f32) / 2.0).max(0.0)
+            screen_y + ((screen_h - init_h_f32) / 2.0).max(0.0)
         };
 
         // Platform-specific window configuration:
