@@ -9,11 +9,11 @@ Implement global assistant activation.
 
 macOS:
 
-Command + ;
+Double Command (⌘ ⌘)
 
 Windows:
 
-Alt + Space
+Ctrl + Space
 
 The hotkey should:
 

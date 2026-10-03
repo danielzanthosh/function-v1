@@ -75,11 +75,11 @@ $Readme = @"
 QUICK START:
 1. Double-click "Function.exe" to start the application.
 2. It runs silently in your Windows system tray.
-3. Press [Alt + Space] anytime to summon or toggle Function.
+3. Press [Ctrl + Space] anytime to summon or toggle Function.
 4. Press [Escape] to dismiss or go back.
 
 KEY FEATURES:
-- Global Hotkey: Alt + Space (with mechanical switch sound)
+- Global Hotkey: Ctrl + Space (with mechanical switch sound)
 - Settings & Customization: Ctrl + , or type "settings"
 - Built-in Calculator, Shell Execution, and Web Search
 - Natural Language Assistant with full chat history and conversation storage

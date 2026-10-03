@@ -287,6 +287,7 @@ impl FunctionView {
                                         activated_once,
                                         this.activation_settling,
                                     )
+                                    && !function_platform::macos_menu_is_active()
                                     && !this.is_active_window
                                 {
                                     tracing::info!("Window confirmed inactive after runloop turn: dismissing");

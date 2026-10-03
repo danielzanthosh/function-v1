@@ -12,8 +12,8 @@ It should feel like a serious desktop productivity tool rather than a traditiona
 
 The user presses a global shortcut:
 
-- macOS: Command + ;
-- Windows: Alt + Space
+- macOS: Double Command (⌘ ⌘)
+- Windows: Ctrl + Space
 
 A compact floating assistant appears.
 

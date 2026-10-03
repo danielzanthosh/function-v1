@@ -44,7 +44,7 @@ All 14 unit tests across all workspace crates must pass before tagging or packag
 
 - **Windows 10 / Windows 11 (Tested & Verified)**:
   - Frameless curved window with native DWM attributes (`DWMWA_WINDOW_CORNER_PREFERENCE`).
-  - Native global hotkeys (`Alt+Space`) via Win32 `RegisterHotKey`.
+  - Native global hotkeys (`Ctrl+Space`) via Win32 `RegisterHotKey`.
   - Native display detection and centering (`GetSystemMetrics`, `SetWindowPos`).
   - Portable Win32 icon association (`WM_SETICON`) across taskbar and caption.
   - Safe dynamic library loading (`LoadLibraryA("dwmapi.dll")`) for portability across MinGW and MSVC runtimes.

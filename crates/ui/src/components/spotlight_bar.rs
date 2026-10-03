@@ -18,6 +18,21 @@ use function_platform::{search_apps_and_files, SearchItemKind};
 use gpui::prelude::*;
 use gpui::{div, px, rgba, IntoElement, Rgba};
 
+fn activation_shortcut_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "⌘ ⌘"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "Ctrl+Space"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "Ctrl+Space"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherIconType {
     Function,
@@ -428,7 +443,7 @@ pub fn render_spotlight_bar(
                             .border_color(badge_border)
                             .text_xs()
                             .text_color(text_muted_val)
-                            .child("Alt+Space"),
+                            .child(activation_shortcut_label()),
                     ),
                 ),
         )

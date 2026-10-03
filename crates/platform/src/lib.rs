@@ -1534,6 +1534,12 @@ pub fn macos_activate_app() {
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
         type MsgSendUsize =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendObject =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendUtf8 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *const std::os::raw::c_char;
         type MsgSendObjectAtIndex =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
         type MsgSendBool =
@@ -1563,6 +1569,10 @@ pub fn macos_activate_app() {
         let msg_send_activate: MsgSendActivate =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_usize: MsgSendUsize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_object: MsgSendObject =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_utf8: MsgSendUtf8 =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_at_index: MsgSendObjectAtIndex =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
@@ -1616,6 +1626,8 @@ pub fn macos_activate_app() {
                 if !windows.is_null() {
                     let count_sel = sel_registerName(c"count".as_ptr());
                     let object_at_index_sel = sel_registerName(c"objectAtIndex:".as_ptr());
+                    let title_sel = sel_registerName(c"title".as_ptr());
+                    let utf8_sel = sel_registerName(c"UTF8String".as_ptr());
                     let is_key_sel = sel_registerName(c"isKeyWindow".as_ptr());
                     let is_main_sel = sel_registerName(c"isMainWindow".as_ptr());
                     let is_visible_sel = sel_registerName(c"isVisible".as_ptr());
@@ -1641,6 +1653,18 @@ pub fn macos_activate_app() {
                                         continue;
                                     }
                                 }
+                            }
+
+                            let title = msg_send_object(win, title_sel);
+                            let title_ptr = if !title.is_null() {
+                                msg_send_utf8(title, utf8_sel)
+                            } else {
+                                std::ptr::null()
+                            };
+                            if title_ptr.is_null()
+                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy() != "Function"
+                            {
+                                continue;
                             }
 
                             // In Cocoa, borderless windows return NO to canBecomeKeyWindow by default.
@@ -1712,6 +1736,12 @@ pub fn macos_hide_app() {
         ) -> *mut std::ffi::c_void;
         type MsgSendUsize =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendObject =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendUtf8 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *const std::os::raw::c_char;
         type MsgSendObjectAtIndex =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
         type MsgSendActivateOptions =
@@ -1729,6 +1759,10 @@ pub fn macos_hide_app() {
         let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_usize: MsgSendUsize =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_object: MsgSendObject =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_utf8: MsgSendUtf8 =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_at_index: MsgSendObjectAtIndex =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_activate_options: MsgSendActivateOptions =
@@ -1745,6 +1779,8 @@ pub fn macos_hide_app() {
                 if !windows.is_null() {
                     let count_sel = sel_registerName(c"count".as_ptr());
                     let object_at_index_sel = sel_registerName(c"objectAtIndex:".as_ptr());
+                    let title_sel = sel_registerName(c"title".as_ptr());
+                    let utf8_sel = sel_registerName(c"UTF8String".as_ptr());
                     let order_out_sel = sel_registerName(c"orderOut:".as_ptr());
                     let count = msg_send_usize(windows, count_sel);
                     for i in 0..count {
@@ -1760,7 +1796,19 @@ pub fn macos_hide_app() {
                                     }
                                 }
                             }
+                            let title = msg_send_object(win, title_sel);
+                            let title_ptr = if !title.is_null() {
+                                msg_send_utf8(title, utf8_sel)
+                            } else {
+                                std::ptr::null()
+                            };
+                            if title_ptr.is_null()
+                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy() != "Function"
+                            {
+                                continue;
+                            }
                             let _ = msg_send_1(win, order_out_sel, std::ptr::null_mut());
+                            break;
                         }
                     }
                 }
@@ -1784,6 +1832,51 @@ pub fn macos_hide_app() {
                 tracing::info!("Dismissed macOS application: ordered out windows, hid app, deactivated");
             }
         }
+    }
+}
+
+/// Return whether AppKit currently has a status-bar/menu window active.
+///
+/// Status menus temporarily change key-window state. The UI must not interpret
+/// that transient state as a click-outside dismissal of Function.
+pub fn macos_menu_is_active() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        type MsgSend0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn object_getClass(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn class_getName(cls: *mut std::ffi::c_void) -> *const std::os::raw::c_char;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+        }
+
+        let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let app_class = objc_getClass(c"NSApplication".as_ptr());
+        if app_class.is_null() {
+            return false;
+        }
+        let app = msg_send_0(app_class, sel_registerName(c"sharedApplication".as_ptr()));
+        if app.is_null() {
+            return false;
+        }
+        let key_window = msg_send_0(app, sel_registerName(c"keyWindow".as_ptr()));
+        if key_window.is_null() {
+            return false;
+        }
+        let class = object_getClass(key_window);
+        if class.is_null() {
+            return false;
+        }
+        let name = class_getName(class);
+        !name.is_null() && should_skip_macos_window_class(&std::ffi::CStr::from_ptr(name).to_string_lossy())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }
 

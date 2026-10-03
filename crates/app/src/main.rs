@@ -247,6 +247,9 @@ fn main() {
         let audio_capture_clone = audio_capture.clone();
         let stt_provider_clone = stt_provider.clone();
         let _window = cx.open_window(window_options, move |window, cx| {
+            // Keep a stable native marker even though the macOS titlebar is hidden.
+            // Platform activation uses this marker to target only Function's window.
+            window.set_window_title("Function");
             cx.new(|cx| {
                 FunctionView::new(cx, mic_configured, mic_available)
                     .with_agent(agent_clone, cx)
