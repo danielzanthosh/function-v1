@@ -1011,10 +1011,15 @@ impl FunctionView {
         }
         self.settings_status_message = Some("Complete ChatGPT sign-in in your browser...".into());
         let state = authorization.state().to_string();
+        let Some(runtime_handle) = crate::get_runtime_handle() else {
+            self.settings_status_message = Some("ChatGPT login unavailable: Tokio runtime is not initialized".into());
+            cx.notify();
+            return;
+        };
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                let result = tokio::task::spawn_blocking(move || {
+                let result = runtime_handle.spawn_blocking(move || {
                     let code = function_providers::chatgpt_oauth::wait_for_callback(state)?;
                     function_providers::chatgpt_oauth::exchange_code(authorization, code)
                 })
