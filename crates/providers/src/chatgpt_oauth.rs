@@ -48,7 +48,8 @@ pub fn load_tokens() -> Option<ChatGptOAuthTokens> {
 }
 
 pub fn install_access_token_in_codex(access_token: &str) -> Result<(), String> {
-    let mut child = Command::new("codex")
+    let executable = crate::codex::resolve_codex_executable().ok_or("Codex CLI was not found")?;
+    let mut child = Command::new(executable)
         .args(["login", "--with-access-token"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

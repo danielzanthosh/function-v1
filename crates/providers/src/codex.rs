@@ -3,6 +3,52 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::process::Command;
 
+/// GUI applications on macOS do not inherit the interactive shell's PATH.
+/// Resolve Codex through the user's login shell and common package-manager
+/// locations before reporting that it is unavailable.
+pub fn resolve_codex_executable() -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("zsh").args(["-ilc", "command -v codex"]).output() {
+            if output.status.success() {
+                candidates.extend(String::from_utf8_lossy(&output.stdout).lines().filter_map(|path| {
+                    let path = std::path::PathBuf::from(path.trim());
+                    path.is_file().then_some(path)
+                }));
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            candidates.extend([
+                home.join(".npm-global/bin/codex"),
+                home.join(".local/bin/codex"),
+                home.join(".volta/bin/codex"),
+            ]);
+        }
+        candidates.extend([
+            std::path::PathBuf::from("/opt/homebrew/bin/codex"),
+            std::path::PathBuf::from("/usr/local/bin/codex"),
+        ]);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = Command::new("where.exe").arg("codex").output() {
+            if output.status.success() {
+                candidates.extend(String::from_utf8_lossy(&output.stdout).lines().filter_map(|path| {
+                    let path = std::path::PathBuf::from(path.trim());
+                    path.is_file().then_some(path)
+                }));
+            }
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            candidates.push(std::path::PathBuf::from(app_data).join("npm/codex.cmd"));
+        }
+    }
+    candidates.push(std::path::PathBuf::from("codex"));
+    candidates.into_iter().find(|candidate| candidate.to_string_lossy() == "codex" || candidate.is_file())
+}
+
 /// Uses the locally authenticated Codex CLI session. The OAuth credential is
 /// never read or copied by Function; Codex owns its storage and renewal.
 pub struct CodexChatGptProvider {
@@ -32,7 +78,8 @@ fn prompt_from_messages(messages: &[ChatMessage]) -> String {
 }
 
 fn run_codex(model: String, prompt: String) -> Result<String, ProviderError> {
-    let output = Command::new("codex")
+    let executable = resolve_codex_executable().ok_or_else(|| ProviderError::NotConfigured("Codex CLI was not found. Install it or add its directory to your login shell PATH.".into()))?;
+    let output = Command::new(executable)
         .args([
             "exec",
             "--json",
