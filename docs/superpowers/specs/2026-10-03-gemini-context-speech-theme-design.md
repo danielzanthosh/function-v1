@@ -18,6 +18,7 @@ Extend Function V1 with reliable context-window management, Gemini support throu
 10. Apply provider configuration changes without restarting the app.
 11. Remove decorative emoji from settings and theme controls.
 12. Improve theme selection with professional labels, swatches, selected states, contrast, and spacing.
+13. Any input beginning with `> ` executes the remainder as a shell command locally instead of being sent to an AI provider.
 
 ## Current Architecture and Constraints
 
@@ -75,7 +76,11 @@ STT settings no longer inherit the AI endpoint or key. The existing Whisper-comp
 
 Speech requests run through the app's Tokio runtime and report actionable provider errors. Live settings changes replace the active STT/TTS handles just as AI provider changes replace the active LLM provider.
 
-### 5. Settings UX
+### 5. Explicit shell command prefix
+
+The local command layer recognizes a leading `> ` after trimming leading whitespace. It removes the prefix, trims the command, and dispatches it through the existing cross-platform shell launcher. This path bypasses context management and all LLM providers, while retaining the existing native shell selection, launch-error reporting, and safety behavior. Empty `> ` input remains a visible shell-launcher prompt rather than executing an empty command.
+
+### 6. Settings UX
 
 Keep the primary settings surface concise. Provider configuration is grouped into expandable sections:
 
@@ -85,7 +90,7 @@ Keep the primary settings surface concise. Provider configuration is grouped int
 
 Each section exposes only relevant fields when enabled. Model and endpoint fields remain configurable. Save and Enter use one persistence path and apply all provider changes atomically from the user's perspective.
 
-### 6. Professional themes
+### 7. Professional themes
 
 Remove decorative emoji from theme names, API-key visibility, sound controls, and other settings labels. Use existing vector/icon components or plain text labels. Theme choices use compact swatches and clear selected borders instead of emoji prefixes. Improve surface contrast, typography hierarchy, spacing, and focus/hover states while preserving the existing theme enum and serialized values.
 
