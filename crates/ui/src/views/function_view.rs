@@ -1405,12 +1405,15 @@ impl FunctionView {
         // A hidden GPUI window can retain an off-screen origin after a display
         // change or a previous resize. Recompute its position whenever it is
         // summoned so the full chat surface remains inside the active screen.
-        function_platform::center_window_by_title(
-            "Function",
-            f32::from(target_size.width) as i32,
-            f32::from(target_size.height) as i32,
-            self.config.window_position == function_config::WindowPositionMode::UpperThird,
-        );
+        let upper_third = self.config.window_position == function_config::WindowPositionMode::UpperThird;
+        std::thread::spawn(move || {
+            function_platform::center_window_by_title(
+                "Function",
+                f32::from(target_size.width) as i32,
+                f32::from(target_size.height) as i32,
+                upper_third,
+            );
+        });
         self.focus_handle.focus(window);
         cx.notify();
     }

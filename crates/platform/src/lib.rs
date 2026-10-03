@@ -924,14 +924,24 @@ pub mod macos {
         }
 
         async fn check_permissions(&self) -> PermissionStatus {
+            unsafe extern "C" {
+                fn AXIsProcessTrusted() -> bool;
+                fn CGPreflightScreenCaptureAccess() -> bool;
+            }
             PermissionStatus {
-                accessibility: true,
-                screen_recording: true,
+                accessibility: unsafe { AXIsProcessTrusted() },
+                screen_recording: unsafe { CGPreflightScreenCaptureAccess() },
                 microphone: self.audio_capture.is_microphone_available(),
             }
         }
 
         async fn request_permissions(&self) -> Result<PermissionStatus, PlatformError> {
+            let status = self.check_permissions().await;
+            if !status.accessibility || !status.screen_recording {
+                let _ = std::process::Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                    .spawn();
+            }
             Ok(self.check_permissions().await)
         }
 

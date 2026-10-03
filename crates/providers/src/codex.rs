@@ -126,6 +126,9 @@ fn run_codex(model: String, prompt: String) -> Result<String, ProviderError> {
             let item = event.get("item").unwrap_or(&Value::Null);
             if item.get("type").and_then(Value::as_str) == Some("agent_message") {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
+                    if !answer.is_empty() {
+                        answer.push('\n');
+                    }
                     answer.push_str(text);
                 }
             }

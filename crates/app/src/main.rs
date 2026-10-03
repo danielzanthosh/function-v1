@@ -65,6 +65,11 @@ fn main() {
     function_ui::set_runtime_handle(runtime.handle().clone());
     let runtime = Box::leak(Box::new(runtime));
 
+    // On macOS this opens the relevant privacy settings on first launch when
+    // Accessibility or Screen Recording access has not yet been granted.
+    let permission_status = runtime.block_on(platform.request_permissions());
+    tracing::info!(?permission_status, "Platform permissions checked");
+
     // Check microphone availability and configuration
     let mic_available = runtime.block_on(platform.is_microphone_available());
     let mic_configured = config.speech.is_configured();
