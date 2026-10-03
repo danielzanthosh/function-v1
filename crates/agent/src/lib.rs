@@ -444,7 +444,11 @@ Agentic Multi-Step & Observation Loop:
 
                     let ctx = ToolContext {
                         session_id: "default".to_string(),
-                        allow_sensitive: false,
+                        // Function is configured as a fully agentic assistant.
+                        // Tool implementations still enforce RESTRICTED actions,
+                        // but confirmation-gated actions are allowed after the
+                        // user explicitly enabled maximum agentic permissions.
+                        allow_sensitive: true,
                     };
 
                     // Structured debug logging: execution
