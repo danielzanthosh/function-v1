@@ -540,7 +540,7 @@ pub fn render_settings_view(
                                                     MouseButton::Left,
                                                     cx.listener(|this, _, _, cx| {
                                                         this.settings_provider = "gemini".into();
-                                                        this.settings_model = "gemini-3.5-flash-lite".into();
+                                                        this.settings_model = "gemini-2.5-flash".into();
                                                         this.settings_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/".into();
                                                         cx.notify();
                                                     }),

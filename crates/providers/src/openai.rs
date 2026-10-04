@@ -240,78 +240,42 @@ impl LlmProvider for OpenAiLlmProvider {
 
 
         let (response_body, http_status) = split_curl_response(response_body);
-        let status_code = http_status.unwrap_or(200);
+        let parsed: serde_json::Value = serde_json::from_str(&response_body)?;
 
-        let parsed: serde_json::Value = match serde_json::from_str(&response_body) {
-            Ok(val) => val,
-            Err(e) => {
-                let sanitized_body = function_config::redact_secrets(&response_body);
-                tracing::error!(
-                    status = status_code,
-                    body = %sanitized_body,
-                    error = %e,
-                    "Failed to parse LLM provider JSON response"
-                );
-                return Err(ProviderError::Api {
-                    code: status_code,
-                    message: format!(
-                        "Invalid JSON response from provider (status {}): {}",
-                        status_code,
-                        sanitized_body.chars().take(500).collect::<String>()
-                    ),
-                });
-            }
-        };
-
-        if status_code >= 400 || parsed.get("error").is_some() {
+        if parsed.get("error").is_some() {
             let msg = provider_error_message(&parsed, &response_body);
-            let sanitized_msg = function_config::redact_secrets(&msg);
-            tracing::error!(
-                status = status_code,
-                error_message = %sanitized_msg,
-                "LLM provider returned error response"
-            );
             return Err(ProviderError::Api {
-                code: if status_code >= 400 { status_code } else { 400 },
-                message: sanitized_msg,
+                code: http_status.unwrap_or(400),
+                message: msg,
             });
         }
 
-        let choices = parsed.get("choices").and_then(|c| c.as_array());
-        let choice = match choices {
-            Some(a) if !a.is_empty() => &a[0],
-            _ => {
-                let sanitized_body = function_config::redact_secrets(&response_body);
-                tracing::error!(
-                    status = status_code,
-                    body = %sanitized_body,
-                    "No completion choices returned in provider response"
-                );
-                return Err(ProviderError::Api {
-                    code: status_code,
-                    message: format!(
-                        "No completion choices returned (status {}): {}",
-                        status_code,
-                        sanitized_body.chars().take(500).collect::<String>()
-                    ),
-                });
-            }
-        };
+        let choice = parsed
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.first())
+            .ok_or_else(|| ProviderError::Api {
+                code: 500,
+                message: "No completion choices returned".into(),
+            })?;
 
         let finish_reason = choice
             .get("finish_reason")
             .and_then(|f| f.as_str())
             .map(|s| s.to_string());
 
-        let msg_val = choice.get("message");
+        let msg_val = choice.get("message").ok_or_else(|| ProviderError::Api {
+            code: 500,
+            message: "Missing message in choice".into(),
+        })?;
 
         let content = msg_val
-            .and_then(|m| m.get("content"))
+            .get("content")
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string();
 
-        let tool_calls = if let Some(t_array) = msg_val.and_then(|m| m.get("tool_calls")).and_then(|t| t.as_array())
+        let tool_calls = if let Some(t_array) = msg_val.get("tool_calls").and_then(|t| t.as_array())
         {
             let mut calls = Vec::new();
             for c in t_array {
@@ -326,14 +290,12 @@ impl LlmProvider for OpenAiLlmProvider {
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let args_val = func.get("arguments");
-                    let arguments: serde_json::Value = match args_val {
-                        Some(serde_json::Value::String(s)) => {
-                            serde_json::from_str(s).unwrap_or(json!({ "raw": s }))
-                        }
-                        Some(val) => val.clone(),
-                        None => json!({}),
-                    };
+                    let args_raw = func
+                        .get("arguments")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}");
+                    let arguments: serde_json::Value =
+                        serde_json::from_str(args_raw).unwrap_or(json!({ "raw": args_raw }));
                     calls.push(ToolCall {
                         id,
                         name,

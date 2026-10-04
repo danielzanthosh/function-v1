@@ -11,9 +11,8 @@ pub mod terminal_tool;
 pub use app_tool::ApplicationTool;
 pub use browser_tool::BrowserTool;
 pub use desktop_tools::{
-    ClickTool, CloseAppTool, DoubleClickTool, ExecuteCommandTool, HotkeyTool, KeyPressTool,
-    MouseClickTool, MouseDoubleClickTool, MouseMoveTool, MouseScrollTool, OpenAppTool,
-    PressKeyTool, ScrollTool, TakeScreenshotTool, TypeTextTool,
+    ClickTool, CloseAppTool, DoubleClickTool, ExecuteCommandTool, OpenAppTool, PressKeyTool,
+    ScrollTool, TakeScreenshotTool, TypeTextTool,
 };
 pub use file_tool::FileTool;
 pub use keyboard_tool::KeyboardTool;
@@ -36,14 +35,6 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
     registry.register(PressKeyTool::new());
     registry.register(ScrollTool::new());
     registry.register(ExecuteCommandTool::new());
-
-    // Specific granular mouse/keyboard tools required by prompt spec
-    registry.register(MouseMoveTool::new());
-    registry.register(MouseClickTool::new());
-    registry.register(MouseDoubleClickTool::new());
-    registry.register(MouseScrollTool::new());
-    registry.register(KeyPressTool::new());
-    registry.register(HotkeyTool::new());
 
     // Legacy / low-level tools
     registry.register(MouseTool::new());
