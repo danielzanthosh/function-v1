@@ -21,6 +21,26 @@ pub struct WindowInfo {
 pub struct ScreenDimensions {
     pub width: u32,
     pub height: u32,
+    #[serde(default = "default_scale_factor")]
+    pub scale_factor: f64,
+    #[serde(default)]
+    pub logical_width: u32,
+    #[serde(default)]
+    pub logical_height: u32,
+}
+
+fn default_scale_factor() -> f64 {
+    1.0
+}
+
+/// Centralized coordinate conversion utility to map visual/physical pixel coordinates
+/// (such as screenshots) to logical CGEvent/OS interaction coordinates.
+pub fn convert_physical_to_logical(phys_x: i32, phys_y: i32, scale_factor: f64) -> (i32, i32) {
+    let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+    (
+        (phys_x as f64 / scale).round() as i32,
+        (phys_y as f64 / scale).round() as i32,
+    )
 }
 
 pub trait ComputerControl: Send + Sync {
@@ -183,7 +203,13 @@ pub mod windows {
             unsafe {
                 let width = GetSystemMetrics(SM_CXSCREEN).max(800) as u32;
                 let height = GetSystemMetrics(SM_CYSCREEN).max(600) as u32;
-                ScreenDimensions { width, height }
+                ScreenDimensions {
+                    width,
+                    height,
+                    scale_factor: 1.0,
+                    logical_width: width,
+                    logical_height: height,
+                }
             }
         }
 
@@ -420,6 +446,7 @@ pub mod macos {
     }
 
     extern "C" {
+        fn AXIsProcessTrusted() -> bool;
         fn CGMainDisplayID() -> u32;
         fn CGDisplayPixelsWide(display: u32) -> usize;
         fn CGDisplayPixelsHigh(display: u32) -> usize;
@@ -454,6 +481,17 @@ pub mod macos {
         fn CFRelease(cf: *mut std::ffi::c_void);
     }
 
+    pub fn check_accessibility_permissions() -> Result<(), PlatformError> {
+        unsafe {
+            if !AXIsProcessTrusted() {
+                return Err(PlatformError::PermissionDenied(
+                    "Accessibility permission is required for mouse and keyboard control. Please enable: System Settings -> Privacy & Security -> Accessibility -> Function".into()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
     const K_CG_EVENT_LEFT_MOUSE_UP: u32 = 2;
     const K_CG_EVENT_RIGHT_MOUSE_DOWN: u32 = 3;
@@ -467,14 +505,57 @@ pub mod macos {
 
     impl ComputerControl for MacOsComputerControl {
         fn get_screen_dimensions(&self) -> ScreenDimensions {
+            let script = "tell application \"AppKit\" to set s to current application's NSScreen's mainScreen() \n \
+                          if s is missing value then return \"1920x1080|1.0|1920x1080\"\n \
+                          set f to s's frame()\n \
+                          set scale to s's backingScaleFactor()\n \
+                          set w to item 1 of item 2 of f\n \
+                          set h to item 2 of item 2 of f\n \
+                          return (w as integer as string) & \"x\" & (h as integer as string) & \"|\" & (scale as string) & \"|\" & ((w * scale) as integer as string) & \"x\" & ((h * scale) as integer as string)";
+            let out = Command::new("osascript").args(["-e", script]).output();
+            if let Ok(o) = out {
+                if o.status.success() {
+                    let str_val = String::from_utf8_lossy(&o.stdout);
+                    let parts: Vec<&str> = str_val.trim().split('|').collect();
+                    if parts.len() == 3 {
+                        let log_dim: Vec<&str> = parts[0].split('x').collect();
+                        let scale_str = parts[1].replace(',', ".");
+                        let scale: f64 = scale_str.parse().unwrap_or(2.0);
+                        let phys_dim: Vec<&str> = parts[2].split('x').collect();
+
+                        if log_dim.len() == 2 && phys_dim.len() == 2 {
+                            let log_w: u32 = log_dim[0].parse().unwrap_or(1710);
+                            let log_h: u32 = log_dim[1].parse().unwrap_or(1107);
+                            let phys_w: u32 = phys_dim[0].parse().unwrap_or(log_w * 2);
+                            let phys_h: u32 = phys_dim[1].parse().unwrap_or(log_h * 2);
+
+                            return ScreenDimensions {
+                                width: phys_w,
+                                height: phys_h,
+                                scale_factor: scale,
+                                logical_width: log_w,
+                                logical_height: log_h,
+                            };
+                        }
+                    }
+                }
+            }
+
             unsafe {
                 let disp = CGMainDisplayID();
-                let w = CGDisplayPixelsWide(disp) as u32;
-                let h = CGDisplayPixelsHigh(disp) as u32;
-                if w > 0 && h > 0 {
-                    ScreenDimensions { width: w, height: h }
-                } else {
-                    ScreenDimensions { width: 1920, height: 1080 }
+                let phys_w = CGDisplayPixelsWide(disp) as u32;
+                let phys_h = CGDisplayPixelsHigh(disp) as u32;
+                let (phys_w, phys_h) = if phys_w > 0 && phys_h > 0 { (phys_w, phys_h) } else { (3420, 2214) };
+                let scale = 2.0;
+                let log_w = (phys_w as f64 / scale).round() as u32;
+                let log_h = (phys_h as f64 / scale).round() as u32;
+
+                ScreenDimensions {
+                    width: phys_w,
+                    height: phys_h,
+                    scale_factor: scale,
+                    logical_width: log_w,
+                    logical_height: log_h,
                 }
             }
         }
@@ -493,6 +574,7 @@ pub mod macos {
         }
 
         fn mouse_move(&self, x: i32, y: i32) -> Result<(), PlatformError> {
+            check_accessibility_permissions()?;
             let pt = CGPoint { x: x as f64, y: y as f64 };
             unsafe {
                 let _ = CGWarpMouseCursorPosition(pt);
@@ -506,6 +588,7 @@ pub mod macos {
         }
 
         fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            check_accessibility_permissions()?;
             let (x, y) = self.get_cursor_position();
             let pt = CGPoint { x: x as f64, y: y as f64 };
             let (down_type, up_type, btn_num) = match button {
@@ -606,6 +689,7 @@ pub mod macos {
         }
 
         fn keyboard_type(&self, text: &str) -> Result<(), PlatformError> {
+            check_accessibility_permissions()?;
             for ch in text.chars() {
                 let mut utf16_buf = [0u16; 2];
                 let encoded = ch.encode_utf16(&mut utf16_buf);
@@ -629,6 +713,7 @@ pub mod macos {
         }
 
         fn keyboard_press(&self, key: &str) -> Result<(), PlatformError> {
+            check_accessibility_permissions()?;
             let keycode = match key.to_lowercase().as_str() {
                 "return" | "enter" => 36,
                 "tab" => 48,
@@ -811,6 +896,9 @@ impl ComputerControl for FallbackComputerControl {
         ScreenDimensions {
             width: 1920,
             height: 1080,
+            scale_factor: 1.0,
+            logical_width: 1920,
+            logical_height: 1080,
         }
     }
     fn get_cursor_position(&self) -> (i32, i32) {

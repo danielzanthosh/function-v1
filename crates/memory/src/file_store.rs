@@ -83,16 +83,32 @@ impl MemoryStore for FileMemoryStore {
             .map_err(|e| MemoryError::Database(e.to_string()))?;
         let query_lower = query.to_lowercase();
 
+        // Simple greetings or general queries should not recall arbitrary previous task summaries
+        let is_casual_convo = query_lower.len() <= 12
+            && (query_lower.contains("hi")
+                || query_lower.contains("hello")
+                || query_lower.contains("hey")
+                || query_lower.contains("greeting")
+                || query_lower.contains("what's up")
+                || query_lower.contains("sup")
+                || query_lower.contains("good morning")
+                || query_lower.contains("good evening")
+                || query_lower.contains("howdy"));
+
         let mut matches: Vec<MemoryItem> = read
             .values()
             .filter(|item| {
+                if is_casual_convo && item.category == MemoryCategory::TaskSummary {
+                    return false;
+                }
                 if let Some(cat) = category {
                     if item.category != cat {
                         return false;
                     }
                 }
-                if query_lower.is_empty() {
-                    return true;
+                if query_lower.is_empty() || is_casual_convo {
+                    return item.category == MemoryCategory::UserPreference
+                        || item.category == MemoryCategory::CustomInstruction;
                 }
                 item.key.to_lowercase().contains(&query_lower)
                     || item.value.to_lowercase().contains(&query_lower)
@@ -106,7 +122,17 @@ impl MemoryStore for FileMemoryStore {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Cap recalled context items and summarize long items to ensure context remains under max 250 lines
         matches.truncate(limit);
+        for item in &mut matches {
+            let lines: Vec<&str> = item.value.lines().collect();
+            if lines.len() > 250 {
+                let summarized = lines[..250].join("\n");
+                item.value = format!("{}\n...[summarized to max 250 lines]", summarized);
+            }
+        }
+
         Ok(matches)
     }
 
