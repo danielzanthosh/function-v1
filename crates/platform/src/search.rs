@@ -4,7 +4,8 @@
 //! across macOS and Windows. Uses lazy caching for installed applications
 //! to ensure instant zero-latency feedback during keystroke entry.
 
-use std::path::PathBuf;
+#[allow(unused_imports)]
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
