@@ -32,6 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 cpal = "0.18.2"
 hound = "3.5.1"
+pulldown-cmark = "0.12"
 
 # Internal workspace crates
 function-app = { path = "crates/app" }
