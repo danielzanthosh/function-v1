@@ -37,6 +37,105 @@ fn split_curl_response(raw_response: String) -> (String, Option<u16>) {
     (raw_response, None)
 }
 
+pub fn find_thought_signature(
+    call_val: Option<&serde_json::Value>,
+    part_val: Option<&serde_json::Value>,
+    msg_val: Option<&serde_json::Value>,
+    choice_val: Option<&serde_json::Value>,
+    root_val: Option<&serde_json::Value>,
+) -> Option<String> {
+    if let Some(c) = call_val {
+        if let Some(s) = c.get("thought_signature").or_else(|| c.get("thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+        if let Some(f) = c.get("function").or_else(|| c.get("functionCall")).or_else(|| c.get("function_call")) {
+            if let Some(s) = f.get("thought_signature").or_else(|| f.get("thoughtSignature")).and_then(|v| v.as_str()) {
+                if !s.is_empty() { return Some(s.to_string()); }
+            }
+        }
+        if let Some(s) = c.pointer("/extra_fields/thought_signature").or_else(|| c.pointer("/extra_fields/thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+    }
+
+    if let Some(p) = part_val {
+        if let Some(s) = p.get("thought_signature").or_else(|| p.get("thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+        if let Some(fc) = p.get("functionCall").or_else(|| p.get("function_call")) {
+            if let Some(s) = fc.get("thought_signature").or_else(|| fc.get("thoughtSignature")).and_then(|v| v.as_str()) {
+                if !s.is_empty() { return Some(s.to_string()); }
+            }
+        }
+    }
+
+    if let Some(m) = msg_val {
+        if let Some(s) = m.get("thought_signature").or_else(|| m.get("thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+        if let Some(s) = m.pointer("/extra_fields/thought_signature").or_else(|| m.pointer("/extra_fields/thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+    }
+
+    if let Some(ch) = choice_val {
+        if let Some(s) = ch.get("thought_signature").or_else(|| ch.get("thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+        if let Some(s) = ch.pointer("/extra_fields/thought_signature").or_else(|| ch.pointer("/extra_fields/thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+    }
+
+    if let Some(r) = root_val {
+        if let Some(s) = r.get("thought_signature").or_else(|| r.get("thoughtSignature")).and_then(|v| v.as_str()) {
+            if !s.is_empty() { return Some(s.to_string()); }
+        }
+    }
+
+    None
+}
+
+pub fn extract_raw_function_call(
+    call_val: Option<&serde_json::Value>,
+    part_val: Option<&serde_json::Value>,
+    name: &str,
+    arguments: &serde_json::Value,
+    thought_sig: Option<&str>,
+) -> serde_json::Value {
+    let mut fc = if let Some(p) = part_val {
+        if let Some(f) = p.get("functionCall").or_else(|| p.get("function_call")) {
+            f.clone()
+        } else {
+            json!({ "name": name, "args": arguments })
+        }
+    } else if let Some(c) = call_val {
+        if let Some(f) = c.get("functionCall").or_else(|| c.get("function_call")) {
+            f.clone()
+        } else if let Some(f) = c.get("function") {
+            let args_val = match f.get("arguments") {
+                Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or_else(|_| json!({ "raw": s })),
+                Some(v) => v.clone(),
+                None => json!({}),
+            };
+            json!({ "name": name, "args": args_val })
+        } else {
+            json!({ "name": name, "args": arguments })
+        }
+    } else {
+        json!({ "name": name, "args": arguments })
+    };
+
+    if let Some(sig) = thought_sig {
+        if !sig.is_empty() {
+            fc["thought_signature"] = json!(sig);
+            fc["thoughtSignature"] = json!(sig);
+        }
+    }
+
+    fc
+}
+
 pub struct OpenAiLlmProvider {
     base_url: String,
     api_key: Option<String>,
@@ -129,26 +228,62 @@ impl LlmProvider for OpenAiLlmProvider {
                 }
 
                 if let Some(ref t_calls) = m.tool_calls {
+                    let mut parts_list = Vec::new();
                     let calls_json: Vec<serde_json::Value> = t_calls
                         .iter()
                         .map(|c| {
-                            json!({
+                            let sig = c.thought_signature.as_deref().or(m.thought_signature.as_deref());
+                            let raw_fc = extract_raw_function_call(
+                                None,
+                                None,
+                                &c.name,
+                                &c.arguments,
+                                sig,
+                            );
+
+                            parts_list.push(json!({
+                                "functionCall": raw_fc.clone(),
+                                "thought_signature": sig,
+                                "thoughtSignature": sig
+                            }));
+
+                            let mut call_obj = json!({
                                 "id": c.id,
                                 "type": "function",
                                 "function": {
                                     "name": c.name,
                                     "arguments": c.arguments.to_string(),
-                                }
-                            })
+                                    "thought_signature": sig,
+                                    "thoughtSignature": sig
+                                },
+                                "functionCall": raw_fc
+                            });
+
+                            if let Some(s) = sig {
+                                call_obj["thought_signature"] = json!(s);
+                                call_obj["thoughtSignature"] = json!(s);
+                                call_obj["extra_fields"] = json!({
+                                    "thought_signature": s,
+                                    "thoughtSignature": s
+                                });
+                            }
+
+                            call_obj
                         })
                         .collect();
+
                     obj["tool_calls"] = json!(calls_json);
+                    if !parts_list.is_empty() {
+                        obj["parts"] = json!(parts_list);
+                    }
                 }
 
                 if let Some(ref ts) = m.thought_signature {
                     obj["thought_signature"] = json!(ts);
+                    obj["thoughtSignature"] = json!(ts);
                     obj["extra_fields"] = json!({
-                        "thought_signature": ts
+                        "thought_signature": ts,
+                        "thoughtSignature": ts
                     });
                 }
 
@@ -376,7 +511,27 @@ impl LlmProvider for OpenAiLlmProvider {
                         None => json!({}),
                     };
                     if !name.is_empty() {
-                        calls.push(ToolCall { id, name, arguments });
+                        let sig = find_thought_signature(
+                            Some(c),
+                            None,
+                            Some(msg_val),
+                            Some(choice),
+                            Some(&parsed),
+                        );
+                        let raw_fc = extract_raw_function_call(
+                            Some(c),
+                            None,
+                            &name,
+                            &arguments,
+                            sig.as_deref(),
+                        );
+                        calls.push(ToolCall {
+                            id,
+                            name,
+                            arguments,
+                            thought_signature: sig,
+                            raw_function_call: Some(raw_fc),
+                        });
                     }
                 }
             }
@@ -391,10 +546,26 @@ impl LlmProvider for OpenAiLlmProvider {
                         Some(val) => val.clone(),
                         None => json!({}),
                     };
+                    let sig = find_thought_signature(
+                        None,
+                        None,
+                        Some(msg_val),
+                        Some(choice),
+                        Some(&parsed),
+                    );
+                    let raw_fc = extract_raw_function_call(
+                        None,
+                        None,
+                        name,
+                        &arguments,
+                        sig.as_deref(),
+                    );
                     calls.push(ToolCall {
                         id: "call_0".to_string(),
                         name: name.to_string(),
                         arguments,
+                        thought_signature: sig,
+                        raw_function_call: Some(raw_fc),
                     });
                 }
             }
@@ -418,10 +589,26 @@ impl LlmProvider for OpenAiLlmProvider {
                                 .cloned()
                                 .unwrap_or(json!({}));
                             let id = format!("call_{}", idx);
+                            let sig = find_thought_signature(
+                                Some(fc),
+                                Some(part),
+                                Some(msg_val),
+                                Some(choice),
+                                Some(&parsed),
+                            );
+                            let raw_fc = extract_raw_function_call(
+                                Some(fc),
+                                Some(part),
+                                name,
+                                &arguments,
+                                sig.as_deref(),
+                            );
                             calls.push(ToolCall {
                                 id,
                                 name: name.to_string(),
                                 arguments,
+                                thought_signature: sig,
+                                raw_function_call: Some(raw_fc),
                             });
                         }
                     }
@@ -901,6 +1088,8 @@ mod tests {
                 id: "call_abc".to_string(),
                 name: "click".to_string(),
                 arguments: json!({ "x": 100, "y": 200 }),
+                thought_signature: Some("gemini_thought_sig_xyz".to_string()),
+                raw_function_call: None,
             }]),
             thought_signature: Some("gemini_thought_sig_xyz".to_string()),
         };
@@ -959,6 +1148,8 @@ mod tests {
                         id: format!("call_{}", idx),
                         name: name.to_string(),
                         arguments,
+                        thought_signature: None,
+                        raw_function_call: None,
                     });
                 }
             }

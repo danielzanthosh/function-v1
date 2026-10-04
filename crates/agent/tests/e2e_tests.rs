@@ -281,3 +281,75 @@ fn test_config_and_memory_paths_are_inside_function_dir() {
     assert!(cfg.ends_with("config.json"));
     assert!(mem.ends_with("memory.json"));
 }
+
+struct GeminiTurnMockProvider {
+    requests: Arc<std::sync::Mutex<Vec<function_providers::CompletionRequest>>>,
+}
+
+#[async_trait::async_trait]
+impl function_providers::LlmProvider for GeminiTurnMockProvider {
+    fn name(&self) -> &str {
+        "gemini"
+    }
+
+    async fn complete(&self, req: function_providers::CompletionRequest) -> Result<function_providers::CompletionResponse, function_providers::ProviderError> {
+        let mut reqs = self.requests.lock().unwrap();
+        reqs.push(req.clone());
+        let turn = reqs.len();
+
+        if turn == 1 {
+            Ok(function_providers::CompletionResponse {
+                message: function_providers::ChatMessage {
+                    role: function_providers::MessageRole::Assistant,
+                    content: "".to_string(),
+                    images: None,
+                    tool_call_id: None,
+                    tool_calls: Some(vec![function_providers::ToolCall {
+                        id: "call_open_app_1".to_string(),
+                        name: "open_app".to_string(),
+                        arguments: serde_json::json!({ "name": "Google Chrome" }),
+                        thought_signature: Some("sig_gemini_thinking_999".to_string()),
+                        raw_function_call: Some(serde_json::json!({
+                            "name": "open_app",
+                            "args": { "name": "Google Chrome" },
+                            "thought_signature": "sig_gemini_thinking_999"
+                        })),
+                    }]),
+                    thought_signature: Some("sig_gemini_thinking_999".to_string()),
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            })
+        } else {
+            let assistant_msg = req.messages.iter().find(|m| m.role == function_providers::MessageRole::Assistant).unwrap();
+            assert_eq!(assistant_msg.thought_signature, Some("sig_gemini_thinking_999".to_string()));
+            let tool_call = &assistant_msg.tool_calls.as_ref().unwrap()[0];
+            assert_eq!(tool_call.thought_signature, Some("sig_gemini_thinking_999".to_string()));
+
+            let tool_resp_msg = req.messages.iter().find(|m| m.role == function_providers::MessageRole::Tool).unwrap();
+            assert_eq!(tool_resp_msg.tool_call_id, Some("call_open_app_1".to_string()));
+
+            Ok(function_providers::CompletionResponse {
+                message: function_providers::ChatMessage::assistant("Opened Google Chrome successfully."),
+                finish_reason: Some("stop".to_string()),
+            })
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_agent_gemini_thought_signature_flow() {
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let provider = Arc::new(GeminiTurnMockProvider { requests: requests.clone() });
+
+    let mut tools = ToolRegistry::new();
+    function_tools::register_default_tools(&mut tools);
+
+    let memory = Arc::new(InMemoryMemoryStore::new());
+    let agent = Agent::new(provider, tools, memory);
+
+    let res = agent.execute_task("Open Chrome").await.unwrap();
+    assert_eq!(res, "Opened Google Chrome successfully.");
+
+    let captured_reqs = requests.lock().unwrap();
+    assert_eq!(captured_reqs.len(), 2);
+}

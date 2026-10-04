@@ -172,4 +172,45 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn compaction_preserves_thought_signature_and_tool_calls() {
+        let system_msg = message(MessageRole::System, "system instructions");
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: "".to_string(),
+            images: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![function_providers::ToolCall {
+                id: "call_1".to_string(),
+                name: "open_app".to_string(),
+                arguments: serde_json::json!({ "name": "Chrome" }),
+                thought_signature: Some("sig_gemini_123".to_string()),
+                raw_function_call: Some(serde_json::json!({
+                    "name": "open_app",
+                    "args": { "name": "Chrome" },
+                    "thought_signature": "sig_gemini_123"
+                })),
+            }]),
+            thought_signature: Some("sig_gemini_123".to_string()),
+        };
+        let tool_msg = ChatMessage {
+            role: MessageRole::Tool,
+            content: "output ".repeat(500),
+            images: None,
+            tool_call_id: Some("call_1".to_string()),
+            tool_calls: None,
+            thought_signature: None,
+        };
+        let user_msg = message(MessageRole::User, "current task");
+
+        let messages = vec![system_msg, assistant_msg, tool_msg, user_msg];
+        let (compacted, _) = compact_messages(&messages, ContextBudget { context_limit: 800, output_reserve: 100 });
+
+        let assistant_in_compacted = compacted.iter().find(|m| m.role == MessageRole::Assistant).unwrap();
+        assert_eq!(assistant_in_compacted.thought_signature, Some("sig_gemini_123".to_string()));
+        let call = &assistant_in_compacted.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(call.thought_signature, Some("sig_gemini_123".to_string()));
+        assert!(call.raw_function_call.is_some());
+    }
 }

@@ -121,6 +121,10 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_function_call: Option<serde_json::Value>,
 }
 
 /// Tool definition presented to the model.
