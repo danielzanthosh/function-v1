@@ -80,12 +80,29 @@ impl Tool for ScreenTool {
                         let path_str = path.display().to_string();
                         let _ = std::fs::write(&path, &bytes);
 
+                        let grid_cols = 10;
+                        let grid_rows = 10;
+                        let cell_w = dims.logical_width as f64 / grid_cols as f64;
+                        let cell_h = dims.logical_height as f64 / grid_rows as f64;
+
                         Ok(ToolResult::success(
-                            format!("Screenshot captured successfully ({}x{}, {} KB)", dims.width, dims.height, bytes.len() / 1024),
+                            format!(
+                                "Screenshot captured (Physical: {}x{}, Logical: {}x{}, Scale: {}x)",
+                                dims.width, dims.height, dims.logical_width, dims.logical_height, dims.scale_factor
+                            ),
                             json!({
                                 "status": "success",
-                                "width": dims.width,
-                                "height": dims.height,
+                                "physical_width": dims.width,
+                                "physical_height": dims.height,
+                                "logical_width": dims.logical_width,
+                                "logical_height": dims.logical_height,
+                                "scale_factor": dims.scale_factor,
+                                "virtual_grid": {
+                                    "columns": grid_cols,
+                                    "rows": grid_rows,
+                                    "cell_width_logical": cell_w,
+                                    "cell_height_logical": cell_h,
+                                },
                                 "path": path_str,
                                 "base64": b64,
                             }),
@@ -100,8 +117,14 @@ impl Tool for ScreenTool {
             "dimensions" => {
                 let dims = self.control.get_screen_dimensions();
                 Ok(ToolResult::success(
-                    format!("Screen resolution: {}x{}", dims.width, dims.height),
-                    json!({ "width": dims.width, "height": dims.height }),
+                    format!("Screen resolution: Physical {}x{}, Logical {}x{} (Scale: {}x)", dims.width, dims.height, dims.logical_width, dims.logical_height, dims.scale_factor),
+                    json!({
+                        "physical_width": dims.width,
+                        "physical_height": dims.height,
+                        "logical_width": dims.logical_width,
+                        "logical_height": dims.logical_height,
+                        "scale_factor": dims.scale_factor,
+                    }),
                 ))
             }
             "cursor_position" => {
