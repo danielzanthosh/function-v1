@@ -145,6 +145,13 @@ impl LlmProvider for OpenAiLlmProvider {
                     obj["tool_calls"] = json!(calls_json);
                 }
 
+                if let Some(ref ts) = m.thought_signature {
+                    obj["thought_signature"] = json!(ts);
+                    obj["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
+                }
+
                 obj
             })
             .collect();
@@ -240,77 +247,189 @@ impl LlmProvider for OpenAiLlmProvider {
 
 
         let (response_body, http_status) = split_curl_response(response_body);
-        let parsed: serde_json::Value = serde_json::from_str(&response_body)?;
+        let status_code = http_status.unwrap_or(200);
 
-        if parsed.get("error").is_some() {
+        let parsed: serde_json::Value = match serde_json::from_str(&response_body) {
+            Ok(val) => val,
+            Err(e) => {
+                let sanitized_body = function_config::redact_secrets(&response_body);
+                tracing::error!(
+                    http_status = status_code,
+                    raw_response = %sanitized_body,
+                    "Failed to parse provider response JSON: {}",
+                    e
+                );
+                return Err(ProviderError::Api {
+                    code: status_code,
+                    message: format!("Invalid JSON response from provider: {}", e),
+                });
+            }
+        };
+
+        if parsed.get("error").is_some() || status_code >= 400 {
             let msg = provider_error_message(&parsed, &response_body);
+            let sanitized_msg = function_config::redact_secrets(&msg);
+            let sanitized_body = function_config::redact_secrets(&response_body);
+            tracing::error!(
+                http_status = status_code,
+                error_message = %sanitized_msg,
+                raw_response = %sanitized_body,
+                "Provider returned HTTP error status or error payload"
+            );
             return Err(ProviderError::Api {
-                code: http_status.unwrap_or(400),
+                code: status_code,
                 message: msg,
             });
         }
 
-        let choice = parsed
+        let choices_array = parsed
             .get("choices")
-            .and_then(|c| c.as_array())
-            .and_then(|a| a.first())
-            .ok_or_else(|| ProviderError::Api {
-                code: 500,
-                message: "No completion choices returned".into(),
-            })?;
+            .or_else(|| parsed.get("candidates"))
+            .and_then(|c| c.as_array());
+
+        let choice = match choices_array.and_then(|a| a.first()) {
+            Some(c) => c,
+            None => {
+                let sanitized_body = function_config::redact_secrets(&response_body);
+                tracing::error!(
+                    http_status = status_code,
+                    raw_response = %sanitized_body,
+                    "Provider response contained no completion choices or candidates"
+                );
+                return Err(ProviderError::Api {
+                    code: status_code,
+                    message: if response_body.trim().is_empty() {
+                        "Empty response received from provider".to_string()
+                    } else {
+                        "No completion choices returned by provider".to_string()
+                    },
+                });
+            }
+        };
+
+        let msg_val = choice
+            .get("message")
+            .or_else(|| choice.get("content"))
+            .unwrap_or(choice);
 
         let finish_reason = choice
             .get("finish_reason")
+            .or_else(|| choice.get("finishReason"))
             .and_then(|f| f.as_str())
             .map(|s| s.to_string());
 
-        let msg_val = choice.get("message").ok_or_else(|| ProviderError::Api {
-            code: 500,
-            message: "Missing message in choice".into(),
-        })?;
+        let thought_signature = msg_val
+            .get("thought_signature")
+            .or_else(|| choice.get("thought_signature"))
+            .or_else(|| msg_val.pointer("/extra_fields/thought_signature"))
+            .or_else(|| choice.pointer("/extra_fields/thought_signature"))
+            .or_else(|| parsed.get("thought_signature"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        let content = msg_val
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string();
+        let mut content = String::new();
+        if let Some(c_str) = msg_val.get("content").and_then(|c| c.as_str()) {
+            content.push_str(c_str);
+        } else if let Some(c_arr) = msg_val.get("content").and_then(|c| c.as_array()) {
+            for part in c_arr {
+                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                    content.push_str(text);
+                }
+            }
+        }
 
-        let tool_calls = if let Some(t_array) = msg_val.get("tool_calls").and_then(|t| t.as_array())
-        {
-            let mut calls = Vec::new();
-            for c in t_array {
+        if content.is_empty() {
+            if let Some(parts) = msg_val
+                .get("parts")
+                .or_else(|| choice.get("parts"))
+                .and_then(|p| p.as_array())
+            {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        content.push_str(text);
+                    }
+                }
+            }
+        }
+
+        let mut calls = Vec::new();
+
+        if let Some(t_array) = msg_val.get("tool_calls").and_then(|t| t.as_array()) {
+            for (idx, c) in t_array.iter().enumerate() {
                 let id = c
                     .get("id")
                     .and_then(|i| i.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("call_{}", idx));
+
                 if let Some(func) = c.get("function") {
                     let name = func
                         .get("name")
                         .and_then(|n| n.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let args_raw = func
-                        .get("arguments")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("{}");
-                    let arguments: serde_json::Value =
-                        serde_json::from_str(args_raw).unwrap_or(json!({ "raw": args_raw }));
+                    let arguments = match func.get("arguments") {
+                        Some(serde_json::Value::String(args_str)) => serde_json::from_str(args_str)
+                            .unwrap_or_else(|_| json!({ "raw": args_str })),
+                        Some(val) => val.clone(),
+                        None => json!({}),
+                    };
+                    if !name.is_empty() {
+                        calls.push(ToolCall { id, name, arguments });
+                    }
+                }
+            }
+        }
+
+        if calls.is_empty() {
+            if let Some(func) = msg_val.get("function_call") {
+                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                    let arguments = match func.get("arguments") {
+                        Some(serde_json::Value::String(args_str)) => serde_json::from_str(args_str)
+                            .unwrap_or_else(|_| json!({ "raw": args_str })),
+                        Some(val) => val.clone(),
+                        None => json!({}),
+                    };
                     calls.push(ToolCall {
-                        id,
-                        name,
+                        id: "call_0".to_string(),
+                        name: name.to_string(),
                         arguments,
                     });
                 }
             }
-            if calls.is_empty() {
-                None
-            } else {
-                Some(calls)
+        }
+
+        if calls.is_empty() {
+            let parts_opt = msg_val.get("parts").or_else(|| choice.get("parts")).or_else(|| {
+                msg_val
+                    .get("content")
+                    .and_then(|c| c.as_array().map(|_| msg_val.get("content").unwrap()))
+            });
+
+            if let Some(parts) = parts_opt.and_then(|p| p.as_array()) {
+                for (idx, part) in parts.iter().enumerate() {
+                    let fc = part.get("functionCall").or_else(|| part.get("function_call"));
+                    if let Some(fc) = fc {
+                        if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                            let arguments = fc
+                                .get("args")
+                                .or_else(|| fc.get("arguments"))
+                                .cloned()
+                                .unwrap_or(json!({}));
+                            let id = format!("call_{}", idx);
+                            calls.push(ToolCall {
+                                id,
+                                name: name.to_string(),
+                                arguments,
+                            });
+                        }
+                    }
+                }
             }
-        } else {
-            None
-        };
+        }
+
+        let tool_calls = if calls.is_empty() { None } else { Some(calls) };
 
         Ok(CompletionResponse {
             message: ChatMessage {
@@ -319,6 +438,7 @@ impl LlmProvider for OpenAiLlmProvider {
                 images: None,
                 tool_call_id: None,
                 tool_calls,
+                thought_signature,
             },
             finish_reason,
         })
@@ -486,6 +606,7 @@ impl LlmProvider for OpenAiLlmProvider {
                 images: None,
                 tool_call_id: None,
                 tool_calls: None,
+                thought_signature: None,
             },
             finish_reason: Some("stop".to_string()),
         })
@@ -704,6 +825,161 @@ mod tests {
 
         assert!(message.contains("model_not_found"));
         assert_ne!(message, "Unknown provider error");
+    }
+
+    #[test]
+    fn test_gemini_normal_text_response() {
+        let json_resp = json!({
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello! How can I help you today?"
+                    }
+                }
+            ]
+        });
+
+        let raw = format!("{}{}", json_resp, CURL_STATUS_MARKER);
+        let (body, status) = split_curl_response(raw);
+        assert_eq!(status, None);
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let choice = &parsed["choices"][0];
+        let content = choice["message"]["content"].as_str().unwrap();
+        assert_eq!(content, "Hello! How can I help you today?");
+    }
+
+    #[test]
+    fn test_gemini_function_call_and_thought_signature() {
+        let json_resp = json!({
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "thought_signature": "sig_abc123_gemini_thought",
+                        "tool_calls": [
+                            {
+                                "id": "call_12345",
+                                "type": "function",
+                                "function": {
+                                    "name": "take_screenshot",
+                                    "arguments": "{}"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let parsed: serde_json::Value = json_resp;
+        let choice = &parsed["choices"][0];
+        let msg_val = &choice["message"];
+        let thought_sig = msg_val.get("thought_signature").and_then(|v| v.as_str());
+        assert_eq!(thought_sig, Some("sig_abc123_gemini_thought"));
+
+        let content = msg_val.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        assert_eq!(content, "");
+
+        let tool_calls = msg_val.get("tool_calls").and_then(|t| t.as_array()).unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["function"]["name"], "take_screenshot");
+    }
+
+    #[test]
+    fn test_gemini_request_serialization_includes_thought_signature() {
+        let msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: "".to_string(),
+            images: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_abc".to_string(),
+                name: "click".to_string(),
+                arguments: json!({ "x": 100, "y": 200 }),
+            }]),
+            thought_signature: Some("gemini_thought_sig_xyz".to_string()),
+        };
+
+        let mut obj = json!({
+            "role": "assistant",
+            "content": msg.content,
+        });
+        if let Some(ref ts) = msg.thought_signature {
+            obj["thought_signature"] = json!(ts);
+            obj["extra_fields"] = json!({
+                "thought_signature": ts
+            });
+        }
+
+        assert_eq!(obj["thought_signature"], "gemini_thought_sig_xyz");
+        assert_eq!(obj["extra_fields"]["thought_signature"], "gemini_thought_sig_xyz");
+    }
+
+    #[test]
+    fn test_gemini_multiple_sequential_tool_calls_parsing() {
+        let json_resp = json!({
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "open_app",
+                                    "args": { "name": "Chrome" }
+                                }
+                            },
+                            {
+                                "functionCall": {
+                                    "name": "take_screenshot",
+                                    "args": {}
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let choice = &json_resp["candidates"][0];
+        let msg_val = &choice["content"];
+        let parts = msg_val["parts"].as_array().unwrap();
+
+        let mut calls = Vec::new();
+        for (idx, part) in parts.iter().enumerate() {
+            if let Some(fc) = part.get("functionCall") {
+                if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                    let arguments = fc.get("args").cloned().unwrap_or(json!({}));
+                    calls.push(ToolCall {
+                        id: format!("call_{}", idx),
+                        name: name.to_string(),
+                        arguments,
+                    });
+                }
+            }
+        }
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "open_app");
+        assert_eq!(calls[1].name, "take_screenshot");
+    }
+
+    #[test]
+    fn test_malformed_or_empty_provider_response_gives_descriptive_error() {
+        let body = "";
+        let (resp, status) = split_curl_response(format!("{}{}", body, CURL_STATUS_MARKER));
+        assert_eq!(resp, "");
+        assert_eq!(status, None);
+
+        let body_404 = r#"{"error": {"code": 404, "message": "Model not found"}}"#;
+        let parsed_404: serde_json::Value = serde_json::from_str(body_404).unwrap();
+        let msg_404 = provider_error_message(&parsed_404, body_404);
+        assert_eq!(msg_404, "Model not found");
     }
 }
 

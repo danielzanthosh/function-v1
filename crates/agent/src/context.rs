@@ -120,7 +120,14 @@ mod tests {
     use function_providers::MessageRole;
 
     fn message(role: MessageRole, content: &str) -> ChatMessage {
-        ChatMessage { role, content: content.to_string(), images: None, tool_call_id: None, tool_calls: None }
+        ChatMessage {
+            role,
+            content: content.to_string(),
+            images: None,
+            tool_call_id: None,
+            tool_calls: None,
+            thought_signature: None,
+        }
     }
 
     #[test]
@@ -145,6 +152,7 @@ mod tests {
                 images: None,
                 tool_call_id: Some("tool-1".to_string()),
                 tool_calls: None,
+                thought_signature: None,
             },
             message(MessageRole::User, "current task"),
         ];
