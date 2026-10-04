@@ -54,6 +54,8 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 impl ChatMessage {
@@ -64,6 +66,7 @@ impl ChatMessage {
             images: None,
             tool_call_id: None,
             tool_calls: None,
+            thought_signature: None,
         }
     }
 
@@ -74,6 +77,7 @@ impl ChatMessage {
             images: None,
             tool_call_id: None,
             tool_calls: None,
+            thought_signature: None,
         }
     }
 
@@ -84,6 +88,7 @@ impl ChatMessage {
             images: Some(images),
             tool_call_id: None,
             tool_calls: None,
+            thought_signature: None,
         }
     }
 
@@ -94,6 +99,7 @@ impl ChatMessage {
             images: None,
             tool_call_id: None,
             tool_calls: None,
+            thought_signature: None,
         }
     }
 
@@ -104,6 +110,7 @@ impl ChatMessage {
             images: None,
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: None,
+            thought_signature: None,
         }
     }
 }
