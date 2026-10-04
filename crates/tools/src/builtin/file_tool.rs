@@ -2,46 +2,14 @@ use crate::{Tool, ToolContext, ToolError, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub struct FileTool {
-    sandbox_dir: PathBuf,
-}
+pub struct FileTool;
 
 impl FileTool {
     pub fn new() -> Self {
-        let home = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let sandbox_dir = home.join("Desktop").join("Function Sandbox");
-        Self { sandbox_dir }
+        Self
     }
-
-    pub fn with_sandbox_dir(sandbox_dir: PathBuf) -> Self {
-        Self { sandbox_dir }
-    }
-
-    fn resolve_path(&self, input_path: &str) -> PathBuf {
-        let p = Path::new(input_path);
-
-        // Ensure sandbox root directory exists
-        let _ = fs::create_dir_all(&self.sandbox_dir);
-
-        if p.is_absolute() {
-            // Check if absolute path is within the sandbox_dir
-            if p.starts_with(&self.sandbox_dir) {
-                p.to_path_buf()
-            } else {
-                // By default, redirect external paths into the sandbox folder unless user/agent explicitly requested outside access
-                let file_name = p.file_name().unwrap_or(std::ffi::OsStr::new("sandbox_file"));
-                self.sandbox_dir.join(file_name)
-            }
-        } else {
-            self.sandbox_dir.join(p)
-        }
-    }
-
     fn is_system_path(path_str: &str) -> bool {
         let lower = path_str.to_lowercase();
         lower.contains(r"windows\system32")
@@ -134,8 +102,7 @@ impl Tool for FileTool {
             });
         }
 
-        let resolved_target = self.resolve_path(path_str);
-        let target_path = resolved_target.as_path();
+        let target_path = Path::new(path_str);
 
         match action {
             "read" => {
