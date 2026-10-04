@@ -159,6 +159,7 @@ pub struct FunctionView {
     pub chat_scroll_handle: ScrollHandle,
     pub settings_scroll_handle: ScrollHandle,
     pub cursor_offset: usize,
+    pub user_scrolled_up: bool,
     pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub activation_settling: bool,
 }
@@ -262,6 +263,7 @@ impl FunctionView {
             conversation_status_message: None,
             chat_scroll_handle: ScrollHandle::new(),
             settings_scroll_handle: ScrollHandle::new(),
+            user_scrolled_up: false,
             activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             activation_settling: false,
         }
@@ -434,7 +436,9 @@ impl FunctionView {
                                             text: accumulated.clone(),
                                         });
                                     }
-                                    view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                    if !view.user_scrolled_up {
+                                        view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                    }
                                 }
                                 AgentState::Completed { summary, new_history } => {
                                     view.state = state_clone.clone();
@@ -483,7 +487,9 @@ impl FunctionView {
                                         }
                                     }
                                     view.save_current_conversation();
-                                    view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                    if !view.user_scrolled_up {
+                                        view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                    }
                                 }
                                 AgentState::Error { message } => {
                                     view.state = state_clone.clone();
@@ -2123,6 +2129,7 @@ impl FunctionView {
                 cx.notify();
             }
             "pageup" => {
+                self.user_scrolled_up = true;
                 let current = self.chat_scroll_handle.top_item();
                 self.chat_scroll_handle.scroll_to_item(current.saturating_sub(2));
                 cx.notify();
@@ -2130,6 +2137,10 @@ impl FunctionView {
             }
             "pagedown" => {
                 let current = self.chat_scroll_handle.bottom_item();
+                let last_item = self.chat_display.len().saturating_sub(1);
+                if current + 2 >= last_item {
+                    self.user_scrolled_up = false;
+                }
                 self.chat_scroll_handle.scroll_to_item(current + 2);
                 cx.notify();
                 return;
@@ -2141,6 +2152,7 @@ impl FunctionView {
                     self.play_sound_feedback(SoundEffect::Navigate);
                     cx.notify();
                 } else if !self.chat_display.is_empty() {
+                    self.user_scrolled_up = true;
                     let current = self.chat_scroll_handle.top_item();
                     self.chat_scroll_handle.scroll_to_item(current.saturating_sub(1));
                     cx.notify();
@@ -2155,11 +2167,24 @@ impl FunctionView {
                     cx.notify();
                 } else if !self.chat_display.is_empty() {
                     let current = self.chat_scroll_handle.bottom_item();
+                    let last_item = self.chat_display.len().saturating_sub(1);
+                    if current + 1 >= last_item {
+                        self.user_scrolled_up = false;
+                    }
                     self.chat_scroll_handle.scroll_to_item(current + 1);
                     cx.notify();
                 }
             }
             "enter" | "return" => {
+                if modifiers.shift {
+                    let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
+                    let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                    self.input_buffer.insert(byte_pos, '\n');
+                    self.cursor_offset = insert_pos + 1;
+                    self.cursor_visible = true;
+                    cx.notify();
+                    return;
+                }
                 self.is_text_selected = false;
                 let prompt = self.input_buffer.trim().to_string();
                 if let Some(cmd) = resolve_local_command(&prompt) {
@@ -2494,6 +2519,12 @@ impl Render for FunctionView {
                     div()
                         .id("chat_scroll_area")
                         .track_scroll(&self.chat_scroll_handle)
+                        .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
+                            if event.delta.pixel_delta(px(20.0)).y > px(0.0) {
+                                this.user_scrolled_up = true;
+                                cx.notify();
+                            }
+                        }))
                         .flex()
                         .flex_col()
                         .flex_1()
@@ -2587,9 +2618,11 @@ impl Render for FunctionView {
                                         div()
                                             .id(("assistant_body", idx))
                                             .w_full()
+                                            .max_w_full()
                                             .flex_shrink_0()
                                             .px(px(4.0))
                                             .py(px(2.0))
+                                            .overflow_hidden()
                                             .child(render_markdown(&entry.text, &theme)),
                                     )
                                     .into_any_element()
@@ -2700,8 +2733,10 @@ impl Render for FunctionView {
                     .mx(px(14.0))
                     .mb(px(12.0))
                     .mt(px(4.0))
-                    .h(px(52.0))
+                    .min_h(px(52.0))
+                    .max_h(px(160.0))
                     .px(px(14.0))
+                    .py(px(8.0))
                     .rounded_xl()
                     .bg(theme.surface_input)
                     .border_1()
