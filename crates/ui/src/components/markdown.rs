@@ -478,7 +478,8 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
         .gap_1()
         .w_full()
         .max_w(px(540.0))
-        .overflow_hidden();
+        .overflow_hidden()
+        .text_color(theme.text_primary);
 
     // Check if text has LaTeX math, code, or photo tags
     let mut remaining = text;
