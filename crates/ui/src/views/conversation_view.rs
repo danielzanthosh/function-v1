@@ -7,7 +7,7 @@ use crate::components::render_brand_mark_with_mode;
 use crate::conversation::SavedConversation;
 use crate::theme::Theme;
 use gpui::prelude::*;
-use gpui::{div, px, rgba, IntoElement, Rgba};
+use gpui::{div, px, IntoElement, Rgba};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn format_relative_time(timestamp: u64) -> String {
@@ -49,8 +49,6 @@ pub fn render_conversation_view(
         .h_full()
         .bg(bg_surface)
         .rounded_2xl()
-        .border_1()
-        .border_color(rgba(0xf1f0ef1f))
         .shadow_xl()
         .overflow_hidden()
         .child(

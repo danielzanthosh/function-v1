@@ -160,6 +160,7 @@ pub struct FunctionView {
     pub settings_scroll_handle: ScrollHandle,
     pub cursor_offset: usize,
     pub user_scrolled_up: bool,
+    pub expanded_errors: std::collections::HashSet<usize>,
     pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub activation_settling: bool,
 }
@@ -264,6 +265,7 @@ impl FunctionView {
             chat_scroll_handle: ScrollHandle::new(),
             settings_scroll_handle: ScrollHandle::new(),
             user_scrolled_up: false,
+            expanded_errors: std::collections::HashSet::new(),
             activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             activation_settling: false,
         }
@@ -900,6 +902,7 @@ impl FunctionView {
         self.cursor_visible = true;
         self.listening = false;
         self.conversation_status_message = None;
+        self.expanded_errors.clear();
         self.play_sound_feedback(SoundEffect::Select);
         window.resize(self.target_window_size());
         cx.notify();
@@ -2490,8 +2493,6 @@ impl Render for FunctionView {
             .h_full()
             .bg(bg_surface)
             .rounded_2xl()
-            .border_1()
-            .border_color(rgba(0xf1f0ef1f))
             .shadow_xl()
             .overflow_hidden()
             // ── CHAT LOG ──────────────────────────────────────────────────────────
@@ -2535,7 +2536,12 @@ impl Render for FunctionView {
                         .gap(px(8.0))
                         .children(chat_entries.into_iter().enumerate().map(|(idx, entry)| {
                             if entry.is_user {
-                                // User bubble — right-aligned, muted background
+                                // User bubble — right-aligned, clearly contrasting background
+                                let user_bg = if theme.is_dark() {
+                                    gpui::rgb(0x2f2c22)
+                                } else {
+                                    gpui::rgb(0xe5e1d8)
+                                };
                                 div()
                                     .id(("user_msg", idx))
                                     .flex_shrink_0()
@@ -2543,27 +2549,59 @@ impl Render for FunctionView {
                                     .justify_end()
                                     .child(
                                         div()
-                                            .px(px(12.0))
-                                            .py(px(7.0))
-                                            .rounded_xl()
-                                            .bg(theme.surface_active)
+                                            .px(px(14.0))
+                                            .py(px(8.0))
+                                            .rounded_2xl()
+                                            .bg(user_bg)
                                             .border_1()
-                                            .border_color(theme.border_subtle)
+                                            .border_color(Rgba {
+                                                a: 0.18,
+                                                ..theme.accent_primary
+                                            })
+                                            .shadow_sm()
                                             .max_w(px(460.0))
                                             .child(render_inline_text(&entry.text, &theme)),
                                     )
                                     .into_any_element()
                             } else {
-                                // Assistant reply — left-aligned with brand mark, title and 1-click Copy button
-                                let reply_text = entry.text.clone();
-                                div()
-                                    .id(("assistant_msg", idx))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .w_full()
-                                    .max_w(px(580.0))
+                                // Assistant reply — check if message is an error or standard markdown response
+                                if let Some(error_info) = crate::components::parse_error_info(&entry.text) {
+                                    let is_expanded = self.expanded_errors.contains(&idx);
+                                    let raw_tech_details = error_info
+                                        .formatted_json
+                                        .clone()
+                                        .unwrap_or_else(|| error_info.raw_text.clone());
+
+                                    crate::components::render_error_card(
+                                        &error_info,
+                                        is_expanded,
+                                        &theme,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if this.expanded_errors.contains(&idx) {
+                                                this.expanded_errors.remove(&idx);
+                                            } else {
+                                                this.expanded_errors.insert(idx);
+                                            }
+                                            this.play_sound_feedback(SoundEffect::Select);
+                                            cx.notify();
+                                        }),
+                                        cx.listener(move |this, _, _, cx| {
+                                            copy_to_clipboard(&raw_tech_details);
+                                            this.play_sound_feedback(SoundEffect::Select);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .into_any_element()
+                                } else {
+                                    let reply_text = entry.text.clone();
+                                    div()
+                                        .id(("assistant_msg", idx))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .w_full()
+                                        .max_w(px(580.0))
                                     .child(
                                         div()
                                             .id(("assistant_header", idx))
@@ -2626,6 +2664,7 @@ impl Render for FunctionView {
                                             .child(render_markdown(&entry.text, &theme)),
                                     )
                                     .into_any_element()
+                                }
                             }
                         }))
                         // "Thinking…" indicator at bottom of chat when agent is busy
@@ -2697,9 +2736,9 @@ impl Render for FunctionView {
                     }
                 },
             )
-            // Hairline separator before input bar when content is showing
+            // Subtle spacing before input bar when content is showing
             .when(!self.chat_display.is_empty() || is_busy, |parent| {
-                parent.child(div().w_full().h(px(1.0)).bg(theme.border_subtle))
+                parent.child(div().h(px(2.0)))
             })
             // Brand mark / motif header — shown only when chat is empty and idle
             .when(self.chat_display.is_empty() && !is_busy, |parent| {
@@ -2726,7 +2765,7 @@ impl Render for FunctionView {
                         )),
                 )
             })
-            // Dominant refined command input surface
+            // Clean floating command input surface
             .child(
                 div()
                     .id("command_input_bar")
@@ -2738,15 +2777,23 @@ impl Render for FunctionView {
                     .px(px(14.0))
                     .py(px(8.0))
                     .rounded_xl()
-                    .bg(theme.surface_input)
+                    .bg(if is_focused {
+                        theme.surface_floating
+                    } else {
+                        theme.surface_input
+                    })
+                    .shadow_md()
                     .border_1()
                     .border_color(if is_focused {
                         Rgba {
-                            a: 0.38,
+                            a: 0.25,
                             ..theme.accent_primary
                         }
                     } else {
-                        theme.border_subtle
+                        Rgba {
+                            a: 0.05,
+                            ..theme.accent_primary
+                        }
                     })
                     .flex()
                     .items_center()

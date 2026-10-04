@@ -991,7 +991,8 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
         .gap_1()
         .w_full()
         .max_w_full()
-        .overflow_hidden();
+        .overflow_hidden()
+        .text_color(theme.text_primary);
 
     // Safely extract inline math blocks `$ ... $`
     let math_segments = extract_inline_math(text);
