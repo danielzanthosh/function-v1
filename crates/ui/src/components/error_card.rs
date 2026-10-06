@@ -41,8 +41,16 @@ pub fn parse_error_info(raw: &str) -> Option<ParsedErrorInfo> {
     if let Some(val) = json_val {
         let is_resource_exhausted = trimmed.contains("RESOURCE_EXHAUSTED")
             || val.to_string().contains("RESOURCE_EXHAUSTED")
-            || val.get("error").and_then(|e| e.get("status")).and_then(|s| s.as_str()) == Some("RESOURCE_EXHAUSTED")
-            || val.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_u64()) == Some(429)
+            || val
+                .get("error")
+                .and_then(|e| e.get("status"))
+                .and_then(|s| s.as_str())
+                == Some("RESOURCE_EXHAUSTED")
+            || val
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_u64())
+                == Some(429)
             || val.get("code").and_then(|c| c.as_u64()) == Some(429);
 
         let pretty_json = serde_json::to_string_pretty(&val).ok();
@@ -76,7 +84,10 @@ pub fn parse_error_info(raw: &str) -> Option<ParsedErrorInfo> {
         // Generic JSON error payload
         let err_obj = val.get("error").unwrap_or(&val);
         let code = err_obj.get("code").map(|c| c.to_string());
-        let status_str = err_obj.get("status").and_then(|s| s.as_str()).map(|s| s.to_string());
+        let status_str = err_obj
+            .get("status")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string());
         let msg_str = err_obj
             .get("message")
             .and_then(|m| m.as_str())
@@ -229,7 +240,10 @@ where
                                 .w(px(20.0))
                                 .h(px(20.0))
                                 .rounded_full()
-                                .bg(Rgba { a: 0.15, ..error_red })
+                                .bg(Rgba {
+                                    a: 0.15,
+                                    ..error_red
+                                })
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(error_red)
@@ -267,7 +281,11 @@ where
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(text_muted)
-                        .child(if is_expanded { "Hide details" } else { "Show details" })
+                        .child(if is_expanded {
+                            "Hide details"
+                        } else {
+                            "Show details"
+                        })
                         .on_mouse_down(gpui::MouseButton::Left, on_toggle),
                 ),
         )
@@ -300,7 +318,10 @@ where
                                         .px_2()
                                         .py_0p5()
                                         .rounded_sm()
-                                        .bg(Rgba { a: 0.15, ..error_red })
+                                        .bg(Rgba {
+                                            a: 0.15,
+                                            ..error_red
+                                        })
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(error_red)
@@ -314,7 +335,10 @@ where
                                 .px_2p5()
                                 .py_1p5()
                                 .rounded_md()
-                                .bg(Rgba { a: 0.1, ..theme.accent_primary })
+                                .bg(Rgba {
+                                    a: 0.1,
+                                    ..theme.accent_primary
+                                })
                                 .text_xs()
                                 .text_color(text_primary)
                                 .child(format!("💡 {}", quota)),
@@ -359,7 +383,7 @@ where
                                     .bg(theme.surface_input)
                                     .border_1()
                                     .border_color(theme.border_subtle)
-                                        .overflow_hidden()
+                                    .overflow_hidden()
                                     .child(
                                         div()
                                             .text_xs()
@@ -393,7 +417,10 @@ mod tests {
 
         let parsed = parse_error_info(json_err).expect("Failed to parse Gemini quota error");
         assert_eq!(parsed.title, "Gemini API Error");
-        assert_eq!(parsed.summary, "The AI provider temporarily ran out of available quota.");
+        assert_eq!(
+            parsed.summary,
+            "The AI provider temporarily ran out of available quota."
+        );
         assert_eq!(parsed.status, Some("RESOURCE_EXHAUSTED (429)".to_string()));
         assert!(parsed.formatted_json.is_some());
         assert!(parsed.quota_info.is_some());
@@ -404,7 +431,10 @@ mod tests {
         let raw = "Error: Provider error: API error (429): Resource has been exhausted";
         let parsed = parse_error_info(raw).expect("Failed to parse prefixed error");
         assert_eq!(parsed.title, "Gemini API Error");
-        assert_eq!(parsed.summary, "The AI provider temporarily ran out of available quota.");
+        assert_eq!(
+            parsed.summary,
+            "The AI provider temporarily ran out of available quota."
+        );
     }
 
     #[test]

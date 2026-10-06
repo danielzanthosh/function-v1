@@ -3,11 +3,15 @@
 //! Tests the complete Observe-Think-Act cycle, state broadcast delivery,
 //! memory persistence, tool permission enforcement, and error recovery.
 
+use async_trait::async_trait;
 use function_agent::{Agent, AgentState};
 use function_memory::{InMemoryMemoryStore, MemoryCategory, MemoryItem, MemoryStore};
-use function_providers::MockLlmProvider;
+use function_providers::{
+    ChatMessage, CompletionRequest, CompletionResponse, LlmProvider, MessageRole, MockLlmProvider,
+    ProviderError, ToolCall,
+};
 use function_tools::ToolRegistry;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Agent State Machine Tests
@@ -222,6 +226,106 @@ fn test_redact_secrets_short_sk_prefix_ignored() {
     let input = "prefix sk-ab end";
     let redacted = function_config::redact_secrets(input);
     assert_eq!(redacted, input, "Short sk- prefixes should be left alone");
+}
+
+// ---------------------------------------------------------------------------
+// Gemini Tool Calling Regression Test
+// ---------------------------------------------------------------------------
+
+struct GeminiToolCallingMockProvider {
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+#[async_trait]
+impl LlmProvider for GeminiToolCallingMockProvider {
+    fn name(&self) -> &str {
+        "gemini"
+    }
+
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
+        let mut reqs = self.requests.lock().unwrap();
+        let step = reqs.len();
+        reqs.push(req.clone());
+
+        if step == 0 {
+            Ok(CompletionResponse {
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: String::new(),
+                    images: None,
+                    tool_call_id: None,
+                    tool_calls: Some(vec![ToolCall {
+                        id: "call_gemini_1".to_string(),
+                        name: "computer_screen".to_string(),
+                        arguments: serde_json::json!({ "action": "dimensions" }),
+                        thought_signature: Some("gemini_thought_sig_9999".to_string()),
+                    }]),
+                    thought_signature: Some("gemini_thought_sig_9999".to_string()),
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            })
+        } else {
+            Ok(CompletionResponse {
+                message: ChatMessage::assistant("Dimensions checked successfully."),
+                finish_reason: Some("stop".to_string()),
+            })
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_gemini_thought_signature_preserved_across_agent_loop() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = Arc::new(GeminiToolCallingMockProvider {
+        requests: requests.clone(),
+    });
+
+    let mut registry = ToolRegistry::new();
+    function_tools::register_default_tools(&mut registry);
+    let memory = Arc::new(InMemoryMemoryStore::new());
+    let agent = Agent::new(provider, registry, memory);
+
+    let result = agent.execute_task("Check screen dimensions").await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "Dimensions checked successfully.");
+
+    let reqs = requests.lock().unwrap();
+    assert_eq!(
+        reqs.len(),
+        2,
+        "Expected 2 completion requests in multi-step turn"
+    );
+
+    let second_req = &reqs[1];
+    let assistant_msg = second_req
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Assistant)
+        .expect("Second request must contain prior assistant message with tool calls");
+
+    assert_eq!(
+        assistant_msg.thought_signature.as_deref(),
+        Some("gemini_thought_sig_9999"),
+        "Assistant ChatMessage must retain the Gemini thought_signature"
+    );
+
+    let tool_calls = assistant_msg
+        .tool_calls
+        .as_ref()
+        .expect("Assistant message must contain tool_calls");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(
+        tool_calls[0].thought_signature.as_deref(),
+        Some("gemini_thought_sig_9999"),
+        "ToolCall inside Assistant message must retain the Gemini thought_signature"
+    );
+
+    let tool_msg = second_req
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Tool)
+        .expect("Second request must contain tool result message");
+    assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_gemini_1"));
 }
 
 // ---------------------------------------------------------------------------

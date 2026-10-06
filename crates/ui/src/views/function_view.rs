@@ -9,7 +9,6 @@
 //! - Local IP address inspection and copy (`ipadr`)
 //! - In-app AI provider and API key configuration (`Ctrl+,` or `settings`)
 
-use std::time::Duration;
 use crate::actions::{
     CancelTask, ClearInput, CloseFunction, SubmitRequest, ToggleExpanded, ToggleSpotlight,
     ToggleTheme, ToggleVoice,
@@ -23,8 +22,7 @@ use crate::components::spotlight_bar::{
     get_current_time_string, get_launcher_items, LauncherAction, LauncherIconType,
 };
 use crate::components::{
-    render_brand_mark_with_mode, render_inline_text, render_logo, render_markdown,
-    ActivityEntry,
+    render_brand_mark_with_mode, render_inline_text, render_logo, render_markdown, ActivityEntry,
     ActivityStatus,
 };
 use crate::conversation::{ChatEntry, ConversationStore, SavedConversation};
@@ -42,15 +40,51 @@ use gpui::{
     div, px, rgba, AsyncApp, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
     MouseDownEvent, Render, Rgba, ScrollHandle, Size, Task, Timer, WeakEntity, Window,
 };
+use std::time::Duration;
 /// Checks if a key string represents a named control key rather than text to type.
 fn is_named_control_key(k: &str) -> bool {
     matches!(
         k,
-        "up" | "down" | "left" | "right" | "enter" | "return" | "tab" | "escape" | "esc"
-            | "backspace" | "delete" | "home" | "end" | "pageup" | "pagedown" | "shift"
-            | "control" | "ctrl" | "alt" | "option" | "command" | "cmd" | "super"
-            | "capslock" | "insert" | "printscreen" | "scrolllock" | "pause" | "menu"
-            | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12"
+        "up" | "down"
+            | "left"
+            | "right"
+            | "enter"
+            | "return"
+            | "tab"
+            | "escape"
+            | "esc"
+            | "backspace"
+            | "delete"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+            | "shift"
+            | "control"
+            | "ctrl"
+            | "alt"
+            | "option"
+            | "command"
+            | "cmd"
+            | "super"
+            | "capslock"
+            | "insert"
+            | "printscreen"
+            | "scrolllock"
+            | "pause"
+            | "menu"
+            | "f1"
+            | "f2"
+            | "f3"
+            | "f4"
+            | "f5"
+            | "f6"
+            | "f7"
+            | "f8"
+            | "f9"
+            | "f10"
+            | "f11"
+            | "f12"
     )
 }
 
@@ -420,7 +454,10 @@ impl FunctionView {
                                         status: ActivityStatus::Running,
                                     });
                                 }
-                                AgentState::Streaming { chunk: _, accumulated } => {
+                                AgentState::Streaming {
+                                    chunk: _,
+                                    accumulated,
+                                } => {
                                     view.state = state_clone.clone();
                                     view.latest_result = Some(accumulated.clone());
                                     if let Some(last) = view.chat_display.last_mut() {
@@ -439,10 +476,15 @@ impl FunctionView {
                                         });
                                     }
                                     if !view.user_scrolled_up {
-                                        view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                        view.chat_scroll_handle.scroll_to_item(
+                                            view.chat_display.len().saturating_sub(1),
+                                        );
                                     }
                                 }
-                                AgentState::Completed { summary, new_history } => {
+                                AgentState::Completed {
+                                    summary,
+                                    new_history,
+                                } => {
                                     view.state = state_clone.clone();
                                     view.latest_result = Some(summary.clone());
                                     if let Some(last) = view.chat_display.last_mut() {
@@ -468,17 +510,22 @@ impl FunctionView {
                                     if view.config.tts.enabled && !summary.is_empty() {
                                         if let Some(tts) = view.tts_provider.clone() {
                                             let text = summary.clone();
-                                            let output_format = view.config.tts.output_format.clone();
+                                            let output_format =
+                                                view.config.tts.output_format.clone();
                                             if let Some(handle) = crate::get_runtime_handle() {
                                                 handle.spawn(async move {
                                                     match tts.synthesize_speech(&text).await {
                                                         Ok(audio) => {
-                                                            let _ = function_platform::play_audio_bytes(
-                                                                &audio,
-                                                                &output_format,
-                                                            );
+                                                            let _ =
+                                                                function_platform::play_audio_bytes(
+                                                                    &audio,
+                                                                    &output_format,
+                                                                );
                                                         }
-                                                        Err(error) => eprintln!("TTS request failed: {}", error),
+                                                        Err(error) => eprintln!(
+                                                            "TTS request failed: {}",
+                                                            error
+                                                        ),
                                                     }
                                                 });
                                             } else {
@@ -490,7 +537,9 @@ impl FunctionView {
                                     }
                                     view.save_current_conversation();
                                     if !view.user_scrolled_up {
-                                        view.chat_scroll_handle.scroll_to_item(view.chat_display.len().saturating_sub(1));
+                                        view.chat_scroll_handle.scroll_to_item(
+                                            view.chat_display.len().saturating_sub(1),
+                                        );
                                     }
                                 }
                                 AgentState::Error { message } => {
@@ -610,7 +659,8 @@ impl FunctionView {
                 .iter()
                 .map(|e| e.text.lines().count().max(1))
                 .sum();
-            let estimated_h = 56.0 + (total_lines as f32 * 26.0) + (self.chat_display.len() as f32 * 24.0) + 32.0;
+            let estimated_h =
+                56.0 + (total_lines as f32 * 26.0) + (self.chat_display.len() as f32 * 24.0) + 32.0;
             let clamped = estimated_h.min(580.0).max(220.0);
             return Size {
                 width: px(640.0),
@@ -656,7 +706,6 @@ impl FunctionView {
             }
         }
     }
-
 
     pub fn toggle_expanded(
         &mut self,
@@ -943,7 +992,8 @@ impl FunctionView {
             self.voice_error = None;
             self.play_sound_feedback(SoundEffect::Select);
             window.resize(self.target_window_size());
-            self.chat_scroll_handle.scroll_to_item(self.chat_display.len().saturating_sub(1));
+            self.chat_scroll_handle
+                .scroll_to_item(self.chat_display.len().saturating_sub(1));
             cx.notify();
         }
     }
@@ -987,7 +1037,11 @@ impl FunctionView {
         self.config.tts.model = self.settings_tts_model.trim().to_string();
         self.config.tts.base_url = self.settings_tts_base_url.trim().to_string();
         self.config.tts.voice = self.settings_tts_voice.trim().to_string();
-        if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini")
+        if self
+            .config
+            .ai_provider
+            .provider_name
+            .eq_ignore_ascii_case("gemini")
             && (self.config.ai_provider.base_url.trim().is_empty()
                 || self.config.ai_provider.base_url.trim() == "https://api.openai.com/v1")
         {
@@ -1014,7 +1068,9 @@ impl FunctionView {
 
     pub fn begin_chatgpt_login(&mut self, cx: &mut Context<Self>) {
         let authorization = function_providers::chatgpt_oauth::begin_authorization();
-        if let Err(error) = function_providers::chatgpt_oauth::open_authorization_url(&authorization.url) {
+        if let Err(error) =
+            function_providers::chatgpt_oauth::open_authorization_url(&authorization.url)
+        {
             self.settings_status_message = Some(format!("Could not open ChatGPT login: {error}"));
             cx.notify();
             return;
@@ -1022,7 +1078,8 @@ impl FunctionView {
         self.settings_status_message = Some("Complete ChatGPT sign-in in your browser...".into());
         let state = authorization.state().to_string();
         let Some(runtime_handle) = crate::get_runtime_handle() else {
-            self.settings_status_message = Some("ChatGPT login unavailable: Tokio runtime is not initialized".into());
+            self.settings_status_message =
+                Some("ChatGPT login unavailable: Tokio runtime is not initialized".into());
             cx.notify();
             return;
         };
@@ -1069,7 +1126,11 @@ impl FunctionView {
         let credentials = function_config::InMemoryCredentialStore::new();
         let api_key = self.config.ai_provider.resolve_api_key(&credentials);
 
-        let ai_base_url = if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini")
+        let ai_base_url = if self
+            .config
+            .ai_provider
+            .provider_name
+            .eq_ignore_ascii_case("gemini")
             && (self.config.ai_provider.base_url.trim().is_empty()
                 || self.config.ai_provider.base_url.trim() == "https://api.openai.com/v1")
         {
@@ -1077,12 +1138,28 @@ impl FunctionView {
         } else {
             self.config.ai_provider.base_url.clone()
         };
-        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self.config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") || self.config.ai_provider.is_configured() {
-            if self.config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") {
+        let provider: std::sync::Arc<dyn function_providers::LlmProvider> = if self
+            .config
+            .ai_provider
+            .provider_name
+            .eq_ignore_ascii_case("chatgpt-plan")
+            || self.config.ai_provider.is_configured()
+        {
+            if self
+                .config
+                .ai_provider
+                .provider_name
+                .eq_ignore_ascii_case("chatgpt-plan")
+            {
                 std::sync::Arc::new(function_providers::CodexChatGptProvider::new(
                     &self.config.ai_provider.model,
                 ))
-            } else if self.config.ai_provider.provider_name.eq_ignore_ascii_case("gemini") {
+            } else if self
+                .config
+                .ai_provider
+                .provider_name
+                .eq_ignore_ascii_case("gemini")
+            {
                 std::sync::Arc::new(function_providers::GeminiLlmProvider::new(
                     ai_base_url,
                     api_key.clone(),
@@ -1114,9 +1191,9 @@ impl FunctionView {
                 ),
             ))
         } else {
-            Some(std::sync::Arc::new(function_providers::MockSttProvider::new(
-                "Open my browser and navigate to YouTube",
-            )))
+            Some(std::sync::Arc::new(
+                function_providers::MockSttProvider::new("Open my browser and navigate to YouTube"),
+            ))
         };
         self.tts_provider = if self.config.tts.enabled {
             self.config.tts.resolve_api_key().map(|key| {
@@ -1301,7 +1378,9 @@ impl FunctionView {
         }
 
         // 5. At the root prompt: hide/dismiss the function window, keeping any typed text preserved temporarily!
-        tracing::info!("Escape: at root prompt, dismissing function window and preserving input text");
+        tracing::info!(
+            "Escape: at root prompt, dismissing function window and preserving input text"
+        );
         self.dismiss(window, cx);
     }
 
@@ -1414,7 +1493,8 @@ impl FunctionView {
         // A hidden GPUI window can retain an off-screen origin after a display
         // change or a previous resize. Recompute its position whenever it is
         // summoned so the full chat surface remains inside the active screen.
-        let upper_third = self.config.window_position == function_config::WindowPositionMode::UpperThird;
+        let upper_third =
+            self.config.window_position == function_config::WindowPositionMode::UpperThird;
         std::thread::spawn(move || {
             function_platform::center_window_by_title(
                 "Function",
@@ -1638,7 +1718,8 @@ impl FunctionView {
         // Retain command surface and adapt window height to show execution progress
         self.mode = FunctionMode::Command;
         window.resize(self.target_window_size());
-        self.chat_scroll_handle.scroll_to_item(self.chat_display.len().saturating_sub(1));
+        self.chat_scroll_handle
+            .scroll_to_item(self.chat_display.len().saturating_sub(1));
 
         self.activities.clear();
         self.activities.push(ActivityEntry {
@@ -1661,7 +1742,9 @@ impl FunctionView {
             let task = async move {
                 // execute_with_history broadcasts Completed { summary, new_history }
                 // before returning, so the subscription picks up everything we need.
-                let _ = agent.execute_with_history(&prompt_clone, history_snapshot).await;
+                let _ = agent
+                    .execute_with_history(&prompt_clone, history_snapshot)
+                    .await;
             };
 
             if let Some(handle) = crate::get_runtime_handle() {
@@ -1680,7 +1763,9 @@ impl FunctionView {
             }
         } else {
             self.state = AgentState::Idle;
-            let no_agent_reply = "No AI provider configured. Go to Settings (Ctrl+,) to add your API key.".to_string();
+            let no_agent_reply =
+                "No AI provider configured. Go to Settings (Ctrl+,) to add your API key."
+                    .to_string();
             self.chat_display.push(ChatEntry {
                 is_user: false,
                 text: no_agent_reply.clone(),
@@ -1690,7 +1775,6 @@ impl FunctionView {
 
         cx.notify();
     }
-
 
     pub fn handle_key_down(
         &mut self,
@@ -1893,7 +1977,8 @@ impl FunctionView {
                     cx.notify();
                 }
                 "up" => {
-                    self.conversation_selected_index = self.conversation_selected_index.saturating_sub(1);
+                    self.conversation_selected_index =
+                        self.conversation_selected_index.saturating_sub(1);
                     self.play_sound_feedback(SoundEffect::Navigate);
                     cx.notify();
                 }
@@ -1929,8 +2014,11 @@ impl FunctionView {
                                     self.chat_display.clear();
                                     self.chat_history_api.clear();
                                 }
-                                self.conversation_status_message = Some("Conversation removed.".to_string());
-                                self.conversation_selected_index = self.conversation_selected_index.min(self.conversation_store.list().len());
+                                self.conversation_status_message =
+                                    Some("Conversation removed.".to_string());
+                                self.conversation_selected_index = self
+                                    .conversation_selected_index
+                                    .min(self.conversation_store.list().len());
                                 self.play_sound_feedback(SoundEffect::Select);
                                 cx.notify();
                             }
@@ -1996,7 +2084,12 @@ impl FunctionView {
                 }
                 let img_str = format!("[Photo: {}] ", img_path.display());
                 let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
-                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                let byte_pos = self
+                    .input_buffer
+                    .char_indices()
+                    .nth(insert_pos)
+                    .map(|(pos, _)| pos)
+                    .unwrap_or(self.input_buffer.len());
                 self.input_buffer.insert_str(byte_pos, &img_str);
                 self.cursor_offset = insert_pos + img_str.chars().count();
                 self.selected_index = 0;
@@ -2039,7 +2132,12 @@ impl FunctionView {
                     text
                 };
                 let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
-                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                let byte_pos = self
+                    .input_buffer
+                    .char_indices()
+                    .nth(insert_pos)
+                    .map(|(pos, _)| pos)
+                    .unwrap_or(self.input_buffer.len());
                 self.input_buffer.insert_str(byte_pos, &text_to_insert);
                 self.cursor_offset = insert_pos + text_to_insert.chars().count();
                 self.selected_index = 0;
@@ -2134,7 +2232,8 @@ impl FunctionView {
             "pageup" => {
                 self.user_scrolled_up = true;
                 let current = self.chat_scroll_handle.top_item();
-                self.chat_scroll_handle.scroll_to_item(current.saturating_sub(2));
+                self.chat_scroll_handle
+                    .scroll_to_item(current.saturating_sub(2));
                 cx.notify();
                 return;
             }
@@ -2157,7 +2256,8 @@ impl FunctionView {
                 } else if !self.chat_display.is_empty() {
                     self.user_scrolled_up = true;
                     let current = self.chat_scroll_handle.top_item();
-                    self.chat_scroll_handle.scroll_to_item(current.saturating_sub(1));
+                    self.chat_scroll_handle
+                        .scroll_to_item(current.saturating_sub(1));
                     cx.notify();
                 }
             }
@@ -2181,7 +2281,12 @@ impl FunctionView {
             "enter" | "return" => {
                 if modifiers.shift {
                     let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
-                    let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                    let byte_pos = self
+                        .input_buffer
+                        .char_indices()
+                        .nth(insert_pos)
+                        .map(|(pos, _)| pos)
+                        .unwrap_or(self.input_buffer.len());
                     self.input_buffer.insert(byte_pos, '\n');
                     self.cursor_offset = insert_pos + 1;
                     self.cursor_visible = true;
@@ -2214,7 +2319,9 @@ impl FunctionView {
                 }
 
                 let items = get_launcher_items(&self.input_buffer);
-                let has_openable = items.iter().any(|item| matches!(item.action, LauncherAction::OpenPath(_)));
+                let has_openable = items
+                    .iter()
+                    .any(|item| matches!(item.action, LauncherAction::OpenPath(_)));
 
                 // Control+Enter on Windows and Command+Enter on macOS open a
                 // matched file, folder, or application immediately.
@@ -2246,7 +2353,6 @@ impl FunctionView {
                     }
                     return;
                 }
-
             }
             "tab" => {
                 self.is_text_selected = false;
@@ -2300,7 +2406,9 @@ impl FunctionView {
                 }
                 let char_count = self.input_buffer.chars().count();
                 if self.cursor_offset < char_count {
-                    if let Some((byte_pos, c)) = self.input_buffer.char_indices().nth(self.cursor_offset) {
+                    if let Some((byte_pos, c)) =
+                        self.input_buffer.char_indices().nth(self.cursor_offset)
+                    {
                         self.input_buffer.drain(byte_pos..byte_pos + c.len_utf8());
                     }
                     self.selected_index = 0;
@@ -2319,7 +2427,12 @@ impl FunctionView {
                     self.is_text_selected = false;
                 }
                 let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
-                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                let byte_pos = self
+                    .input_buffer
+                    .char_indices()
+                    .nth(insert_pos)
+                    .map(|(pos, _)| pos)
+                    .unwrap_or(self.input_buffer.len());
                 self.input_buffer.insert(byte_pos, ' ');
                 self.cursor_offset = insert_pos + 1;
                 self.selected_index = 0;
@@ -2337,7 +2450,12 @@ impl FunctionView {
                     self.is_text_selected = false;
                 }
                 let insert_pos = self.cursor_offset.min(self.input_buffer.chars().count());
-                let byte_pos = self.input_buffer.char_indices().nth(insert_pos).map(|(pos, _)| pos).unwrap_or(self.input_buffer.len());
+                let byte_pos = self
+                    .input_buffer
+                    .char_indices()
+                    .nth(insert_pos)
+                    .map(|(pos, _)| pos)
+                    .unwrap_or(self.input_buffer.len());
                 if ch.chars().count() == 1 {
                     let c = ch.chars().next().unwrap();
                     let typed = if modifiers.shift { shift_char(c) } else { c };
@@ -2468,16 +2586,16 @@ impl Render for FunctionView {
             .on_action(
                 cx.listener(|this, a: &ToggleVoice, window, cx| this.toggle_voice(a, window, cx)),
             )
-            .on_action(cx.listener(
-                |this, a: &crate::actions::OpenSettings, window, cx| {
+            .on_action(
+                cx.listener(|this, a: &crate::actions::OpenSettings, window, cx| {
                     this.open_settings(a, window, cx)
-                },
-            ))
-            .on_action(cx.listener(
-                |_this, _a: &crate::actions::QuitFunction, _window, cx| {
+                }),
+            )
+            .on_action(
+                cx.listener(|_this, _a: &crate::actions::QuitFunction, _window, cx| {
                     cx.quit();
-                },
-            ))
+                }),
+            )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
@@ -2520,12 +2638,14 @@ impl Render for FunctionView {
                     div()
                         .id("chat_scroll_area")
                         .track_scroll(&self.chat_scroll_handle)
-                        .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
-                            if event.delta.pixel_delta(px(20.0)).y > px(0.0) {
-                                this.user_scrolled_up = true;
-                                cx.notify();
-                            }
-                        }))
+                        .on_scroll_wheel(cx.listener(
+                            |this, event: &gpui::ScrollWheelEvent, _, cx| {
+                                if event.delta.pixel_delta(px(20.0)).y > px(0.0) {
+                                    this.user_scrolled_up = true;
+                                    cx.notify();
+                                }
+                            },
+                        ))
                         .flex()
                         .flex_col()
                         .flex_1()
@@ -2565,7 +2685,9 @@ impl Render for FunctionView {
                                     .into_any_element()
                             } else {
                                 // Assistant reply — check if message is an error or standard markdown response
-                                if let Some(error_info) = crate::components::parse_error_info(&entry.text) {
+                                if let Some(error_info) =
+                                    crate::components::parse_error_info(&entry.text)
+                                {
                                     let is_expanded = self.expanded_errors.contains(&idx);
                                     let raw_tech_details = error_info
                                         .formatted_json
@@ -2602,68 +2724,76 @@ impl Render for FunctionView {
                                         .gap_1()
                                         .w_full()
                                         .max_w(px(580.0))
-                                    .child(
-                                        div()
-                                            .id(("assistant_header", idx))
-                                            .w_full()
-                                            .flex_shrink_0()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .px_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(render_brand_mark_with_mode(14.0, theme.mode == crate::theme::ThemeMode::Light))
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                            .text_color(theme.accent_primary)
-                                                            .child("Function"),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id(("copy_btn", idx))
-                                                    .cursor_pointer()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .px_2()
-                                                    .py_0p5()
-                                                    .rounded_md()
-                                                    .bg(theme.surface_input)
-                                                    .border_1()
-                                                    .border_color(theme.border_subtle)
-                                                    .hover(|s| s.bg(theme.surface_active))
-                                                    .text_xs()
-                                                    .text_color(theme.text_secondary)
-                                                    .child("Copy")
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        cx.listener(move |this, _, _, cx| {
-                                                            copy_to_clipboard(&reply_text);
-                                                            this.play_sound_feedback(SoundEffect::Select);
-                                                            cx.notify();
-                                                        }),
-                                                    ),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(("assistant_body", idx))
-                                            .w_full()
-                                            .max_w_full()
-                                            .flex_shrink_0()
-                                            .px(px(4.0))
-                                            .py(px(2.0))
-                                            .overflow_hidden()
-                                            .child(render_markdown(&entry.text, &theme)),
-                                    )
-                                    .into_any_element()
+                                        .child(
+                                            div()
+                                                .id(("assistant_header", idx))
+                                                .w_full()
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .px_1()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .child(render_brand_mark_with_mode(
+                                                            14.0,
+                                                            theme.mode
+                                                                == crate::theme::ThemeMode::Light,
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_weight(
+                                                                    gpui::FontWeight::SEMIBOLD,
+                                                                )
+                                                                .text_color(theme.accent_primary)
+                                                                .child("Function"),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id(("copy_btn", idx))
+                                                        .cursor_pointer()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded_md()
+                                                        .bg(theme.surface_input)
+                                                        .border_1()
+                                                        .border_color(theme.border_subtle)
+                                                        .hover(|s| s.bg(theme.surface_active))
+                                                        .text_xs()
+                                                        .text_color(theme.text_secondary)
+                                                        .child("Copy")
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(move |this, _, _, cx| {
+                                                                copy_to_clipboard(&reply_text);
+                                                                this.play_sound_feedback(
+                                                                    SoundEffect::Select,
+                                                                );
+                                                                cx.notify();
+                                                            }),
+                                                        ),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("assistant_body", idx))
+                                                .w_full()
+                                                .max_w_full()
+                                                .flex_shrink_0()
+                                                .px(px(4.0))
+                                                .py(px(2.0))
+                                                .overflow_hidden()
+                                                .child(render_markdown(&entry.text, &theme)),
+                                        )
+                                        .into_any_element()
                                 }
                             }
                         }))
@@ -2676,7 +2806,10 @@ impl Render for FunctionView {
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
-                                    .child(render_brand_mark_with_mode(16.0, theme.mode == crate::theme::ThemeMode::Light))
+                                    .child(render_brand_mark_with_mode(
+                                        16.0,
+                                        theme.mode == crate::theme::ThemeMode::Light,
+                                    ))
                                     .child(
                                         div()
                                             .text_xs()
@@ -2878,15 +3011,13 @@ impl Render for FunctionView {
                                                     .text_color(theme.text_primary)
                                                     .child(before_cursor),
                                             )
-                                            .child(
-                                                div().w(px(2.0)).h(px(20.0)).bg(
-                                                    if self.cursor_visible {
-                                                        theme.text_primary
-                                                    } else {
-                                                        rgba(0x00000000)
-                                                    },
-                                                ),
-                                            )
+                                            .child(div().w(px(2.0)).h(px(20.0)).bg(
+                                                if self.cursor_visible {
+                                                    theme.text_primary
+                                                } else {
+                                                    rgba(0x00000000)
+                                                },
+                                            ))
                                             .child(
                                                 div()
                                                     .text_lg()

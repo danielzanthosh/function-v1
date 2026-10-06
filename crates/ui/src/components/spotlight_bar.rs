@@ -241,7 +241,8 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
             },
             LauncherItem {
                 keyword: "Browse Past Conversations".to_string(),
-                description: "View and restore previous conversations from chat history".to_string(),
+                description: "View and restore previous conversations from chat history"
+                    .to_string(),
                 shortcut: "Alt+2".to_string(),
                 icon_type: LauncherIconType::Function,
                 action: LauncherAction::OpenConversations,

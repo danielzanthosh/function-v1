@@ -66,7 +66,10 @@ pub fn render_conversation_view(
                         .flex()
                         .items_center()
                         .gap_3()
-                        .child(render_brand_mark_with_mode(18.0, theme.mode == crate::theme::ThemeMode::Light))
+                        .child(render_brand_mark_with_mode(
+                            18.0,
+                            theme.mode == crate::theme::ThemeMode::Light,
+                        ))
                         .child(
                             div()
                                 .flex()
@@ -119,7 +122,10 @@ pub fn render_conversation_view(
                 div()
                     .px_5()
                     .py_2()
-                    .bg(Rgba { a: 0.15, ..accent_col })
+                    .bg(Rgba {
+                        a: 0.15,
+                        ..accent_col
+                    })
                     .border_b_1()
                     .border_color(theme.border_subtle)
                     .child(
@@ -152,7 +158,10 @@ pub fn render_conversation_view(
                         .py_3()
                         .rounded_xl()
                         .bg(if selected_index == 0 {
-                            Rgba { a: 0.12, ..accent_col }
+                            Rgba {
+                                a: 0.12,
+                                ..accent_col
+                            }
                         } else {
                             card_bg
                         })
@@ -185,18 +194,19 @@ pub fn render_conversation_view(
                                                 .text_color(text_primary)
                                                 .child("Start New Chat"),
                                         )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(text_muted)
-                                                .child("Clear active context and return to home prompt"),
-                                        ),
+                                        .child(div().text_xs().text_color(text_muted).child(
+                                            "Clear active context and return to home prompt",
+                                        )),
                                 ),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(if selected_index == 0 { accent_col } else { text_muted })
+                                .text_color(if selected_index == 0 {
+                                    accent_col
+                                } else {
+                                    text_muted
+                                })
                                 .child("Enter ↵"),
                         ),
                 )
@@ -216,12 +226,7 @@ pub fn render_conversation_view(
                                     .text_color(text_muted)
                                     .child("PREVIOUS CHATS"),
                             )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(1.0))
-                                    .bg(theme.border_subtle),
-                            ),
+                            .child(div().flex_1().h(px(1.0)).bg(theme.border_subtle)),
                     )
                 })
                 // Empty state if no saved conversations
@@ -240,12 +245,9 @@ pub fn render_conversation_view(
                                     .text_color(text_muted)
                                     .child("No previous conversations saved yet."),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(text_muted)
-                                    .child("Chats are automatically saved as you converse with Function."),
-                            ),
+                            .child(div().text_xs().text_color(text_muted).child(
+                                "Chats are automatically saved as you converse with Function.",
+                            )),
                     )
                 })
                 // Saved conversations list (index 1..=conversations.len())
@@ -263,7 +265,10 @@ pub fn render_conversation_view(
                         .py_2p5()
                         .rounded_xl()
                         .bg(if is_selected {
-                            Rgba { a: 0.12, ..accent_col }
+                            Rgba {
+                                a: 0.12,
+                                ..accent_col
+                            }
                         } else {
                             card_bg
                         })
@@ -298,7 +303,10 @@ pub fn render_conversation_view(
                                                     .px_1p5()
                                                     .py(px(1.0))
                                                     .rounded_sm()
-                                                    .bg(Rgba { a: 0.2, ..accent_col })
+                                                    .bg(Rgba {
+                                                        a: 0.2,
+                                                        ..accent_col
+                                                    })
                                                     .text_color(accent_col)
                                                     .font_weight(gpui::FontWeight::MEDIUM)
                                                     .child("Active"),
@@ -316,17 +324,9 @@ pub fn render_conversation_view(
                                                 .text_color(text_muted)
                                                 .child(format!("{} msgs", msg_count)),
                                         )
+                                        .child(div().text_xs().text_color(text_muted).child("•"))
                                         .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(text_muted)
-                                                .child("•"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(text_muted)
-                                                .child(time_str),
+                                            div().text_xs().text_color(text_muted).child(time_str),
                                         ),
                                 ),
                         )
@@ -374,12 +374,9 @@ pub fn render_conversation_view(
                 .py_2()
                 .border_t_1()
                 .border_color(theme.border_subtle)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(text_muted)
-                        .child("↑/↓: Navigate  •  Enter: Select  •  N: New Chat  •  Del: Remove  •  Esc: Back"),
-                )
+                .child(div().text_xs().text_color(text_muted).child(
+                    "↑/↓: Navigate  •  Enter: Select  •  N: New Chat  •  Del: Remove  •  Esc: Back",
+                ))
                 .child(
                     div()
                         .text_xs()

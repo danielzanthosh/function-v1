@@ -132,20 +132,42 @@ impl LlmProvider for OpenAiLlmProvider {
                     let calls_json: Vec<serde_json::Value> = t_calls
                         .iter()
                         .map(|c| {
-                            json!({
+                            let call_sig = c
+                                .thought_signature
+                                .as_ref()
+                                .or(m.thought_signature.as_ref());
+
+                            let mut call_obj = json!({
                                 "id": c.id,
                                 "type": "function",
                                 "function": {
                                     "name": c.name,
                                     "arguments": c.arguments.to_string(),
                                 }
-                            })
+                            });
+
+                            if let Some(ts) = call_sig {
+                                call_obj["thought_signature"] = json!(ts);
+                                call_obj["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                                call_obj["function"]["thought_signature"] = json!(ts);
+                                call_obj["function"]["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                            }
+
+                            call_obj
                         })
                         .collect();
                     obj["tool_calls"] = json!(calls_json);
                 }
 
-                if let Some(ref ts) = m.thought_signature {
+                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
+                    m.tool_calls
+                        .as_ref()
+                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
+                }) {
                     obj["thought_signature"] = json!(ts);
                     obj["extra_fields"] = json!({
                         "thought_signature": ts
@@ -244,7 +266,6 @@ impl LlmProvider for OpenAiLlmProvider {
             })
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))??;
-
 
         let (response_body, http_status) = split_curl_response(response_body);
         let status_code = http_status.unwrap_or(200);
@@ -375,8 +396,22 @@ impl LlmProvider for OpenAiLlmProvider {
                         Some(val) => val.clone(),
                         None => json!({}),
                     };
+                    let call_thought_signature = c
+                        .get("thought_signature")
+                        .or_else(|| func.get("thought_signature"))
+                        .or_else(|| c.pointer("/extra_fields/thought_signature"))
+                        .or_else(|| func.pointer("/extra_fields/thought_signature"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| thought_signature.clone());
+
                     if !name.is_empty() {
-                        calls.push(ToolCall { id, name, arguments });
+                        calls.push(ToolCall {
+                            id,
+                            name,
+                            arguments,
+                            thought_signature: call_thought_signature,
+                        });
                     }
                 }
             }
@@ -391,25 +426,39 @@ impl LlmProvider for OpenAiLlmProvider {
                         Some(val) => val.clone(),
                         None => json!({}),
                     };
+                    let call_thought_signature = func
+                        .get("thought_signature")
+                        .or_else(|| msg_val.get("thought_signature"))
+                        .or_else(|| func.pointer("/extra_fields/thought_signature"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| thought_signature.clone());
+
                     calls.push(ToolCall {
                         id: "call_0".to_string(),
                         name: name.to_string(),
                         arguments,
+                        thought_signature: call_thought_signature,
                     });
                 }
             }
         }
 
         if calls.is_empty() {
-            let parts_opt = msg_val.get("parts").or_else(|| choice.get("parts")).or_else(|| {
-                msg_val
-                    .get("content")
-                    .and_then(|c| c.as_array().map(|_| msg_val.get("content").unwrap()))
-            });
+            let parts_opt = msg_val
+                .get("parts")
+                .or_else(|| choice.get("parts"))
+                .or_else(|| {
+                    msg_val
+                        .get("content")
+                        .and_then(|c| c.as_array().map(|_| msg_val.get("content").unwrap()))
+                });
 
             if let Some(parts) = parts_opt.and_then(|p| p.as_array()) {
                 for (idx, part) in parts.iter().enumerate() {
-                    let fc = part.get("functionCall").or_else(|| part.get("function_call"));
+                    let fc = part
+                        .get("functionCall")
+                        .or_else(|| part.get("function_call"));
                     if let Some(fc) = fc {
                         if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
                             let arguments = fc
@@ -417,17 +466,30 @@ impl LlmProvider for OpenAiLlmProvider {
                                 .or_else(|| fc.get("arguments"))
                                 .cloned()
                                 .unwrap_or(json!({}));
+                            let call_thought_signature = part
+                                .get("thought_signature")
+                                .or_else(|| fc.get("thought_signature"))
+                                .or_else(|| part.pointer("/extra_fields/thought_signature"))
+                                .or_else(|| fc.pointer("/extra_fields/thought_signature"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| thought_signature.clone());
+
                             let id = format!("call_{}", idx);
                             calls.push(ToolCall {
                                 id,
                                 name: name.to_string(),
                                 arguments,
+                                thought_signature: call_thought_signature,
                             });
                         }
                     }
                 }
             }
         }
+
+        let final_thought_signature =
+            thought_signature.or_else(|| calls.iter().find_map(|c| c.thought_signature.clone()));
 
         let tool_calls = if calls.is_empty() { None } else { Some(calls) };
 
@@ -438,7 +500,7 @@ impl LlmProvider for OpenAiLlmProvider {
                 images: None,
                 tool_call_id: None,
                 tool_calls,
-                thought_signature,
+                thought_signature: final_thought_signature,
             },
             finish_reason,
         })
@@ -503,6 +565,52 @@ impl LlmProvider for OpenAiLlmProvider {
 
                 if let Some(ref t_id) = m.tool_call_id {
                     obj["tool_call_id"] = json!(t_id);
+                }
+
+                if let Some(ref t_calls) = m.tool_calls {
+                    let calls_json: Vec<serde_json::Value> = t_calls
+                        .iter()
+                        .map(|c| {
+                            let call_sig = c
+                                .thought_signature
+                                .as_ref()
+                                .or(m.thought_signature.as_ref());
+
+                            let mut call_obj = json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": {
+                                    "name": c.name,
+                                    "arguments": c.arguments.to_string(),
+                                }
+                            });
+
+                            if let Some(ts) = call_sig {
+                                call_obj["thought_signature"] = json!(ts);
+                                call_obj["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                                call_obj["function"]["thought_signature"] = json!(ts);
+                                call_obj["function"]["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                            }
+
+                            call_obj
+                        })
+                        .collect();
+                    obj["tool_calls"] = json!(calls_json);
+                }
+
+                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
+                    m.tool_calls
+                        .as_ref()
+                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
+                }) {
+                    obj["thought_signature"] = json!(ts);
+                    obj["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
                 }
 
                 obj
@@ -779,21 +887,45 @@ impl TextToSpeechProvider for OpenAiTtsProvider {
 
         tokio::task::spawn_blocking(move || {
             use std::io::Write;
-            let mut command = Command::new(if cfg!(target_os = "windows") { "curl.exe" } else { "curl" });
+            let mut command = Command::new(if cfg!(target_os = "windows") {
+                "curl.exe"
+            } else {
+                "curl"
+            });
             command
-                .args(["-s", "-X", "POST", &base_url, "-H", "Content-Type: application/json", "--data-binary", "@-"])
+                .args([
+                    "-s",
+                    "-X",
+                    "POST",
+                    &base_url,
+                    "-H",
+                    "Content-Type: application/json",
+                    "--data-binary",
+                    "@-",
+                ])
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped());
             if let Some(key) = api_key.filter(|key| !key.is_empty()) {
-                command.arg("-H").arg(format!("Authorization: Bearer {key}"));
+                command
+                    .arg("-H")
+                    .arg(format!("Authorization: Bearer {key}"));
             }
-            let mut child = command.spawn().map_err(|e| ProviderError::Network(e.to_string()))?;
+            let mut child = command
+                .spawn()
+                .map_err(|e| ProviderError::Network(e.to_string()))?;
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(payload.as_bytes()).map_err(|e| ProviderError::Network(e.to_string()))?;
+                stdin
+                    .write_all(payload.as_bytes())
+                    .map_err(|e| ProviderError::Network(e.to_string()))?;
             }
-            let output = child.wait_with_output().map_err(|e| ProviderError::Network(e.to_string()))?;
+            let output = child
+                .wait_with_output()
+                .map_err(|e| ProviderError::Network(e.to_string()))?;
             if !output.status.success() {
-                return Err(ProviderError::Network(format!("curl exited with code {:?}", output.status.code())));
+                return Err(ProviderError::Network(format!(
+                    "curl exited with code {:?}",
+                    output.status.code()
+                )));
             }
             Ok(output.stdout)
         })
@@ -882,10 +1014,16 @@ mod tests {
         let thought_sig = msg_val.get("thought_signature").and_then(|v| v.as_str());
         assert_eq!(thought_sig, Some("sig_abc123_gemini_thought"));
 
-        let content = msg_val.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let content = msg_val
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
         assert_eq!(content, "");
 
-        let tool_calls = msg_val.get("tool_calls").and_then(|t| t.as_array()).unwrap();
+        let tool_calls = msg_val
+            .get("tool_calls")
+            .and_then(|t| t.as_array())
+            .unwrap();
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0]["function"]["name"], "take_screenshot");
     }
@@ -901,6 +1039,7 @@ mod tests {
                 id: "call_abc".to_string(),
                 name: "click".to_string(),
                 arguments: json!({ "x": 100, "y": 200 }),
+                thought_signature: None,
             }]),
             thought_signature: Some("gemini_thought_sig_xyz".to_string()),
         };
@@ -917,7 +1056,152 @@ mod tests {
         }
 
         assert_eq!(obj["thought_signature"], "gemini_thought_sig_xyz");
-        assert_eq!(obj["extra_fields"]["thought_signature"], "gemini_thought_sig_xyz");
+        assert_eq!(
+            obj["extra_fields"]["thought_signature"],
+            "gemini_thought_sig_xyz"
+        );
+    }
+
+    #[test]
+    fn test_gemini_thought_signature_end_to_end_serialization_deserialization() {
+        let raw_gemini_resp = json!({
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "thought_signature": "gemini_sig_end_to_end_123",
+                        "tool_calls": [
+                            {
+                                "id": "call_open_app_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "open_app",
+                                    "arguments": "{\"name\":\"Google Chrome\"}"
+                                },
+                                "thought_signature": "gemini_sig_end_to_end_123"
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let choice = &raw_gemini_resp["choices"][0];
+        let msg_val = &choice["message"];
+
+        let thought_signature = msg_val
+            .get("thought_signature")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        assert_eq!(
+            thought_signature,
+            Some("gemini_sig_end_to_end_123".to_string())
+        );
+
+        let t_array = msg_val["tool_calls"].as_array().unwrap();
+        let mut calls = Vec::new();
+        for (_idx, c) in t_array.iter().enumerate() {
+            let id = c.get("id").and_then(|i| i.as_str()).unwrap().to_string();
+            let func = &c["function"];
+            let name = func["name"].as_str().unwrap().to_string();
+            let args_str = func["arguments"].as_str().unwrap();
+            let arguments: serde_json::Value = serde_json::from_str(args_str).unwrap();
+            let call_thought_signature = c
+                .get("thought_signature")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| thought_signature.clone());
+
+            calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+                thought_signature: call_thought_signature,
+            });
+        }
+
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: "".to_string(),
+            images: None,
+            tool_call_id: None,
+            tool_calls: Some(calls),
+            thought_signature,
+        };
+
+        // Now simulate request payload serialization for the subsequent Gemini request
+        let t_calls = assistant_msg.tool_calls.as_ref().unwrap();
+        let calls_json: Vec<serde_json::Value> = t_calls
+            .iter()
+            .map(|c| {
+                let call_sig = c
+                    .thought_signature
+                    .as_ref()
+                    .or(assistant_msg.thought_signature.as_ref());
+
+                let mut call_obj = json!({
+                    "id": c.id,
+                    "type": "function",
+                    "function": {
+                        "name": c.name,
+                        "arguments": c.arguments.to_string(),
+                    }
+                });
+
+                if let Some(ts) = call_sig {
+                    call_obj["thought_signature"] = json!(ts);
+                    call_obj["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
+                    call_obj["function"]["thought_signature"] = json!(ts);
+                    call_obj["function"]["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
+                }
+
+                call_obj
+            })
+            .collect();
+
+        let mut req_msg_obj = json!({
+            "role": "assistant",
+            "content": assistant_msg.content,
+            "tool_calls": calls_json,
+        });
+
+        if let Some(ref ts) = assistant_msg.thought_signature {
+            req_msg_obj["thought_signature"] = json!(ts);
+            req_msg_obj["extra_fields"] = json!({
+                "thought_signature": ts
+            });
+        }
+
+        assert_eq!(
+            req_msg_obj["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
+        assert_eq!(
+            req_msg_obj["extra_fields"]["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
+        assert_eq!(
+            req_msg_obj["tool_calls"][0]["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
+        assert_eq!(
+            req_msg_obj["tool_calls"][0]["extra_fields"]["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
+        assert_eq!(
+            req_msg_obj["tool_calls"][0]["function"]["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
+        assert_eq!(
+            req_msg_obj["tool_calls"][0]["function"]["extra_fields"]["thought_signature"],
+            "gemini_sig_end_to_end_123"
+        );
     }
 
     #[test]
@@ -959,6 +1243,7 @@ mod tests {
                         id: format!("call_{}", idx),
                         name: name.to_string(),
                         arguments,
+                        thought_signature: None,
                     });
                 }
             }
@@ -982,5 +1267,3 @@ mod tests {
         assert_eq!(msg_404, "Model not found");
     }
 }
-
-

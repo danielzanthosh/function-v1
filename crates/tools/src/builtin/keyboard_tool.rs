@@ -73,12 +73,12 @@ impl Tool for KeyboardTool {
                         details: "Missing 'text' parameter".into(),
                     }
                 })?;
-                self.control
-                    .keyboard_type_smooth(text)
-                    .map_err(|e| ToolError::ExecutionFailed {
+                self.control.keyboard_type_smooth(text).map_err(|e| {
+                    ToolError::ExecutionFailed {
                         tool: self.name().into(),
                         details: e.to_string(),
-                    })?;
+                    }
+                })?;
                 Ok(ToolResult::success(
                     format!("Typed {} characters", text.len()),
                     json!({ "typed_length": text.len() }),

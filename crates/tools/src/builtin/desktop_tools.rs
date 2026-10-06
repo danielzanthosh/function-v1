@@ -70,13 +70,12 @@ impl Tool for OpenAppTool {
         params: serde_json::Value,
         _ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParameters {
+        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'name' parameter".into(),
-            })?;
+            }
+        })?;
 
         let empty_args = Vec::new();
         let args_json = params.get("args").and_then(|v| v.as_array());
@@ -176,13 +175,12 @@ impl Tool for CloseAppTool {
         params: serde_json::Value,
         _ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParameters {
+        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'name' parameter".into(),
-            })?;
+            }
+        })?;
 
         #[cfg(target_os = "macos")]
         let res = {
@@ -393,23 +391,30 @@ impl Tool for ClickTool {
         let y_opt = params.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
 
         if let (Some(x), Some(y)) = (x_opt, y_opt) {
-            self.control.mouse_move_smooth(x, y).map_err(|e| ToolError::ExecutionFailed {
-                tool: self.name().into(),
-                details: e.to_string(),
-            })?;
+            self.control
+                .mouse_move_smooth(x, y)
+                .map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: e.to_string(),
+                })?;
         }
 
-        let button_str = params.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+        let button_str = params
+            .get("button")
+            .and_then(|v| v.as_str())
+            .unwrap_or("left");
         let btn = match button_str {
             "right" => MouseButton::Right,
             "middle" => MouseButton::Middle,
             _ => MouseButton::Left,
         };
 
-        self.control.mouse_click(btn).map_err(|e| ToolError::ExecutionFailed {
-            tool: self.name().into(),
-            details: e.to_string(),
-        })?;
+        self.control
+            .mouse_click(btn)
+            .map_err(|e| ToolError::ExecutionFailed {
+                tool: self.name().into(),
+                details: e.to_string(),
+            })?;
 
         let (cur_x, cur_y) = self.control.get_cursor_position();
 
@@ -473,16 +478,20 @@ impl Tool for DoubleClickTool {
         let y_opt = params.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
 
         if let (Some(x), Some(y)) = (x_opt, y_opt) {
-            self.control.mouse_move_smooth(x, y).map_err(|e| ToolError::ExecutionFailed {
+            self.control
+                .mouse_move_smooth(x, y)
+                .map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: e.to_string(),
+                })?;
+        }
+
+        self.control
+            .mouse_double_click(MouseButton::Left)
+            .map_err(|e| ToolError::ExecutionFailed {
                 tool: self.name().into(),
                 details: e.to_string(),
             })?;
-        }
-
-        self.control.mouse_double_click(MouseButton::Left).map_err(|e| ToolError::ExecutionFailed {
-            tool: self.name().into(),
-            details: e.to_string(),
-        })?;
 
         let (cur_x, cur_y) = self.control.get_cursor_position();
 
@@ -541,18 +550,19 @@ impl Tool for TypeTextTool {
         params: serde_json::Value,
         _ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let text = params
-            .get("text")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParameters {
+        let text = params.get("text").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'text' parameter".into(),
-            })?;
-
-        self.control.keyboard_type_smooth(text).map_err(|e| ToolError::ExecutionFailed {
-            tool: self.name().into(),
-            details: e.to_string(),
+            }
         })?;
+
+        self.control
+            .keyboard_type_smooth(text)
+            .map_err(|e| ToolError::ExecutionFailed {
+                tool: self.name().into(),
+                details: e.to_string(),
+            })?;
 
         Ok(ToolResult::success(
             format!("Typed {} characters", text.chars().count()),
@@ -611,25 +621,28 @@ impl Tool for PressKeyTool {
         params: serde_json::Value,
         _ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let key = params
-            .get("key")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParameters {
+        let key = params.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters {
                 tool: self.name().into(),
                 details: "Missing 'key' parameter".into(),
-            })?;
+            }
+        })?;
 
         if key.contains('+') {
             let parts: Vec<&str> = key.split('+').map(|s| s.trim()).collect();
-            self.control.keyboard_shortcut(&parts).map_err(|e| ToolError::ExecutionFailed {
-                tool: self.name().into(),
-                details: e.to_string(),
-            })?;
+            self.control
+                .keyboard_shortcut(&parts)
+                .map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: e.to_string(),
+                })?;
         } else {
-            self.control.keyboard_press(key).map_err(|e| ToolError::ExecutionFailed {
-                tool: self.name().into(),
-                details: e.to_string(),
-            })?;
+            self.control
+                .keyboard_press(key)
+                .map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: e.to_string(),
+                })?;
         }
 
         Ok(ToolResult::success(
@@ -689,10 +702,12 @@ impl Tool for ScrollTool {
         let delta_x = params.get("delta_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let delta_y = params.get("delta_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let delta = if delta_y != 0 { delta_y } else { delta_x };
-        self.control.mouse_scroll(delta).map_err(|e| ToolError::ExecutionFailed {
-            tool: self.name().into(),
-            details: e.to_string(),
-        })?;
+        self.control
+            .mouse_scroll(delta)
+            .map_err(|e| ToolError::ExecutionFailed {
+                tool: self.name().into(),
+                details: e.to_string(),
+            })?;
 
         Ok(ToolResult::success(
             format!("Scrolled (delta_x: {}, delta_y: {})", delta_x, delta_y),

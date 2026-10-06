@@ -2,12 +2,16 @@ use std::sync::Arc;
 
 use function_config::AppConfig;
 use function_providers::{
-    CodexChatGptProvider, GeminiLlmProvider, LlmProvider, MockLlmProvider, MockSttProvider, OpenAiLlmProvider,
-    OpenAiTtsProvider, SpeechToTextProvider, TextToSpeechProvider, WhisperSttProvider,
+    CodexChatGptProvider, GeminiLlmProvider, LlmProvider, MockLlmProvider, MockSttProvider,
+    OpenAiLlmProvider, OpenAiTtsProvider, SpeechToTextProvider, TextToSpeechProvider,
+    WhisperSttProvider,
 };
 
 fn ai_base_url(config: &AppConfig) -> String {
-    if config.ai_provider.provider_name.eq_ignore_ascii_case("gemini")
+    if config
+        .ai_provider
+        .provider_name
+        .eq_ignore_ascii_case("gemini")
         && (config.ai_provider.base_url.trim().is_empty()
             || config.ai_provider.base_url.trim() == "https://api.openai.com/v1")
     {
@@ -18,17 +22,27 @@ fn ai_base_url(config: &AppConfig) -> String {
 }
 
 pub fn build_llm_provider(config: &AppConfig) -> Arc<dyn LlmProvider> {
-    if config.ai_provider.provider_name.eq_ignore_ascii_case("chatgpt-plan") {
+    if config
+        .ai_provider
+        .provider_name
+        .eq_ignore_ascii_case("chatgpt-plan")
+    {
         return Arc::new(CodexChatGptProvider::new(&config.ai_provider.model));
     }
-    let api_key = config.ai_provider.resolve_api_key(&function_config::InMemoryCredentialStore::new());
+    let api_key = config
+        .ai_provider
+        .resolve_api_key(&function_config::InMemoryCredentialStore::new());
     if !config.ai_provider.is_configured() {
         return Arc::new(MockLlmProvider::new(
             "Function computer assistant ready. Configure your API key in settings or run computer tools directly.",
         ));
     }
 
-    if config.ai_provider.provider_name.eq_ignore_ascii_case("gemini") {
+    if config
+        .ai_provider
+        .provider_name
+        .eq_ignore_ascii_case("gemini")
+    {
         Arc::new(GeminiLlmProvider::new(
             ai_base_url(config),
             api_key,
@@ -51,7 +65,9 @@ pub fn build_stt_provider(config: &AppConfig) -> Arc<dyn SpeechToTextProvider> {
             &config.speech.model,
         ))
     } else {
-        Arc::new(MockSttProvider::new("Open my browser and navigate to YouTube"))
+        Arc::new(MockSttProvider::new(
+            "Open my browser and navigate to YouTube",
+        ))
     }
 }
 

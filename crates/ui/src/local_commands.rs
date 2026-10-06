@@ -29,11 +29,7 @@ pub fn resolve_local_command(input: &str) -> Option<LocalCommand> {
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
 
-    if lower == "settings"
-        || lower == "configure"
-        || lower == "preferences"
-        || lower == "config"
-    {
+    if lower == "settings" || lower == "configure" || lower == "preferences" || lower == "config" {
         Some(LocalCommand::Configure)
     } else if lower == "conversation new"
         || lower == "new chat"
@@ -138,7 +134,10 @@ mod tests {
 
     #[test]
     fn test_resolve_explicit_shell_command_prefix() {
-        assert_eq!(resolve_shell_command("> echo hi"), Some("echo hi".to_string()));
+        assert_eq!(
+            resolve_shell_command("> echo hi"),
+            Some("echo hi".to_string())
+        );
         assert_eq!(resolve_shell_command("  >  pwd"), Some("pwd".to_string()));
         assert_eq!(resolve_shell_command("> "), None);
         assert_eq!(resolve_shell_command("tell me about > shells"), None);

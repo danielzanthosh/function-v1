@@ -24,4 +24,3 @@ pub use spotlight_bar::{
     LauncherIconType, LauncherItem,
 };
 pub use status_badge::render_status_badge;
-

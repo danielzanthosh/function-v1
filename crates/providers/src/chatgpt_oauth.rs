@@ -30,7 +30,9 @@ pub struct OAuthAuthorization {
 }
 
 impl OAuthAuthorization {
-    pub fn state(&self) -> &str { &self.state }
+    pub fn state(&self) -> &str {
+        &self.state
+    }
 }
 
 pub fn save_tokens(tokens: &ChatGptOAuthTokens) -> Result<(), String> {
@@ -56,10 +58,20 @@ pub fn install_access_token_in_codex(access_token: &str) -> Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Could not start Codex login: {error}"))?;
-    child.stdin.take().ok_or("Could not open Codex login stdin")?
-        .write_all(access_token.as_bytes()).map_err(|error| error.to_string())?;
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
-    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+    child
+        .stdin
+        .take()
+        .ok_or("Could not open Codex login stdin")?
+        .write_all(access_token.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 pub fn begin_authorization() -> OAuthAuthorization {
@@ -78,29 +90,46 @@ pub fn begin_authorization() -> OAuthAuthorization {
     let url = format!(
         "{AUTHORIZE_URL}?response_type=code&client_id={CLIENT_ID}&redirect_uri={redirect_uri}&scope=openid%20profile%20email%20offline_access&code_challenge={challenge}&code_challenge_method=S256&state={state}&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=function"
     );
-    OAuthAuthorization { url, verifier, state }
+    OAuthAuthorization {
+        url,
+        verifier,
+        state,
+    }
 }
 
 pub fn wait_for_callback(expected_state: String) -> Result<String, String> {
-    let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
-        .map_err(|error| format!("Could not bind OAuth callback on port {CALLBACK_PORT}: {error}"))?;
-    listener.set_nonblocking(true).map_err(|error| error.to_string())?;
+    let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT)).map_err(|error| {
+        format!("Could not bind OAuth callback on port {CALLBACK_PORT}: {error}")
+    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
     let deadline = std::time::Instant::now() + Duration::from_secs(180);
     let (mut stream, _) = loop {
         match listener.accept() {
             Ok(connection) => break connection,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < deadline =>
+            {
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(error) => return Err(format!("OAuth callback timed out: {error}")),
         }
     };
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|error| error.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|error| error.to_string())?;
     let mut request = [0_u8; 8192];
-    let bytes = stream.read(&mut request).map_err(|error| error.to_string())?;
+    let bytes = stream
+        .read(&mut request)
+        .map_err(|error| error.to_string())?;
     let request_text = String::from_utf8_lossy(&request[..bytes]);
     let first_line = request_text.lines().next().unwrap_or_default();
-    let target = first_line.split_whitespace().nth(1).ok_or("Invalid OAuth callback request")?;
+    let target = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("Invalid OAuth callback request")?;
     let query = target.split('?').nth(1).unwrap_or_default();
     let mut code = None;
     let mut state = None;
@@ -113,14 +142,23 @@ pub fn wait_for_callback(expected_state: String) -> Result<String, String> {
         }
     }
     let success = state.as_deref() == Some(expected_state.as_str()) && code.is_some();
-    let body = if success { "Authentication complete. You may close this window." } else { "Authentication failed. Return to Function for details." };
+    let body = if success {
+        "Authentication complete. You may close this window."
+    } else {
+        "Authentication failed. Return to Function for details."
+    };
     let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
     let _ = stream.write_all(response.as_bytes());
-    if !success { return Err("OAuth callback state validation failed".into()); }
+    if !success {
+        return Err("OAuth callback state validation failed".into());
+    }
     Ok(code.unwrap())
 }
 
-pub fn exchange_code(authorization: OAuthAuthorization, code: String) -> Result<ChatGptOAuthTokens, String> {
+pub fn exchange_code(
+    authorization: OAuthAuthorization,
+    code: String,
+) -> Result<ChatGptOAuthTokens, String> {
     let redirect_uri = format!("http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}");
     let body = format!(
         "grant_type=authorization_code&client_id={CLIENT_ID}&code={}&code_verifier={}&redirect_uri={redirect_uri}",
@@ -140,42 +178,96 @@ pub fn refresh_token(tokens: &ChatGptOAuthTokens) -> Result<ChatGptOAuthTokens, 
 
 fn request_token(body: &str, existing_refresh: Option<&str>) -> Result<ChatGptOAuthTokens, String> {
     let mut child = Command::new("curl")
-        .args(["-sS", "--fail-with-body", "-X", "POST", TOKEN_URL, "-H", "Content-Type: application/x-www-form-urlencoded", "--data-binary", "@-"])
+        .args([
+            "-sS",
+            "--fail-with-body",
+            "-X",
+            "POST",
+            TOKEN_URL,
+            "-H",
+            "Content-Type: application/x-www-form-urlencoded",
+            "--data-binary",
+            "@-",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Could not start curl for OAuth token exchange: {error}"))?;
-    child.stdin.take().unwrap().write_all(body.as_bytes()).map_err(|error| error.to_string())?;
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| format!("Invalid OAuth token response: {error}"))?;
-    let access_token = response.get("access_token").and_then(|v| v.as_str()).ok_or("OAuth response did not contain access_token")?.to_string();
-    let refresh_token = response.get("refresh_token").and_then(|v| v.as_str()).map(str::to_string).or_else(|| existing_refresh.map(str::to_string)).ok_or("OAuth response did not contain refresh_token")?;
-    let expires_in = response.get("expires_in").and_then(|v| v.as_u64()).ok_or("OAuth response did not contain expires_in")?;
-    let expires_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() + expires_in;
-    Ok(ChatGptOAuthTokens { access_token, refresh_token, expires_at })
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Invalid OAuth token response: {error}"))?;
+    let access_token = response
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("OAuth response did not contain access_token")?
+        .to_string();
+    let refresh_token = response
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| existing_refresh.map(str::to_string))
+        .ok_or("OAuth response did not contain refresh_token")?;
+    let expires_in = response
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .ok_or("OAuth response did not contain expires_in")?;
+    let expires_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + expires_in;
+    Ok(ChatGptOAuthTokens {
+        access_token,
+        refresh_token,
+        expires_at,
+    })
 }
 
 pub fn open_authorization_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
     #[cfg(target_os = "windows")]
-    let mut command = { let mut command = Command::new("cmd"); command.args(["/C", "start", ""]); command };
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = Command::new("xdg-open");
-    command.arg(url).status().map_err(|error| error.to_string()).and_then(|status| if status.success() { Ok(()) } else { Err(format!("Browser exited with {status}")) })
+    command
+        .arg(url)
+        .status()
+        .map_err(|error| error.to_string())
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("Browser exited with {status}"))
+            }
+        })
 }
 
 fn percent_encode(value: &str) -> String {
-    value.bytes().flat_map(|byte| {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            vec![byte as char]
-        } else {
-            format!("%{byte:02X}").chars().collect()
-        }
-    }).collect()
+    value
+        .bytes()
+        .flat_map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                vec![byte as char]
+            } else {
+                format!("%{byte:02X}").chars().collect()
+            }
+        })
+        .collect()
 }
-

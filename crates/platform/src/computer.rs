@@ -385,14 +385,19 @@ pub mod windows {
             let out = Command::new("powershell")
                 .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
                 .output()
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to execute screenshot script: {}", e)))?;
+                .map_err(|e| {
+                    PlatformError::SystemApi(format!("Failed to execute screenshot script: {}", e))
+                })?;
 
             if !out.status.success() || !path.exists() {
-                return Err(PlatformError::SystemApi("Failed to capture Windows screenshot".into()));
+                return Err(PlatformError::SystemApi(
+                    "Failed to capture Windows screenshot".into(),
+                ));
             }
 
-            let bytes = std::fs::read(&path)
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to read screenshot image: {}", e)))?;
+            let bytes = std::fs::read(&path).map_err(|e| {
+                PlatformError::SystemApi(format!("Failed to read screenshot image: {}", e))
+            })?;
             let _ = std::fs::remove_file(&path);
             Ok(bytes)
         }
@@ -472,9 +477,15 @@ pub mod macos {
                 let w = CGDisplayPixelsWide(disp) as u32;
                 let h = CGDisplayPixelsHigh(disp) as u32;
                 if w > 0 && h > 0 {
-                    ScreenDimensions { width: w, height: h }
+                    ScreenDimensions {
+                        width: w,
+                        height: h,
+                    }
                 } else {
-                    ScreenDimensions { width: 1920, height: 1080 }
+                    ScreenDimensions {
+                        width: 1920,
+                        height: 1080,
+                    }
                 }
             }
         }
@@ -493,7 +504,10 @@ pub mod macos {
         }
 
         fn mouse_move(&self, x: i32, y: i32) -> Result<(), PlatformError> {
-            let pt = CGPoint { x: x as f64, y: y as f64 };
+            let pt = CGPoint {
+                x: x as f64,
+                y: y as f64,
+            };
             unsafe {
                 let _ = CGWarpMouseCursorPosition(pt);
                 let ev = CGEventCreateMouseEvent(std::ptr::null(), K_CG_EVENT_MOUSE_MOVED, pt, 0);
@@ -507,7 +521,10 @@ pub mod macos {
 
         fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError> {
             let (x, y) = self.get_cursor_position();
-            let pt = CGPoint { x: x as f64, y: y as f64 };
+            let pt = CGPoint {
+                x: x as f64,
+                y: y as f64,
+            };
             let (down_type, up_type, btn_num) = match button {
                 MouseButton::Left => (K_CG_EVENT_LEFT_MOUSE_DOWN, K_CG_EVENT_LEFT_MOUSE_UP, 0),
                 MouseButton::Right => (K_CG_EVENT_RIGHT_MOUSE_DOWN, K_CG_EVENT_RIGHT_MOUSE_UP, 1),
@@ -536,7 +553,10 @@ pub mod macos {
             self.mouse_click(button)?;
             std::thread::sleep(std::time::Duration::from_millis(60));
             let (x, y) = self.get_cursor_position();
-            let pt = CGPoint { x: x as f64, y: y as f64 };
+            let pt = CGPoint {
+                x: x as f64,
+                y: y as f64,
+            };
             let (down_type, up_type, btn_num) = match button {
                 MouseButton::Left => (K_CG_EVENT_LEFT_MOUSE_DOWN, K_CG_EVENT_LEFT_MOUSE_UP, 0),
                 MouseButton::Right => (K_CG_EVENT_RIGHT_MOUSE_DOWN, K_CG_EVENT_RIGHT_MOUSE_UP, 1),
@@ -580,23 +600,40 @@ pub mod macos {
             end_y: i32,
         ) -> Result<(), PlatformError> {
             self.mouse_move(start_x, start_y)?;
-            let start_pt = CGPoint { x: start_x as f64, y: start_y as f64 };
-            let end_pt = CGPoint { x: end_x as f64, y: end_y as f64 };
+            let start_pt = CGPoint {
+                x: start_x as f64,
+                y: start_y as f64,
+            };
+            let end_pt = CGPoint {
+                x: end_x as f64,
+                y: end_y as f64,
+            };
 
             unsafe {
-                let down = CGEventCreateMouseEvent(std::ptr::null(), K_CG_EVENT_LEFT_MOUSE_DOWN, start_pt, 0);
+                let down = CGEventCreateMouseEvent(
+                    std::ptr::null(),
+                    K_CG_EVENT_LEFT_MOUSE_DOWN,
+                    start_pt,
+                    0,
+                );
                 if !down.is_null() {
                     CGEventPost(K_CG_HID_EVENT_TAP, down);
                     CFRelease(down);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
-                let drag = CGEventCreateMouseEvent(std::ptr::null(), K_CG_EVENT_LEFT_MOUSE_DRAGGED, end_pt, 0);
+                let drag = CGEventCreateMouseEvent(
+                    std::ptr::null(),
+                    K_CG_EVENT_LEFT_MOUSE_DRAGGED,
+                    end_pt,
+                    0,
+                );
                 if !drag.is_null() {
                     CGEventPost(K_CG_HID_EVENT_TAP, drag);
                     CFRelease(drag);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
-                let up = CGEventCreateMouseEvent(std::ptr::null(), K_CG_EVENT_LEFT_MOUSE_UP, end_pt, 0);
+                let up =
+                    CGEventCreateMouseEvent(std::ptr::null(), K_CG_EVENT_LEFT_MOUSE_UP, end_pt, 0);
                 if !up.is_null() {
                     CGEventPost(K_CG_HID_EVENT_TAP, up);
                     CFRelease(up);
@@ -643,11 +680,42 @@ pub mod macos {
                 "down" => 125,
                 "left" => 123,
                 "right" => 124,
-                "a" => 0, "s" => 1, "d" => 2, "f" => 3, "h" => 4, "g" => 5, "z" => 6, "x" => 7,
-                "c" => 8, "v" => 9, "b" => 11, "q" => 12, "w" => 13, "e" => 14, "r" => 15,
-                "y" => 16, "t" => 17, "1" => 18, "2" => 19, "3" => 20, "4" => 21, "6" => 22,
-                "5" => 23, "9" => 25, "7" => 26, "8" => 28, "0" => 29, "o" => 31, "u" => 32,
-                "i" => 34, "p" => 35, "l" => 37, "j" => 38, "k" => 40, "n" => 45, "m" => 46,
+                "a" => 0,
+                "s" => 1,
+                "d" => 2,
+                "f" => 3,
+                "h" => 4,
+                "g" => 5,
+                "z" => 6,
+                "x" => 7,
+                "c" => 8,
+                "v" => 9,
+                "b" => 11,
+                "q" => 12,
+                "w" => 13,
+                "e" => 14,
+                "r" => 15,
+                "y" => 16,
+                "t" => 17,
+                "1" => 18,
+                "2" => 19,
+                "3" => 20,
+                "4" => 21,
+                "6" => 22,
+                "5" => 23,
+                "9" => 25,
+                "7" => 26,
+                "8" => 28,
+                "0" => 29,
+                "o" => 31,
+                "u" => 32,
+                "i" => 34,
+                "p" => 35,
+                "l" => 37,
+                "j" => 38,
+                "k" => 40,
+                "n" => 45,
+                "m" => 46,
                 _ => return self.keyboard_type(key),
             };
 
@@ -689,8 +757,17 @@ pub mod macos {
                     "space" => 49,
                     "delete" | "backspace" => 51,
                     "escape" | "esc" => 53,
-                    "a" => 0, "c" => 8, "v" => 9, "x" => 7, "z" => 6, "q" => 12, "w" => 13,
-                    "t" => 17, "r" => 15, "f" => 3, "s" => 1,
+                    "a" => 0,
+                    "c" => 8,
+                    "v" => 9,
+                    "x" => 7,
+                    "z" => 6,
+                    "q" => 12,
+                    "w" => 13,
+                    "t" => 17,
+                    "r" => 15,
+                    "f" => 3,
+                    "s" => 1,
                     _ => 0,
                 };
 
@@ -730,7 +807,10 @@ pub mod macos {
 
             match cmd.spawn() {
                 Ok(child) => Ok(child.id()),
-                Err(e) => Err(PlatformError::SystemApi(format!("Failed to launch {}: {}", app_path, e))),
+                Err(e) => Err(PlatformError::SystemApi(format!(
+                    "Failed to launch {}: {}",
+                    app_path, e
+                ))),
             }
         }
 
@@ -796,8 +876,9 @@ pub mod macos {
                 ));
             }
 
-            let bytes = std::fs::read(&path_buf)
-                .map_err(|e| PlatformError::SystemApi(format!("Failed to read screenshot: {}", e)))?;
+            let bytes = std::fs::read(&path_buf).map_err(|e| {
+                PlatformError::SystemApi(format!("Failed to read screenshot: {}", e))
+            })?;
             let _ = std::fs::remove_file(&path_buf);
             Ok(bytes)
         }
@@ -850,7 +931,9 @@ impl ComputerControl for FallbackComputerControl {
         Ok(false)
     }
     fn take_screenshot(&self) -> Result<Vec<u8>, PlatformError> {
-        Err(PlatformError::Unsupported("Screenshot not supported on this platform".into()))
+        Err(PlatformError::Unsupported(
+            "Screenshot not supported on this platform".into(),
+        ))
     }
 }
 

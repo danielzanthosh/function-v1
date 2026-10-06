@@ -10,7 +10,8 @@ use gpui::{img, px, Image, ImageFormat, IntoElement};
 use std::sync::Arc;
 
 const BRAND_MARK_BYTES: &[u8] = include_bytes!("../../../../assets/brand/brand_mark.png");
-const BLACK_LOGO_BYTES: &[u8] = include_bytes!("../../../../assets/brand/Black logo in Tranparent.png");
+const BLACK_LOGO_BYTES: &[u8] =
+    include_bytes!("../../../../assets/brand/Black logo in Tranparent.png");
 const BRAND_LOCKUP_BYTES: &[u8] = include_bytes!("../../../../assets/brand/brand_lockup.png");
 const BRAND_LOCKUP_SMALL_BYTES: &[u8] =
     include_bytes!("../../../../assets/brand/brand_lockup_small.png");
