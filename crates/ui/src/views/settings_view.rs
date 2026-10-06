@@ -27,7 +27,12 @@ fn provider_field(
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_xs().text_color(view.theme.text_muted).child(label))
+        .child(
+            div()
+                .text_xs()
+                .text_color(view.theme.text_muted)
+                .child(label),
+        )
         .child(
             div()
                 .cursor_text()
@@ -36,14 +41,21 @@ fn provider_field(
                 .rounded_md()
                 .bg(view.theme.surface_input)
                 .border_1()
-                .border_color(if focused { view.theme.accent_primary } else { view.theme.border_subtle })
+                .border_color(if focused {
+                    view.theme.accent_primary
+                } else {
+                    view.theme.border_subtle
+                })
                 .text_sm()
                 .text_color(view.theme.text_primary)
                 .child(value.to_string())
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                    this.settings_focused_field = index;
-                    cx.notify();
-                })),
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.settings_focused_field = index;
+                        cx.notify();
+                    }),
+                ),
         )
 }
 

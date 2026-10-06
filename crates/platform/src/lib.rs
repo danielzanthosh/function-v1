@@ -40,7 +40,11 @@ pub fn shell_command_spec(command: &str) -> ShellCommandSpec {
     {
         ShellCommandSpec {
             program: "powershell".to_string(),
-            args: vec!["-NoProfile".to_string(), "-Command".to_string(), command.to_string()],
+            args: vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                command.to_string(),
+            ],
         }
     }
 
@@ -285,9 +289,7 @@ pub fn speak_text(text: &str) {
     #[cfg(target_os = "macos")]
     {
         std::thread::spawn(move || {
-            let _ = std::process::Command::new("say")
-                .arg(&text_owned)
-                .spawn();
+            let _ = std::process::Command::new("say").arg(&text_owned).spawn();
         });
     }
 
@@ -313,7 +315,9 @@ pub fn speak_text(text: &str) {
 /// Play provider-produced audio bytes using the native system player.
 pub fn play_audio_bytes(bytes: &[u8], extension: &str) -> Result<(), PlatformError> {
     if bytes.is_empty() {
-        return Err(PlatformError::Unsupported("empty audio response".to_string()));
+        return Err(PlatformError::Unsupported(
+            "empty audio response".to_string(),
+        ));
     }
     let safe_extension = extension
         .chars()
@@ -322,7 +326,11 @@ pub fn play_audio_bytes(bytes: &[u8], extension: &str) -> Result<(), PlatformErr
     let path = std::env::temp_dir().join(format!(
         "function-tts-{}.{}",
         std::process::id(),
-        if safe_extension.is_empty() { "wav" } else { &safe_extension }
+        if safe_extension.is_empty() {
+            "wav"
+        } else {
+            &safe_extension
+        }
     ));
     std::fs::write(&path, bytes).map_err(|error| PlatformError::SystemApi(error.to_string()))?;
 
@@ -332,13 +340,19 @@ pub fn play_audio_bytes(bytes: &[u8], extension: &str) -> Result<(), PlatformErr
     let mut command = {
         let mut command = std::process::Command::new("powershell");
         command.args(["-NoProfile", "-NonInteractive", "-Command"]);
-        command.arg(format!("(New-Object Media.SoundPlayer '{}').PlaySync()", path.display()));
+        command.arg(format!(
+            "(New-Object Media.SoundPlayer '{}').PlaySync()",
+            path.display()
+        ));
         command
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = std::process::Command::new("ffplay");
 
-    #[cfg(any(target_os = "macos", not(any(target_os = "macos", target_os = "windows"))))]
+    #[cfg(any(
+        target_os = "macos",
+        not(any(target_os = "macos", target_os = "windows"))
+    ))]
     command.arg(&path);
 
     match command.spawn() {
@@ -765,7 +779,9 @@ pub mod windows {
                                 || msg.lparam == 0x0205
                             /* WM_RBUTTONUP */
                             {
-                                tracing::info!("Windows system tray icon clicked - toggling Function");
+                                tracing::info!(
+                                    "Windows system tray icon clicked - toggling Function"
+                                );
                                 let _ = tx.send(());
                             }
                         }
@@ -1341,8 +1357,7 @@ pub fn center_window_by_title(title: &str, _width: i32, _height: i32, upper_thir
                 end tell
             end tell
             "#,
-            title.replace('"', "\\\"")
-                .replace('\\', "\\\\"),
+            title.replace('"', "\\\"").replace('\\', "\\\\"),
             y_fraction
         );
         let _ = std::process::Command::new("osascript")
@@ -1497,7 +1512,11 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
                         0,
                         0,
                         0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS,
+                        SWP_NOMOVE
+                            | SWP_NOSIZE
+                            | SWP_NOZORDER
+                            | SWP_FRAMECHANGED
+                            | SWP_ASYNCWINDOWPOS,
                     );
                 }
 
@@ -1516,12 +1535,8 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
                 }
                 let dwm = LoadLibraryA(b"dwmapi.dll\0".as_ptr());
                 if dwm != 0 {
-                    type FnDwmSetWindowAttribute = unsafe extern "system" fn(
-                        isize,
-                        u32,
-                        *const std::ffi::c_void,
-                        u32,
-                    ) -> i32;
+                    type FnDwmSetWindowAttribute =
+                        unsafe extern "system" fn(isize, u32, *const std::ffi::c_void, u32) -> i32;
                     type FnDwmExtendFrame = unsafe extern "system" fn(isize, *const Margins) -> i32;
 
                     let p_set = GetProcAddress(dwm, b"DwmSetWindowAttribute\0".as_ptr());
@@ -1575,8 +1590,10 @@ pub fn set_window_as_tool_window_by_title(title: &str) {
 pub fn set_macos_activation_policy_accessory() {
     #[cfg(target_os = "macos")]
     unsafe {
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendSetPolicy =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> isize;
 
@@ -1625,32 +1642,48 @@ fn should_skip_macos_window_class(class_name: &str) -> bool {
 pub fn macos_activate_app() {
     #[cfg(target_os = "macos")]
     unsafe {
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSend1 = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
         ) -> *mut std::ffi::c_void;
         type MsgSendPid = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32;
-        type MsgSendActivate =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+        type MsgSendActivate = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            bool,
+        ) -> *mut std::ffi::c_void;
         type MsgSendUsize =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
-        type MsgSendObject =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendObject = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendUtf8 = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
         ) -> *const std::os::raw::c_char;
-        type MsgSendObjectAtIndex =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
-        type MsgSendBool =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+        type MsgSendObjectAtIndex = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            usize,
+        ) -> *mut std::ffi::c_void;
+        type MsgSendBool = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            bool,
+        ) -> *mut std::ffi::c_void;
         type MsgSendGetBool =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool;
-        type MsgSendIsize =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void;
+        type MsgSendIsize = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            isize,
+        ) -> *mut std::ffi::c_void;
 
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -1701,7 +1734,8 @@ pub fn macos_activate_app() {
                     if front_pid != my_pid {
                         let retain_sel = sel_registerName(c"retain".as_ptr());
                         let retained = msg_send_0(front_app, retain_sel);
-                        let old_ptr = PREVIOUS_APP.swap(retained as isize, std::sync::atomic::Ordering::SeqCst);
+                        let old_ptr = PREVIOUS_APP
+                            .swap(retained as isize, std::sync::atomic::Ordering::SeqCst);
                         if old_ptr != 0 {
                             let release_sel = sel_registerName(c"release".as_ptr());
                             let _ = msg_send_0(old_ptr as *mut std::ffi::c_void, release_sel);
@@ -1734,10 +1768,13 @@ pub fn macos_activate_app() {
                     let is_key_sel = sel_registerName(c"isKeyWindow".as_ptr());
                     let is_main_sel = sel_registerName(c"isMainWindow".as_ptr());
                     let is_visible_sel = sel_registerName(c"isVisible".as_ptr());
-                    let set_ignores_mouse_events_sel = sel_registerName(c"setIgnoresMouseEvents:".as_ptr());
+                    let set_ignores_mouse_events_sel =
+                        sel_registerName(c"setIgnoresMouseEvents:".as_ptr());
                     let set_level_sel = sel_registerName(c"setLevel:".as_ptr());
-                    let order_front_regardless_sel = sel_registerName(c"orderFrontRegardless".as_ptr());
-                    let make_key_and_order_front_sel = sel_registerName(c"makeKeyAndOrderFront:".as_ptr());
+                    let order_front_regardless_sel =
+                        sel_registerName(c"orderFrontRegardless".as_ptr());
+                    let make_key_and_order_front_sel =
+                        sel_registerName(c"makeKeyAndOrderFront:".as_ptr());
                     let make_main_sel = sel_registerName(c"makeMainWindow".as_ptr());
                     let can_become_key_sel = sel_registerName(c"canBecomeKeyWindow".as_ptr());
                     let can_become_main_sel = sel_registerName(c"canBecomeMainWindow".as_ptr());
@@ -1751,7 +1788,8 @@ pub fn macos_activate_app() {
                             if !win_cls.is_null() {
                                 let cls_name_ptr = class_getName(win_cls);
                                 if !cls_name_ptr.is_null() {
-                                    let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
+                                    let cls_name =
+                                        std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
                                     if should_skip_macos_window_class(&cls_name) {
                                         continue;
                                     }
@@ -1765,7 +1803,8 @@ pub fn macos_activate_app() {
                                 std::ptr::null()
                             };
                             if title_ptr.is_null()
-                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy() != "Function"
+                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy()
+                                    != "Function"
                             {
                                 continue;
                             }
@@ -1800,7 +1839,11 @@ pub fn macos_activate_app() {
                             // Make window key and main if not already key
                             let is_key: bool = msg_send_get_bool(win, is_key_sel);
                             if !is_key {
-                                let _ = msg_send_1(win, make_key_and_order_front_sel, std::ptr::null_mut());
+                                let _ = msg_send_1(
+                                    win,
+                                    make_key_and_order_front_sel,
+                                    std::ptr::null_mut(),
+                                );
                             }
                             let is_main: bool = msg_send_get_bool(win, is_main_sel);
                             if !is_main {
@@ -1833,8 +1876,10 @@ pub fn macos_activate_app() {
 pub fn macos_hide_app() {
     #[cfg(target_os = "macos")]
     unsafe {
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSend1 = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
@@ -1842,14 +1887,19 @@ pub fn macos_hide_app() {
         ) -> *mut std::ffi::c_void;
         type MsgSendUsize =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
-        type MsgSendObject =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSendObject = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendUtf8 = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
         ) -> *const std::os::raw::c_char;
-        type MsgSendObjectAtIndex =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+        type MsgSendObjectAtIndex = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+            usize,
+        ) -> *mut std::ffi::c_void;
         type MsgSendActivateOptions =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> bool;
 
@@ -1896,7 +1946,8 @@ pub fn macos_hide_app() {
                             if !win_cls.is_null() {
                                 let cls_name_ptr = class_getName(win_cls);
                                 if !cls_name_ptr.is_null() {
-                                    let cls_name = std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
+                                    let cls_name =
+                                        std::ffi::CStr::from_ptr(cls_name_ptr).to_string_lossy();
                                     if should_skip_macos_window_class(&cls_name) {
                                         continue;
                                     }
@@ -1909,7 +1960,8 @@ pub fn macos_hide_app() {
                                 std::ptr::null()
                             };
                             if title_ptr.is_null()
-                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy() != "Function"
+                                || std::ffi::CStr::from_ptr(title_ptr).to_string_lossy()
+                                    != "Function"
                             {
                                 continue;
                             }
@@ -1932,10 +1984,14 @@ pub fn macos_hide_app() {
                     let _ = msg_send_activate_options(prev_app, activate_options_sel, 2);
                     let release_sel = sel_registerName(c"release".as_ptr());
                     let _ = msg_send_0(prev_app, release_sel);
-                    tracing::info!("Returned focus to previous macOS application via activateWithOptions");
+                    tracing::info!(
+                        "Returned focus to previous macOS application via activateWithOptions"
+                    );
                 }
 
-                tracing::info!("Dismissed macOS application: ordered out windows, hid app, deactivated");
+                tracing::info!(
+                    "Dismissed macOS application: ordered out windows, hid app, deactivated"
+                );
             }
         }
     }
@@ -1948,8 +2004,10 @@ pub fn macos_hide_app() {
 pub fn macos_menu_is_active() -> bool {
     #[cfg(target_os = "macos")]
     unsafe {
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
 
         extern "C" {
             fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
@@ -1977,7 +2035,8 @@ pub fn macos_menu_is_active() -> bool {
             return false;
         }
         let name = class_getName(class);
-        !name.is_null() && should_skip_macos_window_class(&std::ffi::CStr::from_ptr(name).to_string_lossy())
+        !name.is_null()
+            && should_skip_macos_window_class(&std::ffi::CStr::from_ptr(name).to_string_lossy())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -2036,14 +2095,11 @@ fn find_macos_icon_path() -> Option<std::path::PathBuf> {
 static STATUS_ITEM_INITIALIZED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(target_os = "macos")]
-static G_STATUS_ITEM: std::sync::atomic::AtomicIsize =
-    std::sync::atomic::AtomicIsize::new(0);
+static G_STATUS_ITEM: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(target_os = "macos")]
-static G_STATUS_MENU: std::sync::atomic::AtomicIsize =
-    std::sync::atomic::AtomicIsize::new(0);
+static G_STATUS_MENU: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 #[cfg(target_os = "macos")]
-static G_STATUS_TARGET: std::sync::atomic::AtomicIsize =
-    std::sync::atomic::AtomicIsize::new(0);
+static G_STATUS_TARGET: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 /// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
@@ -2066,7 +2122,8 @@ pub fn setup_macos_menu_bar_icon() {
             static _dispatch_main_q: std::ffi::c_void;
         }
 
-        type MsgSendBool0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool;
+        type MsgSendBool0 =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> bool;
         let msg_send_bool_0: MsgSendBool0 =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
@@ -2173,18 +2230,12 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
 
     let msg_send_0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
     let msg_send_1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_cstr: MsgSendCStr =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_float: MsgSendFloat =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_bool: MsgSendBool =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_usize: MsgSendUsize =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_size: MsgSendSize =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-    let msg_send_bytes: MsgSendBytes =
-        std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_cstr: MsgSendCStr = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_float: MsgSendFloat = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_bool: MsgSendBool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_usize: MsgSendUsize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_size: MsgSendSize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+    let msg_send_bytes: MsgSendBytes = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
     let msg_send_init_item: MsgSendInitItem =
         std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
@@ -2197,11 +2248,7 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
     let mut target_cls = objc_getClass(c"FunctionStatusItemTarget".as_ptr());
     if target_cls.is_null() {
         let ns_object = objc_getClass(c"NSObject".as_ptr());
-        target_cls = objc_allocateClassPair(
-            ns_object,
-            c"FunctionStatusItemTarget".as_ptr(),
-            0,
-        );
+        target_cls = objc_allocateClassPair(ns_object, c"FunctionStatusItemTarget".as_ptr(), 0);
         if !target_cls.is_null() {
             unsafe extern "C" fn on_show_function(
                 _this: *mut std::ffi::c_void,
@@ -2237,7 +2284,12 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
             class_addMethod(target_cls, show_sel, on_show_function, c"v@:@".as_ptr());
 
             let settings_sel = sel_registerName(c"onSettingsClick:".as_ptr());
-            class_addMethod(target_cls, settings_sel, on_settings_click, c"v@:@".as_ptr());
+            class_addMethod(
+                target_cls,
+                settings_sel,
+                on_settings_click,
+                c"v@:@".as_ptr(),
+            );
 
             let quit_sel = sel_registerName(c"onQuitFunction:".as_ptr());
             class_addMethod(target_cls, quit_sel, on_quit_function, c"v@:@".as_ptr());
@@ -2322,7 +2374,14 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
             let _ = msg_send_0(image, retain_sel);
             // Standard status item size: 18x18 pt
             let set_size_sel = sel_registerName(c"setSize:".as_ptr());
-            msg_send_size(image, set_size_sel, NSSize { width: 18.0, height: 18.0 });
+            msg_send_size(
+                image,
+                set_size_sel,
+                NSSize {
+                    width: 18.0,
+                    height: 18.0,
+                },
+            );
 
             // Template rendering allows macOS to automatically shade the icon
             // for both light and dark menu bars while preserving transparency
@@ -2386,7 +2445,11 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
 
             // 1. "Show Function      ⌘ ⌘"
             // Double Command cannot be represented as single keyEquivalent; visual label is used.
-            let show_title = msg_send_cstr(ns_string, utf8_sel, c"Show Function      \u{2318} \u{2318}".as_ptr());
+            let show_title = msg_send_cstr(
+                ns_string,
+                utf8_sel,
+                c"Show Function      \u{2318} \u{2318}".as_ptr(),
+            );
             let empty_key = msg_send_cstr(ns_string, utf8_sel, c"".as_ptr());
             let show_act = sel_registerName(c"onShowFunction:".as_ptr());
             let show_item = msg_send_init_item(
@@ -2456,8 +2519,10 @@ pub fn register_macos_login_item() {
         // Objective-C BOOL is signed char (i8) on Apple platforms: 0 is NO, non-zero is YES.
         type ObjcBool = std::os::raw::c_schar;
 
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendStatus =
             unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize;
         type MsgSendRegister = unsafe extern "C" fn(
@@ -2563,7 +2628,10 @@ pub fn setup_macos_double_command_listener() {
         isa: *const std::ffi::c_void,
         flags: i32,
         reserved: i32,
-        invoke: unsafe extern "C" fn(*mut LocalBlockLiteral, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+        invoke: unsafe extern "C" fn(
+            *mut LocalBlockLiteral,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void,
         descriptor: *const BlockDescriptor,
     }
 
@@ -2572,7 +2640,8 @@ pub fn setup_macos_double_command_listener() {
             return;
         }
 
-        type MsgSendUsize = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
+        type MsgSendUsize =
+            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> usize;
         type MsgSendU16 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> u16;
 
         extern "C" {
@@ -2580,7 +2649,8 @@ pub fn setup_macos_double_command_listener() {
             fn objc_msgSend();
         }
 
-        let msg_send_usize: MsgSendUsize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let msg_send_usize: MsgSendUsize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let msg_send_u16: MsgSendU16 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         let type_sel = sel_registerName(c"type".as_ptr());
@@ -2720,11 +2790,15 @@ pub fn setup_macos_double_command_listener() {
     };
 
     unsafe {
-        (*std::ptr::addr_of_mut!(GLOBAL_BLOCK)).isa = &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
-        (*std::ptr::addr_of_mut!(LOCAL_BLOCK)).isa = &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
+        (*std::ptr::addr_of_mut!(GLOBAL_BLOCK)).isa =
+            &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
+        (*std::ptr::addr_of_mut!(LOCAL_BLOCK)).isa =
+            &NSConcreteGlobalBlock as *const _ as *const std::ffi::c_void;
 
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendAddMonitor = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
@@ -2742,8 +2816,10 @@ pub fn setup_macos_double_command_listener() {
             return;
         }
 
-        let add_global_sel = sel_registerName(c"addGlobalMonitorForEventsMatchingMask:handler:".as_ptr());
-        let add_local_sel = sel_registerName(c"addLocalMonitorForEventsMatchingMask:handler:".as_ptr());
+        let add_global_sel =
+            sel_registerName(c"addGlobalMonitorForEventsMatchingMask:handler:".as_ptr());
+        let add_local_sel =
+            sel_registerName(c"addLocalMonitorForEventsMatchingMask:handler:".as_ptr());
         let retain_sel = sel_registerName(c"retain".as_ptr());
 
         // Mask: FlagsChanged (1 << 12) | KeyDown (1 << 10)
@@ -2780,7 +2856,6 @@ pub fn setup_macos_double_command_listener() {
 /// Fallback for non-macOS platforms
 #[cfg(not(target_os = "macos"))]
 pub fn setup_macos_double_command_listener() {}
-
 
 /// Sound effect types inspired by Flow Launcher feedback sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2905,8 +2980,10 @@ pub fn copy_to_clipboard(text: &str) -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        type MsgSend0 =
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type MsgSend0 = unsafe extern "C" fn(
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
         type MsgSendCStr = unsafe extern "C" fn(
             *mut std::ffi::c_void,
             *mut std::ffi::c_void,
@@ -2944,11 +3021,8 @@ pub fn copy_to_clipboard(text: &str) -> bool {
                     let utf8_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
                     if let Ok(c_text) = std::ffi::CString::new(text) {
                         let str_obj = msg_send_cstr(ns_string, utf8_sel, c_text.as_ptr());
-                        let pboard_type = msg_send_cstr(
-                            ns_string,
-                            utf8_sel,
-                            c"public.utf8-plain-text".as_ptr(),
-                        );
+                        let pboard_type =
+                            msg_send_cstr(ns_string, utf8_sel, c"public.utf8-plain-text".as_ptr());
 
                         if !str_obj.is_null() && !pboard_type.is_null() {
                             let set_str_sel = sel_registerName(c"setString:forType:".as_ptr());
@@ -3233,17 +3307,21 @@ mod tests {
         assert_eq!(sc4.display_label, "⌘⇧F");
 
         for spelling in ["Command+Command", "cmd+cmd", "Double ⌘", "⌘ ⌘"] {
-            let parsed = parse_macos_shortcut(spelling).expect("Double Command spelling should parse");
+            let parsed =
+                parse_macos_shortcut(spelling).expect("Double Command spelling should parse");
             assert_eq!(parsed.key_char, "");
             assert_eq!(parsed.modifier_mask, 0);
             assert_eq!(parsed.display_label, "⌘ ⌘");
         }
 
-        assert_eq!(parse_macos_shortcut("Command+;"), Some(MacShortcutInfo {
-            key_char: ";".to_string(),
-            modifier_mask: 0x0010_0000,
-            display_label: "⌘;".to_string(),
-        }));
+        assert_eq!(
+            parse_macos_shortcut("Command+;"),
+            Some(MacShortcutInfo {
+                key_char: ";".to_string(),
+                modifier_mask: 0x0010_0000,
+                display_label: "⌘;".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -3325,4 +3403,3 @@ mod tests {
         assert_eq!(rx.recv().await.unwrap(), PlatformCommand::Quit);
     }
 }
-

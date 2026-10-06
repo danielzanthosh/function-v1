@@ -1,7 +1,7 @@
+use crate::Theme;
 use gpui::prelude::*;
 use gpui::*;
-use crate::Theme;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, Alignment};
+use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
 
 /// Formats a raw LaTeX mathematical expression into a readable Unicode math string,
 /// or cleans raw math notation.
@@ -20,7 +20,8 @@ pub fn format_latex(raw: &str) -> String {
     }
 
     // Common Greek Letters
-    s = s.replace("\\alpha", "α")
+    s = s
+        .replace("\\alpha", "α")
         .replace("\\beta", "β")
         .replace("\\gamma", "γ")
         .replace("\\delta", "δ")
@@ -55,7 +56,8 @@ pub fn format_latex(raw: &str) -> String {
         .replace("\\Omega", "Ω");
 
     // Math Operators & Symbols
-    s = s.replace("\\times", "×")
+    s = s
+        .replace("\\times", "×")
         .replace("\\cdot", "·")
         .replace("\\div", "÷")
         .replace("\\pm", "±")
@@ -127,7 +129,8 @@ pub fn format_latex(raw: &str) -> String {
     }
 
     // Common superscripts
-    s = s.replace("^0", "⁰")
+    s = s
+        .replace("^0", "⁰")
         .replace("^1", "¹")
         .replace("^2", "²")
         .replace("^3", "³")
@@ -156,7 +159,8 @@ pub fn format_latex(raw: &str) -> String {
         .replace("^{9}", "⁹");
 
     // Common subscripts
-    s = s.replace("_0", "₀")
+    s = s
+        .replace("_0", "₀")
         .replace("_1", "₁")
         .replace("_2", "₂")
         .replace("_3", "₃")
@@ -179,7 +183,8 @@ pub fn format_latex(raw: &str) -> String {
         .replace("_{n}", "ₙ");
 
     // Clean up braces and formatting commands
-    s = s.replace("\\left(", "(")
+    s = s
+        .replace("\\left(", "(")
         .replace("\\right)", ")")
         .replace("\\left[", "[")
         .replace("\\right]", "]")
@@ -199,11 +204,25 @@ pub fn format_latex(raw: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathNode {
     Text(String),
-    Fraction { num: String, den: String },
-    Sqrt { content: String, root: Option<String> },
-    Matrix { rows: Vec<Vec<String>> },
-    Superscript { base: String, exp: String },
-    Subscript { base: String, sub: String },
+    Fraction {
+        num: String,
+        den: String,
+    },
+    Sqrt {
+        content: String,
+        root: Option<String>,
+    },
+    Matrix {
+        rows: Vec<Vec<String>>,
+    },
+    Superscript {
+        base: String,
+        exp: String,
+    },
+    Subscript {
+        base: String,
+        sub: String,
+    },
 }
 
 /// Parse a LaTeX math string into a sequence of MathNodes for visual layout rendering
@@ -225,7 +244,10 @@ pub fn parse_math_nodes(raw: &str) -> Vec<MathNode> {
     // Check for Matrix environment (\begin{matrix} or \begin{pmatrix} or \begin{bmatrix})
     if let Some(begin_idx) = s.find("\\begin{") {
         if s.find("matrix}").is_some() {
-            let env_start = s[begin_idx..].find('}').map(|i| begin_idx + i + 1).unwrap_or(begin_idx);
+            let env_start = s[begin_idx..]
+                .find('}')
+                .map(|i| begin_idx + i + 1)
+                .unwrap_or(begin_idx);
             let env_end = s.rfind("\\end{").unwrap_or(s.len());
             if env_start < env_end {
                 let body = &s[env_start..env_end];
@@ -286,13 +308,7 @@ pub fn render_math_node(node: &MathNode, theme: &Theme) -> Div {
                     .text_color(theme.text_primary)
                     .child(num.clone()),
             )
-            .child(
-                div()
-                    .w_full()
-                    .h(px(1.0))
-                    .bg(theme.text_primary)
-                    .my(px(1.0)),
-            )
+            .child(div().w_full().h(px(1.0)).bg(theme.text_primary).my(px(1.0)))
             .child(
                 div()
                     .text_xs()
@@ -402,7 +418,10 @@ pub fn render_display_math(raw_math: &str, theme: &Theme) -> Div {
         .max_w_full()
         .overflow_x_hidden()
         .rounded_lg()
-        .bg(Rgba { a: 0.12, ..theme.accent_primary })
+        .bg(Rgba {
+            a: 0.12,
+            ..theme.accent_primary
+        })
         .border_1()
         .border_color(theme.border_subtle);
 
@@ -564,7 +583,11 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                         current_code_lang = match kind {
                             pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                                 let l = lang.to_string();
-                                if l.is_empty() { None } else { Some(l) }
+                                if l.is_empty() {
+                                    None
+                                } else {
+                                    Some(l)
+                                }
                             }
                             pulldown_cmark::CodeBlockKind::Indented => None,
                         };
@@ -741,7 +764,9 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                                 .flex()
                                 .items_center()
                                 .when(r_idx % 2 == 1, |p| p.bg(theme.surface_input))
-                                .when(r_idx < rows.len() - 1, |p| p.border_b_1().border_color(theme.border_subtle));
+                                .when(r_idx < rows.len() - 1, |p| {
+                                    p.border_b_1().border_color(theme.border_subtle)
+                                });
 
                             for (c_idx, cell) in row.iter().enumerate() {
                                 let align = aligns.get(c_idx).cloned().unwrap_or(Alignment::None);
@@ -825,11 +850,27 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                     TagEnd::Heading(_) => {
                         let level = current_heading_level.take().unwrap_or(1);
                         let heading_el = match level {
-                            1 => div().text_lg().font_weight(FontWeight::BOLD).text_color(theme.text_primary).pt_2().pb_1(),
-                            2 => div().text_base().font_weight(FontWeight::BOLD).text_color(theme.text_primary).pt_2().pb_1(),
-                            _ => div().text_sm().font_weight(FontWeight::BOLD).text_color(theme.text_primary).pt_1().pb_1(),
+                            1 => div()
+                                .text_lg()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.text_primary)
+                                .pt_2()
+                                .pb_1(),
+                            2 => div()
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.text_primary)
+                                .pt_2()
+                                .pb_1(),
+                            _ => div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.text_primary)
+                                .pt_1()
+                                .pb_1(),
                         };
-                        container = container.child(heading_el.child(render_inline_text(&heading_text, theme)));
+                        container = container
+                            .child(heading_el.child(render_inline_text(&heading_text, theme)));
                         heading_text.clear();
                     }
                     TagEnd::Paragraph => {
@@ -890,13 +931,8 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
                     }
                 }
                 Event::Rule => {
-                    container = container.child(
-                        div()
-                            .w_full()
-                            .h(px(1.0))
-                            .bg(theme.border_subtle)
-                            .my_2(),
-                    );
+                    container =
+                        container.child(div().w_full().h(px(1.0)).bg(theme.border_subtle).my_2());
                 }
                 Event::SoftBreak | Event::HardBreak => {
                     if in_code_block {
@@ -1007,7 +1043,10 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                 .px_1()
                 .py(px(1.0))
                 .rounded_sm()
-                .bg(Rgba { a: 0.12, ..theme.accent_primary });
+                .bg(Rgba {
+                    a: 0.12,
+                    ..theme.accent_primary
+                });
 
             for node in &nodes {
                 math_div = math_div.child(render_math_node(node, theme));
@@ -1088,13 +1127,19 @@ pub fn render_inline_text(text: &str, theme: &Theme) -> Div {
                                     .px_2()
                                     .py_0p5()
                                     .rounded_md()
-                                    .bg(Rgba { a: 0.2, ..theme.accent_primary })
+                                    .bg(Rgba {
+                                        a: 0.2,
+                                        ..theme.accent_primary
+                                    })
                                     .border_1()
                                     .border_color(theme.accent_primary)
                                     .text_xs()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
-                                    .child(format!("📷 {}", tag.trim_start_matches("[Photo: ").trim_end_matches(']'))),
+                                    .child(format!(
+                                        "📷 {}",
+                                        tag.trim_start_matches("[Photo: ").trim_end_matches(']')
+                                    )),
                             );
                             remaining = &rest[end + 1..];
                         } else {

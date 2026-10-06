@@ -53,7 +53,10 @@ pub fn render_function_motif(
             .justify_center()
             .w(px(width))
             .h(px(height))
-            .child(render_brand_mark_with_mode(width, theme.mode == crate::theme::ThemeMode::Light)),
+            .child(render_brand_mark_with_mode(
+                width,
+                theme.mode == crate::theme::ThemeMode::Light,
+            )),
         MotifState::Listening => {
             // Subtle rhythmic acoustic breath (shifts opacity slightly between 0.75 and 1.0)
             let opacity = match tick % 4 {
@@ -69,7 +72,10 @@ pub fn render_function_motif(
                 .w(px(width))
                 .h(px(height))
                 .opacity(opacity)
-                .child(render_brand_mark_with_mode(width, theme.mode == crate::theme::ThemeMode::Light))
+                .child(render_brand_mark_with_mode(
+                    width,
+                    theme.mode == crate::theme::ThemeMode::Light,
+                ))
         }
         MotifState::Thinking => {
             // Precision cognitive pulse across the particle horizon
@@ -86,14 +92,20 @@ pub fn render_function_motif(
                 .w(px(width))
                 .h(px(height))
                 .opacity(opacity)
-                .child(render_brand_mark_with_mode(width, theme.mode == crate::theme::ThemeMode::Light))
+                .child(render_brand_mark_with_mode(
+                    width,
+                    theme.mode == crate::theme::ThemeMode::Light,
+                ))
         }
         MotifState::Acting => div()
             .flex()
             .items_center()
             .justify_center()
             .gap_1()
-            .child(render_brand_mark_with_mode(width * 0.85, theme.mode == crate::theme::ThemeMode::Light))
+            .child(render_brand_mark_with_mode(
+                width * 0.85,
+                theme.mode == crate::theme::ThemeMode::Light,
+            ))
             .child(
                 div()
                     .text_xs()

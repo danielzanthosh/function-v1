@@ -55,13 +55,22 @@ pub fn compact_messages(
     let mut image_messages = compacted
         .iter()
         .enumerate()
-        .filter(|(_, message)| message.images.as_ref().is_some_and(|images| !images.is_empty()))
+        .filter(|(_, message)| {
+            message
+                .images
+                .as_ref()
+                .is_some_and(|images| !images.is_empty())
+        })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     while image_messages.len() > 2 {
         if let Some(index) = image_messages.first().copied() {
             if let Some(message) = compacted.get_mut(index) {
-                report.removed_images += message.images.take().map(|images| images.len()).unwrap_or(0);
+                report.removed_images += message
+                    .images
+                    .take()
+                    .map(|images| images.len())
+                    .unwrap_or(0);
             }
         }
         image_messages.remove(0);
@@ -133,13 +142,27 @@ mod tests {
     #[test]
     fn compaction_preserves_system_and_current_task() {
         let mut messages = vec![message(MessageRole::System, "system instructions")];
-        messages.extend((0..8).map(|index| message(MessageRole::Tool, &"old output ".repeat(600 + index))));
+        messages.extend(
+            (0..8).map(|index| message(MessageRole::Tool, &"old output ".repeat(600 + index))),
+        );
         messages.push(message(MessageRole::User, "current task"));
-        let (compacted, report) = compact_messages(&messages, ContextBudget { context_limit: 700, output_reserve: 100 });
+        let (compacted, report) = compact_messages(
+            &messages,
+            ContextBudget {
+                context_limit: 700,
+                output_reserve: 100,
+            },
+        );
         assert_eq!(compacted.first().unwrap().content, "system instructions");
         assert_eq!(compacted.last().unwrap().content, "current task");
         assert!(report.removed_messages > 0 || report.truncated_outputs > 0);
-        assert!(messages_fit(&compacted, ContextBudget { context_limit: 700, output_reserve: 100 }));
+        assert!(messages_fit(
+            &compacted,
+            ContextBudget {
+                context_limit: 700,
+                output_reserve: 100
+            }
+        ));
     }
 
     #[test]

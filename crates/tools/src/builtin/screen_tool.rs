@@ -81,7 +81,12 @@ impl Tool for ScreenTool {
                         let _ = std::fs::write(&path, &bytes);
 
                         Ok(ToolResult::success(
-                            format!("Screenshot captured successfully ({}x{}, {} KB)", dims.width, dims.height, bytes.len() / 1024),
+                            format!(
+                                "Screenshot captured successfully ({}x{}, {} KB)",
+                                dims.width,
+                                dims.height,
+                                bytes.len() / 1024
+                            ),
                             json!({
                                 "status": "success",
                                 "width": dims.width,

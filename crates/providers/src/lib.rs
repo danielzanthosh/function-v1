@@ -3,16 +3,16 @@
 //! Provides a vendor-neutral interface with support for OpenAI-compatible LLM endpoints,
 //! Whisper-based speech recognition, and pluggable search services.
 
-pub mod openai;
-pub mod search;
+pub mod chatgpt_oauth;
+pub mod codex;
 pub mod context_limits;
 pub mod gemini;
-pub mod codex;
-pub mod chatgpt_oauth;
+pub mod openai;
+pub mod search;
 
-pub use openai::{OpenAiLlmProvider, OpenAiTtsProvider, WhisperSttProvider};
-pub use gemini::GeminiLlmProvider;
 pub use codex::CodexChatGptProvider;
+pub use gemini::GeminiLlmProvider;
+pub use openai::{OpenAiLlmProvider, OpenAiTtsProvider, WhisperSttProvider};
 pub use search::DuckDuckGoSearchProvider;
 
 use async_trait::async_trait;
@@ -121,6 +121,8 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thought_signature: Option<String>,
 }
 
 /// Tool definition presented to the model.

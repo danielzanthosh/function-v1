@@ -33,8 +33,9 @@ fn main() {
     // 1. Initialize structured logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,function=debug,gpui::platform::windows::directx_devices=off".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "info,function=debug,gpui::platform::windows::directx_devices=off".into()
+            }),
         )
         .init();
 
@@ -51,7 +52,8 @@ fn main() {
     );
 
     // 3. Initialize native platform integration
-    let platform: std::sync::Arc<dyn PlatformService> = std::sync::Arc::from(create_native_platform_service());
+    let platform: std::sync::Arc<dyn PlatformService> =
+        std::sync::Arc::from(create_native_platform_service());
     tracing::info!(
         platform = platform.platform_name(),
         "Platform service initialized"

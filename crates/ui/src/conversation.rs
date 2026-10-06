@@ -28,10 +28,7 @@ pub struct SavedConversation {
 }
 
 impl SavedConversation {
-    pub fn new(
-        display_messages: Vec<ChatEntry>,
-        api_messages: Vec<ChatMessage>,
-    ) -> Self {
+    pub fn new(display_messages: Vec<ChatEntry>, api_messages: Vec<ChatMessage>) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())

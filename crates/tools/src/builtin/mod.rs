@@ -46,4 +46,3 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
     registry.register(FileTool::new());
     registry.register(TerminalTool::new());
 }
-

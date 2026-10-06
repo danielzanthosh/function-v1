@@ -32,12 +32,27 @@ pub enum AgentError {
 pub enum AgentState {
     Idle,
     Listening,
-    Processing { thought_summary: Option<String> },
-    Streaming { chunk: String, accumulated: String },
-    Acting { action_description: String },
-    WaitingForConfirmation { action: String, details: String },
-    Completed { summary: String, new_history: Vec<ChatMessage> },
-    Error { message: String },
+    Processing {
+        thought_summary: Option<String>,
+    },
+    Streaming {
+        chunk: String,
+        accumulated: String,
+    },
+    Acting {
+        action_description: String,
+    },
+    WaitingForConfirmation {
+        action: String,
+        details: String,
+    },
+    Completed {
+        summary: String,
+        new_history: Vec<ChatMessage>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl PartialEq for AgentState {
@@ -54,15 +69,28 @@ impl PartialEq for AgentState {
                 AgentState::Streaming { accumulated: b, .. },
             ) => a == b,
             (
-                AgentState::Acting { action_description: a },
-                AgentState::Acting { action_description: b },
+                AgentState::Acting {
+                    action_description: a,
+                },
+                AgentState::Acting {
+                    action_description: b,
+                },
             ) => a == b,
             (
-                AgentState::WaitingForConfirmation { action: a, details: c },
-                AgentState::WaitingForConfirmation { action: b, details: d },
+                AgentState::WaitingForConfirmation {
+                    action: a,
+                    details: c,
+                },
+                AgentState::WaitingForConfirmation {
+                    action: b,
+                    details: d,
+                },
             ) => a == b && c == d,
             // Compare only the summary; history is not used for equality checks
-            (AgentState::Completed { summary: a, .. }, AgentState::Completed { summary: b, .. }) => a == b,
+            (
+                AgentState::Completed { summary: a, .. },
+                AgentState::Completed { summary: b, .. },
+            ) => a == b,
             (AgentState::Error { message: a }, AgentState::Error { message: b }) => a == b,
             _ => false,
         }
@@ -246,7 +274,8 @@ Agentic Multi-Step & Observation Loop:
                 context_limit: provider.context_limit("default"),
                 output_reserve: 4_096,
             };
-            let (request_messages, compaction) = context::compact_messages(&messages, context_budget);
+            let (request_messages, compaction) =
+                context::compact_messages(&messages, context_budget);
             if compaction.before_tokens != compaction.after_tokens {
                 tracing::info!(
                     provider = %provider.name(),

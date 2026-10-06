@@ -69,7 +69,8 @@ pub fn get_installed_applications() -> Vec<(String, String)> {
             search_dirs.push(PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs"));
         }
         if let Ok(programdata) = std::env::var("ProgramData") {
-            search_dirs.push(PathBuf::from(programdata).join(r"Microsoft\Windows\Start Menu\Programs"));
+            search_dirs
+                .push(PathBuf::from(programdata).join(r"Microsoft\Windows\Start Menu\Programs"));
         }
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
             search_dirs.push(PathBuf::from(localappdata).join(r"Programs"));
@@ -109,7 +110,11 @@ pub fn get_installed_applications() -> Vec<(String, String)> {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) == Some("desktop") {
-                        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                        let name = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
                         if !name.is_empty() {
                             apps.push((name, path.to_string_lossy().to_string()));
                         }
@@ -158,7 +163,11 @@ fn scan_windows_apps(dir: &Path, apps: &mut Vec<(String, String)>, depth: usize)
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if ext == "lnk" || ext == "exe" {
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let lower = stem.to_lowercase();
@@ -245,10 +254,7 @@ pub fn search_apps_and_files(query: &str) -> Vec<SearchItem> {
         if let Ok(entries) = std::fs::read_dir(root) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let file_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let file_lower = file_name.to_lowercase();
 
                 // Skip hidden files
@@ -322,14 +328,19 @@ mod tests {
     #[test]
     fn test_get_installed_applications_not_empty() {
         let apps = get_installed_applications();
-        assert!(!apps.is_empty(), "Should discover system applications or built-in tools");
+        assert!(
+            !apps.is_empty(),
+            "Should discover system applications or built-in tools"
+        );
     }
 
     #[test]
     fn test_search_common_folder() {
         let results = search_apps_and_files("desktop");
         assert!(
-            results.iter().any(|r| r.name.eq_ignore_ascii_case("desktop")),
+            results
+                .iter()
+                .any(|r| r.name.eq_ignore_ascii_case("desktop")),
             "Should find Desktop folder"
         );
     }

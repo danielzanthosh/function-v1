@@ -1,4 +1,7 @@
-use crate::{context_limits::model_context_limit, CompletionRequest, CompletionResponse, LlmProvider, OpenAiLlmProvider, ProviderError};
+use crate::{
+    context_limits::model_context_limit, CompletionRequest, CompletionResponse, LlmProvider,
+    OpenAiLlmProvider, ProviderError,
+};
 use async_trait::async_trait;
 
 pub const GEMINI_OPENAI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
