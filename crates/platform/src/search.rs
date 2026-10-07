@@ -336,6 +336,8 @@ mod tests {
 
     #[test]
     fn test_search_common_folder() {
+        let home = get_home_dir();
+        let _ = std::fs::create_dir_all(home.join("Desktop"));
         let results = search_apps_and_files("desktop");
         assert!(
             results
