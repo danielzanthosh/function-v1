@@ -511,14 +511,6 @@ impl LlmProvider for OpenAiLlmProvider {
         req: CompletionRequest,
         mut on_token: Box<dyn FnMut(String) + Send>,
     ) -> Result<CompletionResponse, ProviderError> {
-        if !req.tools.is_empty() {
-            let res = self.complete(req).await?;
-            if !res.message.content.is_empty() {
-                on_token(res.message.content.clone());
-            }
-            return Ok(res);
-        }
-
         let endpoint = format!("{}/chat/completions", self.base_url);
         let model = if req.model.is_empty() || req.model == "default" {
             &self.default_model
@@ -627,13 +619,36 @@ impl LlmProvider for OpenAiLlmProvider {
             payload["temperature"] = json!(temp);
         }
 
+        if !req.tools.is_empty() {
+            let tools_json: Vec<serde_json::Value> = req
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        }
+                    })
+                })
+                .collect();
+            payload["tools"] = json!(tools_json);
+        }
+
         let body_str = payload.to_string();
         let base_url = endpoint.clone();
         let api_key = self.api_key.clone();
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        enum StreamEvent {
+            Token(String),
+            Error(u16, String),
+        }
 
-        let stream_task = tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+
+        let stream_task = tokio::task::spawn_blocking(move || -> Result<CompletionResponse, ProviderError> {
             use std::io::{BufRead, BufReader, Write};
             let curl_bin = if cfg!(target_os = "windows") {
                 "curl.exe"
@@ -655,7 +670,10 @@ impl LlmProvider for OpenAiLlmProvider {
                 }
             }
 
-            cmd.arg("--data-binary").arg("@-");
+            cmd.arg("--data-binary")
+                .arg("@-")
+                .arg("-w")
+                .arg(format!("{}%{{http_code}}", CURL_STATUS_MARKER));
             cmd.stdin(std::process::Stdio::piped());
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
@@ -670,25 +688,197 @@ impl LlmProvider for OpenAiLlmProvider {
                     .map_err(|e| ProviderError::Network(e.to_string()))?;
             }
 
-            let mut accumulated = String::new();
+            let mut accumulated_content = String::new();
+            let mut accumulated_tool_calls: Vec<ToolCall> = Vec::new();
+            let mut thought_signature: Option<String> = None;
+            let mut finish_reason: Option<String> = None;
+            let mut current_event_type: Option<String> = None;
+            let mut http_status: Option<u16> = None;
+            let mut raw_response_buffer = String::new();
+
             if let Some(stdout) = child.stdout.take() {
                 let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(line_str) = line {
-                        let trimmed = line_str.trim();
-                        if trimmed.starts_with("data: ") {
-                            let data = &trimmed[6..];
-                            if data.trim() == "[DONE]" {
-                                break;
-                            }
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+                for line_res in reader.lines() {
+                    let line_str = match line_res {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::warn!("Failed to read SSE line: {}", e);
+                            continue;
+                        }
+                    };
+
+                    raw_response_buffer.push_str(&line_str);
+                    raw_response_buffer.push('\n');
+
+                    let mut line_to_process = line_str.as_str();
+                    if let Some((body_part, status_part)) = line_to_process.rsplit_once(CURL_STATUS_MARKER) {
+                        if let Ok(code) = status_part.trim().parse::<u16>() {
+                            http_status = Some(code);
+                        }
+                        line_to_process = body_part;
+                    }
+
+                    let trimmed = line_to_process.trim();
+                    if trimmed.is_empty() {
+                        current_event_type = None;
+                        continue;
+                    }
+
+                    if trimmed.starts_with("event:") {
+                        let ev_type = trimmed["event:".len()..].trim().to_string();
+                        tracing::debug!(raw_event_type = %ev_type, "Received SSE event type");
+                        current_event_type = Some(ev_type);
+                        continue;
+                    }
+
+                    if trimmed.starts_with("data:") {
+                        let data_str = trimmed["data:".len()..].trim();
+                        tracing::debug!(
+                            event_type = ?current_event_type,
+                            data_len = data_str.len(),
+                            "Processing SSE data chunk"
+                        );
+
+                        if data_str == "[DONE]" {
+                            break;
+                        }
+
+                        if current_event_type.as_deref() == Some("error") {
+                            let status_code = http_status.unwrap_or(200);
+                            let err_msg = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data_str) {
+                                provider_error_message(&parsed, data_str)
+                            } else {
+                                data_str.to_string()
+                            };
+                            let sanitized_msg = function_config::redact_secrets(&err_msg);
+                            tracing::warn!(
+                                http_status = status_code,
+                                error_message = %sanitized_msg,
+                                raw_data = %function_config::redact_secrets(data_str),
+                                "Provider emitted error event in SSE stream"
+                            );
+                            let _ = tx.send(StreamEvent::Error(status_code, err_msg.clone()));
+                            return Err(ProviderError::Api {
+                                code: status_code,
+                                message: err_msg,
+                            });
+                        }
+
+                        match serde_json::from_str::<serde_json::Value>(data_str) {
+                            Ok(val) => {
+                                if val.get("error").is_some() {
+                                    let status_code = http_status.unwrap_or(200);
+                                    let err_msg = provider_error_message(&val, data_str);
+                                    let sanitized_msg = function_config::redact_secrets(&err_msg);
+                                    tracing::warn!(
+                                        http_status = status_code,
+                                        error_message = %sanitized_msg,
+                                        raw_data = %function_config::redact_secrets(data_str),
+                                        "JSON error injected into SSE stream data"
+                                    );
+                                    let _ = tx.send(StreamEvent::Error(status_code, err_msg.clone()));
+                                    return Err(ProviderError::Api {
+                                        code: status_code,
+                                        message: err_msg,
+                                    });
+                                }
+
+                                if let Some(sig) = val
+                                    .pointer("/choices/0/delta/thought_signature")
+                                    .or_else(|| val.pointer("/choices/0/thought_signature"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    thought_signature = Some(sig.to_string());
+                                }
+
+                                if let Some(fr) = val
+                                    .pointer("/choices/0/finish_reason")
+                                    .and_then(|v| v.as_str())
+                                {
+                                    finish_reason = Some(fr.to_string());
+                                }
+
                                 if let Some(delta) = val
                                     .pointer("/choices/0/delta/content")
                                     .and_then(|v| v.as_str())
                                 {
-                                    accumulated.push_str(delta);
-                                    let _ = tx.send(delta.to_string());
+                                    accumulated_content.push_str(delta);
+                                    let _ = tx.send(StreamEvent::Token(delta.to_string()));
                                 }
+
+                                if let Some(tool_calls_arr) = val
+                                    .pointer("/choices/0/delta/tool_calls")
+                                    .and_then(|v| v.as_array())
+                                {
+                                    for tc_val in tool_calls_arr {
+                                        let idx = tc_val.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                        while accumulated_tool_calls.len() <= idx {
+                                            accumulated_tool_calls.push(ToolCall {
+                                                id: format!("call_{}", accumulated_tool_calls.len()),
+                                                name: String::new(),
+                                                arguments: json!({}),
+                                                thought_signature: None,
+                                            });
+                                        }
+
+                                        if let Some(id_str) = tc_val.get("id").and_then(|i| i.as_str()) {
+                                            accumulated_tool_calls[idx].id = id_str.to_string();
+                                        }
+
+                                        if let Some(func) = tc_val.get("function") {
+                                            if let Some(name_str) = func.get("name").and_then(|n| n.as_str()) {
+                                                accumulated_tool_calls[idx].name.push_str(name_str);
+                                            }
+                                            if let Some(args_str) = func.get("arguments").and_then(|a| a.as_str()) {
+                                                let curr_args = match &accumulated_tool_calls[idx].arguments {
+                                                    serde_json::Value::String(s) => format!("{}{}", s, args_str),
+                                                    serde_json::Value::Object(map) if map.is_empty() => args_str.to_string(),
+                                                    val => format!("{}{}", val.as_str().unwrap_or(""), args_str),
+                                                };
+                                                accumulated_tool_calls[idx].arguments = serde_json::Value::String(curr_args);
+                                            }
+                                        }
+                                    }
+                                }
+
+                            }
+                            Err(parse_err) => {
+                                let status_code = http_status.unwrap_or(200);
+                                tracing::warn!(
+                                    http_status = status_code,
+                                    parse_error = %parse_err,
+                                    raw_data = %function_config::redact_secrets(data_str),
+                                    "Failed to parse SSE JSON payload"
+                                );
+                                if current_event_type.as_deref() == Some("error") || status_code >= 400 {
+                                    let err_msg = format!("Non-JSON SSE payload: {}", data_str);
+                                    let _ = tx.send(StreamEvent::Error(status_code, err_msg.clone()));
+                                    return Err(ProviderError::Api {
+                                        code: status_code,
+                                        message: err_msg,
+                                    });
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    if trimmed.starts_with('{') {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            if val.get("error").is_some() {
+                                let status_code = http_status.unwrap_or(400);
+                                let err_msg = provider_error_message(&val, trimmed);
+                                let sanitized_msg = function_config::redact_secrets(&err_msg);
+                                tracing::warn!(
+                                    http_status = status_code,
+                                    error_message = %sanitized_msg,
+                                    "Direct JSON error response received during SSE stream"
+                                );
+                                let _ = tx.send(StreamEvent::Error(status_code, err_msg.clone()));
+                                return Err(ProviderError::Api {
+                                    code: status_code,
+                                    message: err_msg,
+                                });
                             }
                         }
                     }
@@ -696,28 +886,66 @@ impl LlmProvider for OpenAiLlmProvider {
             }
 
             let _ = child.wait();
-            Ok(accumulated)
+
+            let status_code = http_status.unwrap_or(200);
+            if status_code >= 400 {
+                let err_msg = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw_response_buffer) {
+                    provider_error_message(&val, &raw_response_buffer)
+                } else if raw_response_buffer.trim().is_empty() {
+                    format!("HTTP status {}", status_code)
+                } else {
+                    raw_response_buffer.trim().chars().take(1000).collect()
+                };
+                let _ = tx.send(StreamEvent::Error(status_code, err_msg.clone()));
+                return Err(ProviderError::Api {
+                    code: status_code,
+                    message: err_msg,
+                });
+            }
+
+            for tc in &mut accumulated_tool_calls {
+                if let serde_json::Value::String(s) = &tc.arguments {
+                    tc.arguments = serde_json::from_str(s).unwrap_or_else(|_| json!({ "raw": s }));
+                }
+            }
+
+            let tool_calls = if accumulated_tool_calls.is_empty() {
+                None
+            } else {
+                Some(accumulated_tool_calls)
+            };
+
+            Ok(CompletionResponse {
+                message: ChatMessage {
+                    role: MessageRole::Assistant,
+                    content: accumulated_content,
+                    images: None,
+                    tool_call_id: None,
+                    tool_calls,
+                    thought_signature,
+                },
+                finish_reason: finish_reason.or_else(|| Some("stop".to_string())),
+            })
         });
 
-        while let Some(chunk) = rx.recv().await {
-            on_token(chunk);
+        let mut stream_error = None;
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Token(token) => on_token(token),
+                StreamEvent::Error(code, message) => {
+                    stream_error = Some(ProviderError::Api { code, message });
+                    break;
+                }
+            }
         }
 
-        let full_content = stream_task
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))??;
+        if let Some(err) = stream_error {
+            return Err(err);
+        }
 
-        Ok(CompletionResponse {
-            message: ChatMessage {
-                role: MessageRole::Assistant,
-                content: full_content,
-                images: None,
-                tool_call_id: None,
-                tool_calls: None,
-                thought_signature: None,
-            },
-            finish_reason: Some("stop".to_string()),
-        })
+        stream_task
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?
     }
 }
 
@@ -1252,6 +1480,107 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "open_app");
         assert_eq!(calls[1].name, "take_screenshot");
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_handles_error_event() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                use std::io::Write;
+                let sse_response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\nevent: error\r\ndata: {\"error\": {\"message\": \"JSON error injected into SSE stream\"}}\n\n";
+                let _ = socket.write_all(sse_response.as_bytes());
+            }
+        });
+
+        let provider = OpenAiLlmProvider::new(
+            format!("http://{}", addr),
+            Some("test_key".to_string()),
+            "gpt-4o",
+        );
+
+        let req = CompletionRequest {
+            model: "default".to_string(),
+            messages: vec![ChatMessage::user("hi")],
+            tools: vec![],
+            temperature: None,
+        };
+
+        let result = provider.complete_stream(req, Box::new(|_| {})).await;
+        assert!(result.is_err());
+        if let Err(ProviderError::Api { code, message }) = result {
+            assert_eq!(code, 200);
+            assert!(message.contains("JSON error injected into SSE stream"));
+        } else {
+            panic!("Expected ProviderError::Api, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_handles_injected_json_error_in_data() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                use std::io::Write;
+                let sse_response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"error\": {\"message\": \"Direct JSON error in data payload\", \"code\": 500}}\n\n";
+                let _ = socket.write_all(sse_response.as_bytes());
+            }
+        });
+
+        let provider = OpenAiLlmProvider::new(
+            format!("http://{}", addr),
+            Some("test_key".to_string()),
+            "gpt-4o",
+        );
+
+        let req = CompletionRequest {
+            model: "default".to_string(),
+            messages: vec![ChatMessage::user("hi")],
+            tools: vec![],
+            temperature: None,
+        };
+
+        let result = provider.complete_stream(req, Box::new(|_| {})).await;
+        assert!(result.is_err());
+        if let Err(ProviderError::Api { message, .. }) = result {
+            assert!(message.contains("Direct JSON error in data payload"));
+        } else {
+            panic!("Expected ProviderError::Api, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_successful_tokens() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                use std::io::Write;
+                let sse_response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {\"choices\": [{\"delta\": {\"content\": \"Hello \"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"world\"}}]}\n\ndata: [DONE]\n\n";
+                let _ = socket.write_all(sse_response.as_bytes());
+            }
+        });
+
+        let provider = OpenAiLlmProvider::new(
+            format!("http://{}", addr),
+            Some("test_key".to_string()),
+            "gpt-4o",
+        );
+
+        let req = CompletionRequest {
+            model: "default".to_string(),
+            messages: vec![ChatMessage::user("hi")],
+            tools: vec![],
+            temperature: None,
+        };
+
+        let res = provider.complete_stream(req, Box::new(|_| {})).await.unwrap();
+        assert_eq!(res.message.content, "Hello world");
     }
 
     #[test]

@@ -542,7 +542,10 @@ impl FunctionView {
                                         );
                                     }
                                 }
-                                AgentState::Error { message } => {
+                                AgentState::Error {
+                                    message,
+                                    new_history,
+                                } => {
                                     view.state = state_clone.clone();
                                     let err_text = format!("Error: {}", message);
                                     view.latest_result = Some(err_text.clone());
@@ -550,6 +553,10 @@ impl FunctionView {
                                         is_user: false,
                                         text: err_text,
                                     });
+                                    if let Some(hist) = new_history {
+                                        view.chat_history_api = hist.clone();
+                                        view.save_current_conversation();
+                                    }
                                     view.active_task = None;
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Error);

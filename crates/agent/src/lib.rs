@@ -24,6 +24,8 @@ pub enum AgentError {
     Canceled,
     #[error("Execution step limit exceeded")]
     StepLimitExceeded,
+    #[error("Repeated tool call loop detected: {0}")]
+    RepeatedToolCalls(String),
 }
 
 /// Agent lifecycle states observed by the UI.
@@ -52,6 +54,8 @@ pub enum AgentState {
     },
     Error {
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_history: Option<Vec<ChatMessage>>,
     },
 }
 
@@ -91,7 +95,10 @@ impl PartialEq for AgentState {
                 AgentState::Completed { summary: a, .. },
                 AgentState::Completed { summary: b, .. },
             ) => a == b,
-            (AgentState::Error { message: a }, AgentState::Error { message: b }) => a == b,
+            (
+                AgentState::Error { message: a, .. },
+                AgentState::Error { message: b, .. },
+            ) => a == b,
             _ => false,
         }
     }
@@ -144,6 +151,19 @@ impl Agent {
     pub fn is_canceled(&self) -> bool {
         self.cancel_requested
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn with_max_steps(mut self, max_steps: usize) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
+    pub fn set_max_steps(&mut self, max_steps: usize) {
+        self.max_steps = max_steps;
+    }
+
+    pub fn max_steps(&self) -> usize {
+        self.max_steps
     }
 
     /// Replace the active provider without rebuilding the agent or losing its
@@ -257,6 +277,8 @@ Agentic Multi-Step & Observation Loop:
 
         let mut step = 0;
         let mut final_result = String::new();
+        let mut consecutive_repeated_tool_calls = 0;
+        let mut last_step_tool_signature = String::new();
 
         while step < self.max_steps {
             if self.is_canceled() {
@@ -297,7 +319,7 @@ Agentic Multi-Step & Observation Loop:
 
             let state_tx_clone = self.state_tx.clone();
             let mut stream_accumulated = String::new();
-            let response = provider
+            let response = match provider
                 .complete_stream(
                     req,
                     Box::new(move |token: String| {
@@ -309,13 +331,17 @@ Agentic Multi-Step & Observation Loop:
                     }),
                 )
                 .await
-                .map_err(|e| {
+            {
+                Ok(res) => res,
+                Err(e) => {
                     let err = AgentError::Provider(e.to_string());
                     self.update_state(AgentState::Error {
                         message: err.to_string(),
+                        new_history: Some(history_tail.clone()),
                     });
-                    err
-                })?;
+                    return Err(err);
+                }
+            };
 
             if self.is_canceled() {
                 self.update_state(AgentState::Idle);
@@ -329,6 +355,39 @@ Agentic Multi-Step & Observation Loop:
                     final_result = response_msg.content.clone();
                     messages.push(response_msg);
                     break;
+                }
+
+                // Create signature for current tool calls to detect repeated tool-call loops
+                let current_sig = tool_calls
+                    .iter()
+                    .map(|c| format!("{}:{}", c.name, c.arguments))
+                    .collect::<Vec<_>>()
+                    .join("|");
+
+                if !current_sig.is_empty() && current_sig == last_step_tool_signature {
+                    consecutive_repeated_tool_calls += 1;
+                } else {
+                    consecutive_repeated_tool_calls = 1;
+                    last_step_tool_signature = current_sig.clone();
+                }
+
+                if consecutive_repeated_tool_calls >= 3 {
+                    let loop_msg = format!(
+                        "Identical tool call repeated {} times: {}",
+                        consecutive_repeated_tool_calls, tool_calls[0].name
+                    );
+                    tracing::warn!(
+                        step = step,
+                        tool = %tool_calls[0].name,
+                        repeated_count = consecutive_repeated_tool_calls,
+                        "Repeated tool-call loop detected"
+                    );
+                    let err = AgentError::RepeatedToolCalls(loop_msg);
+                    self.update_state(AgentState::Error {
+                        message: err.to_string(),
+                        new_history: Some(history_tail.clone()),
+                    });
+                    return Err(err);
                 }
 
                 messages.push(response_msg);
@@ -579,9 +638,14 @@ Agentic Multi-Step & Observation Loop:
         }
 
         if step >= self.max_steps && final_result.is_empty() {
+            tracing::warn!(
+                step_limit = self.max_steps,
+                "Agent execution step limit reached"
+            );
             let err = AgentError::StepLimitExceeded;
             self.update_state(AgentState::Error {
                 message: err.to_string(),
+                new_history: Some(history_tail.clone()),
             });
             return Err(err);
         }
@@ -618,6 +682,86 @@ mod tests {
 
         let state = rx.recv().await.unwrap();
         assert!(matches!(state, AgentState::Processing { .. }));
+    }
+
+    struct RepeatingToolMockProvider;
+
+    #[async_trait::async_trait]
+    impl function_providers::LlmProvider for RepeatingToolMockProvider {
+        fn name(&self) -> &str {
+            "repeating-tool-mock"
+        }
+
+        async fn complete(
+            &self,
+            _req: function_providers::CompletionRequest,
+        ) -> Result<function_providers::CompletionResponse, function_providers::ProviderError>
+        {
+            Ok(function_providers::CompletionResponse {
+                message: ChatMessage {
+                    role: function_providers::MessageRole::Assistant,
+                    content: String::new(),
+                    images: None,
+                    tool_call_id: None,
+                    tool_calls: Some(vec![function_providers::ToolCall {
+                        id: "call_repeat_1".to_string(),
+                        name: "execute_command".to_string(),
+                        arguments: serde_json::json!({ "command": "echo test" }),
+                        thought_signature: None,
+                    }]),
+                    thought_signature: None,
+                },
+                finish_reason: Some("tool_calls".to_string()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_max_steps_configuration_and_preserves_history() {
+        let provider = Arc::new(RepeatingToolMockProvider);
+        let tools = ToolRegistry::new();
+        let memory = Arc::new(InMemoryMemoryStore::new());
+        let agent = Agent::new(provider, tools, memory).with_max_steps(2);
+
+        let mut rx = agent.subscribe_state();
+        let result = agent.execute_task("Run infinite loop").await;
+
+        assert!(matches!(result, Err(AgentError::StepLimitExceeded)));
+
+        let mut found_error_with_history = false;
+        while let Ok(state) = rx.try_recv() {
+            if let AgentState::Error { message, new_history } = state {
+                assert!(message.contains("Execution step limit exceeded"));
+                assert!(new_history.is_some());
+                let hist = new_history.unwrap();
+                assert!(!hist.is_empty());
+                found_error_with_history = true;
+            }
+        }
+        assert!(found_error_with_history);
+    }
+
+    #[tokio::test]
+    async fn test_agent_detects_repeated_tool_call_loop() {
+        let provider = Arc::new(RepeatingToolMockProvider);
+        let tools = ToolRegistry::new();
+        let memory = Arc::new(InMemoryMemoryStore::new());
+        let agent = Agent::new(provider, tools, memory).with_max_steps(10);
+
+        let mut rx = agent.subscribe_state();
+        let result = agent.execute_task("Do repeating tool call").await;
+
+        assert!(matches!(result, Err(AgentError::RepeatedToolCalls(_))));
+
+        let mut found_error_with_history = false;
+        while let Ok(state) = rx.try_recv() {
+            if let AgentState::Error { message, new_history } = state {
+                assert!(message.contains("Repeated tool call loop detected"));
+                assert!(new_history.is_some());
+                found_error_with_history = true;
+            }
+        }
+        assert!(found_error_with_history);
     }
 
     #[tokio::test]
