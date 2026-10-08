@@ -66,6 +66,13 @@ pub enum LauncherAction {
     OpenSettings,
     NewConversation,
     OpenConversations,
+    ToggleTheme,
+    ToggleVoice,
+    ToggleSound,
+    ClearInput,
+    OpenMemory,
+    OpenAbout,
+    SetModel(String),
     RunTask(String),
     OpenPath(String),
 }
@@ -141,8 +148,15 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
     if lower.starts_with('/') {
         let all_slash_commands = vec![
             LauncherItem {
-                keyword: "/conversation".to_string(),
-                description: "Open Conversations page and chat history".to_string(),
+                keyword: "/memory".to_string(),
+                description: "Inspect persistent file memory and user preferences store".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::OpenMemory,
+            },
+            LauncherItem {
+                keyword: "/conversations".to_string(),
+                description: "Open Conversations page and browse chat history".to_string(),
                 shortcut: "Enter".to_string(),
                 icon_type: LauncherIconType::Function,
                 action: LauncherAction::OpenConversations,
@@ -155,11 +169,11 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
                 action: LauncherAction::OpenSettings,
             },
             LauncherItem {
-                keyword: "/new".to_string(),
-                description: "Start a fresh conversation and clear prompt history".to_string(),
+                keyword: "/themes".to_string(),
+                description: "Cycle application visual themes and color palettes".to_string(),
                 shortcut: "Enter".to_string(),
                 icon_type: LauncherIconType::Function,
-                action: LauncherAction::NewConversation,
+                action: LauncherAction::ToggleTheme,
             },
             LauncherItem {
                 keyword: "/help".to_string(),
@@ -168,11 +182,61 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
                 icon_type: LauncherIconType::Function,
                 action: LauncherAction::RunTask("Provide a clear overview of Function slash commands and desktop capabilities.".to_string()),
             },
+            LauncherItem {
+                keyword: "/clear".to_string(),
+                description: "Clear current prompt input and reset view".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::ClearInput,
+            },
+            LauncherItem {
+                keyword: "/new".to_string(),
+                description: "Start a fresh conversation and clear prompt history".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::NewConversation,
+            },
+            LauncherItem {
+                keyword: "/model".to_string(),
+                description: "View or select active AI provider model".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Settings,
+                action: LauncherAction::OpenSettings,
+            },
+            LauncherItem {
+                keyword: "/voice".to_string(),
+                description: "Toggle voice push-to-talk recording mode".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::ToggleVoice,
+            },
+            LauncherItem {
+                keyword: "/sound".to_string(),
+                description: "Toggle UI audio feedback and sound effects".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::ToggleSound,
+            },
+            LauncherItem {
+                keyword: "/about".to_string(),
+                description: "Display Function build information and system details".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::OpenAbout,
+            },
         ];
 
+        let typed_sub = lower.strip_prefix('/').unwrap_or("").trim();
         let filtered: Vec<LauncherItem> = all_slash_commands
             .into_iter()
-            .filter(|item| item.keyword.to_lowercase().starts_with(&lower))
+            .filter(|item| {
+                if typed_sub.is_empty() {
+                    true
+                } else {
+                    let cmd_name = item.keyword.strip_prefix('/').unwrap_or(&item.keyword).to_lowercase();
+                    cmd_name.starts_with(typed_sub) || item.keyword.to_lowercase().starts_with(&lower)
+                }
+            })
             .collect();
 
         if !filtered.is_empty() {
@@ -597,4 +661,35 @@ pub fn render_spotlight_bar(
                     .collect::<Vec<_>>(),
             ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slash_commands_list_and_filtering() {
+        let items_all = get_launcher_items("/");
+        assert!(items_all.len() >= 11);
+        let keywords: Vec<String> = items_all.iter().map(|i| i.keyword.clone()).collect();
+        assert!(keywords.contains(&"/memory".to_string()));
+        assert!(keywords.contains(&"/conversations".to_string()));
+        assert!(keywords.contains(&"/settings".to_string()));
+        assert!(keywords.contains(&"/themes".to_string()));
+        assert!(keywords.contains(&"/help".to_string()));
+        assert!(keywords.contains(&"/clear".to_string()));
+        assert!(keywords.contains(&"/new".to_string()));
+        assert!(keywords.contains(&"/model".to_string()));
+        assert!(keywords.contains(&"/voice".to_string()));
+        assert!(keywords.contains(&"/sound".to_string()));
+        assert!(keywords.contains(&"/about".to_string()));
+
+        let items_se = get_launcher_items("/se");
+        assert_eq!(items_se.len(), 1);
+        assert_eq!(items_se[0].keyword, "/settings");
+
+        let items_mem = get_launcher_items("/mem");
+        assert_eq!(items_mem.len(), 1);
+        assert_eq!(items_mem[0].keyword, "/memory");
+    }
 }

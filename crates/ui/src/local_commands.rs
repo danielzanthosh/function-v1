@@ -2,11 +2,19 @@
 //!
 //! Intercepts commands locally BEFORE they reach the AI agent or require an API key.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalCommand {
     Configure,
     NewConversation,
     OpenConversations,
+    ToggleTheme,
+    ToggleVoice,
+    ToggleSound,
+    ClearInput,
+    OpenMemory,
+    OpenAbout,
+    Help,
+    SetModel(String),
 }
 
 /// Resolve an explicit shell command prefix before AI dispatch.
@@ -21,7 +29,15 @@ pub fn resolve_shell_command(input: &str) -> Option<String> {
 /// Recognizes (case-insensitive, ignoring leading and trailing whitespace):
 /// - Settings: "settings", "configure", "preferences", "config", "/settings", "/configure"
 /// - New Chat: "conversation new", "new chat", "new conversation", "clear chat", "/new"
-/// - Conversations List: "conversation", "conversations", "history", "chats", "chat history", "/conversation", "/chats"
+/// - Conversations List: "conversation", "conversations", "history", "chats", "chat history", "/conversation", "/conversations", "/chats"
+/// - Themes: "/themes", "/theme"
+/// - Voice: "/voice"
+/// - Sound: "/sound"
+/// - Clear: "/clear"
+/// - Memory: "/memory"
+/// - About: "/about"
+/// - Help: "/help"
+/// - Model: "/model <name>"
 ///
 /// Returns `Some(LocalCommand)` if recognized, or `None` so unrecognized input
 /// continues through the AI agent pipeline.
@@ -50,9 +66,27 @@ pub fn resolve_local_command(input: &str) -> Option<LocalCommand> {
         || lower == "chats"
         || lower == "chat history"
         || lower == "/conversation"
+        || lower == "/conversations"
         || lower == "/chats"
     {
         Some(LocalCommand::OpenConversations)
+    } else if lower == "/themes" || lower == "/theme" {
+        Some(LocalCommand::ToggleTheme)
+    } else if lower == "/voice" {
+        Some(LocalCommand::ToggleVoice)
+    } else if lower == "/sound" {
+        Some(LocalCommand::ToggleSound)
+    } else if lower == "/clear" {
+        Some(LocalCommand::ClearInput)
+    } else if lower == "/memory" {
+        Some(LocalCommand::OpenMemory)
+    } else if lower == "/about" {
+        Some(LocalCommand::OpenAbout)
+    } else if lower == "/help" {
+        Some(LocalCommand::Help)
+    } else if lower == "/model" || lower.starts_with("/model ") {
+        let arg = trimmed["/model".len()..].trim();
+        Some(LocalCommand::SetModel(arg.to_string()))
     } else {
         None
     }
@@ -97,7 +131,7 @@ mod tests {
             Some(LocalCommand::OpenConversations)
         );
         assert_eq!(
-            resolve_local_command("conversations"),
+            resolve_local_command("/conversations"),
             Some(LocalCommand::OpenConversations)
         );
         assert_eq!(
@@ -107,6 +141,42 @@ mod tests {
         assert_eq!(
             resolve_local_command("/new"),
             Some(LocalCommand::NewConversation)
+        );
+    }
+
+    #[test]
+    fn test_resolve_slash_commands() {
+        assert_eq!(
+            resolve_local_command("/themes"),
+            Some(LocalCommand::ToggleTheme)
+        );
+        assert_eq!(
+            resolve_local_command("/voice"),
+            Some(LocalCommand::ToggleVoice)
+        );
+        assert_eq!(
+            resolve_local_command("/sound"),
+            Some(LocalCommand::ToggleSound)
+        );
+        assert_eq!(
+            resolve_local_command("/clear"),
+            Some(LocalCommand::ClearInput)
+        );
+        assert_eq!(
+            resolve_local_command("/memory"),
+            Some(LocalCommand::OpenMemory)
+        );
+        assert_eq!(
+            resolve_local_command("/about"),
+            Some(LocalCommand::OpenAbout)
+        );
+        assert_eq!(
+            resolve_local_command("/help"),
+            Some(LocalCommand::Help)
+        );
+        assert_eq!(
+            resolve_local_command("/model gpt-4o"),
+            Some(LocalCommand::SetModel("gpt-4o".to_string()))
         );
     }
 
