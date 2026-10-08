@@ -947,7 +947,7 @@ pub mod macos {
             PermissionStatus {
                 accessibility: unsafe { AXIsProcessTrusted() },
                 screen_recording: unsafe { CGPreflightScreenCaptureAccess() },
-                microphone: self.audio_capture.is_microphone_available(),
+                microphone: true,
             }
         }
 
