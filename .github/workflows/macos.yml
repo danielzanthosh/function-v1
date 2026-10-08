@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  APP_VERSION: "0.1.0"
 
 jobs:
   build-macos:
@@ -31,44 +32,43 @@ jobs:
       - name: Build release binary
         run: cargo build --release --bin function --verbose
 
-      - name: Verify binary exists
+      - name: Verify binary
         run: |
           ls -lh target/release/function
           file target/release/function
 
-      - name: Package Function.app Bundle
+      - name: Package Function.app
         run: |
-          # 1. Create macOS App bundle structure
+          set -euo pipefail
+
+          rm -rf Function.app Function-macOS.zip dmg-root Function.dmg icon.iconset
+
           mkdir -p Function.app/Contents/MacOS
           mkdir -p Function.app/Contents/Resources
 
-          # 2. Copy binary and set executable permissions
           cp target/release/function Function.app/Contents/MacOS/function
           chmod +x Function.app/Contents/MacOS/function
 
-          # 3. Copy application resources
           cp assets/icon.ico Function.app/Contents/Resources/icon.ico
           cp assets/icon.png Function.app/Contents/Resources/icon.png
           cp "assets/brand/White logo in Tranparent.png" "Function.app/Contents/Resources/White logo in Tranparent.png"
           cp "assets/brand/White logo in Tranparent.png" Function.app/Contents/Resources/menu_icon.png
 
-          # 4. Generate AppIcon.icns from brand icon
           mkdir -p icon.iconset
-          sips -z 16 16     assets/icon.png --out icon.iconset/icon_16x16.png
-          sips -z 32 32     assets/icon.png --out icon.iconset/icon_16x16@2x.png
-          sips -z 32 32     assets/icon.png --out icon.iconset/icon_32x32.png
-          sips -z 64 64     assets/icon.png --out icon.iconset/icon_32x32@2x.png
-          sips -z 128 128   assets/icon.png --out icon.iconset/icon_128x128.png
-          sips -z 256 256   assets/icon.png --out icon.iconset/icon_128x128@2x.png
-          sips -z 256 256   assets/icon.png --out icon.iconset/icon_256x256.png
-          sips -z 512 512   assets/icon.png --out icon.iconset/icon_256x256@2x.png
-          sips -z 512 512   assets/icon.png --out icon.iconset/icon_512x512.png
+          sips -z 16 16 assets/icon.png --out icon.iconset/icon_16x16.png
+          sips -z 32 32 assets/icon.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32 32 assets/icon.png --out icon.iconset/icon_32x32.png
+          sips -z 64 64 assets/icon.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128 128 assets/icon.png --out icon.iconset/icon_128x128.png
+          sips -z 256 256 assets/icon.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256 256 assets/icon.png --out icon.iconset/icon_256x256.png
+          sips -z 512 512 assets/icon.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 512 512 assets/icon.png --out icon.iconset/icon_512x512.png
           sips -z 1024 1024 assets/icon.png --out icon.iconset/icon_512x512@2x.png
           iconutil -c icns icon.iconset -o Function.app/Contents/Resources/AppIcon.icns
           rm -rf icon.iconset
 
-          # 5. Generate Info.plist with LSUIElement and NSMicrophoneUsageDescription
-          cat << 'EOF' > Function.app/Contents/Info.plist
+          cat > Function.app/Contents/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -86,7 +86,7 @@ jobs:
               <key>CFBundleShortVersionString</key>
               <string>0.1.0</string>
               <key>CFBundleVersion</key>
-              <string>1</string>
+              <string>0.1.0</string>
               <key>CFBundleIconFile</key>
               <string>AppIcon</string>
               <key>LSUIElement</key>
@@ -101,16 +101,112 @@ jobs:
           </plist>
           EOF
 
-          # 6. Apply ad-hoc codesign with entitlements to avoid Gatekeeper execution block
           cp assets/macos/entitlements.plist Function.app/Contents/entitlements.plist
-          codesign --force --deep --options runtime --entitlements assets/macos/entitlements.plist --sign - Function.app
 
-          # 7. Create distribution zip preserving macOS filesystem permissions
-          ditto -c -k --keepParent Function.app Function-macOS.zip
+      - name: Sign Function.app
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
 
-      - name: Upload Function.app Artifact
+          if [ -n "${APPLE_CERTIFICATE_P12_BASE64:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "Using Developer ID Application signing."
+
+            KEYCHAIN_PATH="$RUNNER_TEMP/function-signing.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+            CERT_PATH="$RUNNER_TEMP/function-cert.p12"
+
+            printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security list-keychains -d user -s "$KEYCHAIN_PATH"
+            security default-keychain -s "$KEYCHAIN_PATH"
+
+            IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | awk -F '"' '/Developer ID Application/ {print $2; exit}')"
+            if [ -z "$IDENTITY" ]; then
+              echo "::error::No Developer ID Application identity was found in the imported certificate."
+              exit 1
+            fi
+
+            echo "Signing identity: $IDENTITY"
+
+            codesign --force --deep --options runtime --timestamp               --entitlements assets/macos/entitlements.plist               --sign "$IDENTITY" Function.app
+
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+            echo "SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Apple signing secrets are not configured. Building an ad-hoc development artifact. It will NOT be Gatekeeper-trusted."
+            codesign --force --deep --options runtime               --entitlements assets/macos/entitlements.plist               --sign - Function.app
+
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+          fi
+
+          codesign --verify --deep --strict --verbose=2 Function.app
+
+      - name: Create professional DMG
+        run: |
+          set -euo pipefail
+
+          rm -rf dmg-root Function.dmg
+          mkdir -p dmg-root
+
+          cp -R Function.app dmg-root/Function.app
+          ln -s /Applications dmg-root/Applications
+
+          # UDZO is a compressed, read-only distribution image suitable for downloads.
+          hdiutil create             -volname "Function"             -srcfolder dmg-root             -ov             -format UDZO             -imagekey zlib-level=9             Function.dmg
+
+          ditto -c -k --keepParent Function.app "Function-${APP_VERSION}.app.zip"
+
+      - name: Notarize and staple distribution
+        if: env.SIGNED == 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_ISSUER_ID:-}" ] || [ -z "${APPLE_API_KEY_P8_BASE64:-}" ]; then
+            echo "::warning::Developer ID signing is configured, but Apple notarization secrets are missing. The app is signed but not notarized."
+            exit 0
+          fi
+
+          KEY_DIR="$RUNNER_TEMP/private_keys"
+          mkdir -p "$KEY_DIR"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          chmod 600 "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+
+          xcrun notarytool submit Function.dmg             --key "$KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"             --key-id "$APPLE_API_KEY_ID"             --issuer "$APPLE_API_ISSUER_ID"             --wait
+
+          xcrun stapler staple Function.app
+          xcrun stapler staple Function.dmg
+
+          xcrun stapler validate Function.app
+          xcrun stapler validate Function.dmg
+
+          spctl --assess --type execute --verbose=4 Function.app
+          spctl --assess --type open --context context:primary-signature --verbose=4 Function.dmg
+
+      - name: Verify unsigned development artifact
+        if: env.SIGNED != 'true'
+        run: |
+          codesign --verify --deep --strict --verbose=2 Function.app
+
+      - name: Upload Function.app
         uses: actions/upload-artifact@v4
         with:
-          name: Function-macOS
-          path: Function-macOS.zip
+          name: Function-macOS-${{ env.APP_VERSION }}
+          path: Function-${{ env.APP_VERSION }}.app.zip
+          if-no-files-found: error
+
+      - name: Upload Function.dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: Function-DMG-${{ env.APP_VERSION }}
+          path: Function.dmg
           if-no-files-found: error
