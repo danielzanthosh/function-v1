@@ -39,190 +39,6 @@ fn split_curl_response(raw_response: String) -> (String, Option<u16>) {
     (raw_response, None)
 }
 
-/// Returns true if the model name indicates vision capability.
-pub fn is_vision_model(model: &str) -> bool {
-    let lower = model.to_ascii_lowercase();
-    lower.contains("vision")
-        || lower.contains("gpt-4o")
-        || lower.contains("gpt-4.1")
-        || lower.contains("gemini")
-        || lower.contains("claude-3")
-        || lower.contains("llava")
-}
-
-/// Normalizes internal ChatMessage instances into provider-compatible JSON message objects.
-pub fn normalize_chat_message(m: &ChatMessage, model: &str) -> serde_json::Value {
-    let role_str = match m.role {
-        MessageRole::System => "system",
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        MessageRole::Tool => "tool",
-    };
-
-    let supports_vision = is_vision_model(model);
-
-    let content_val = if m.role == MessageRole::User && supports_vision {
-        if let Some(ref imgs) = m.images {
-            if imgs.is_empty() {
-                json!(m.content)
-            } else {
-                let mut parts = vec![json!({ "type": "text", "text": m.content })];
-                for img in imgs {
-                    let url = if img.starts_with("data:") {
-                        img.clone()
-                    } else {
-                        format!("data:image/png;base64,{}", img)
-                    };
-                    parts.push(json!({
-                        "type": "image_url",
-                        "image_url": { "url": url }
-                    }));
-                }
-                json!(parts)
-            }
-        } else {
-            json!(m.content)
-        }
-    } else {
-        // System, Assistant, Tool, or non-vision User messages MUST serialize content as a plain JSON string.
-        json!(m.content)
-    };
-
-    let mut obj = json!({
-        "role": role_str,
-        "content": content_val,
-    });
-
-    if let Some(ref t_id) = m.tool_call_id {
-        obj["tool_call_id"] = json!(t_id);
-    }
-
-    if let Some(ref t_calls) = m.tool_calls {
-        let calls_json: Vec<serde_json::Value> = t_calls
-            .iter()
-            .map(|c| {
-                let call_sig = c
-                    .thought_signature
-                    .as_ref()
-                    .or(m.thought_signature.as_ref());
-
-                let mut call_obj = json!({
-                    "id": c.id,
-                    "type": "function",
-                    "function": {
-                        "name": c.name,
-                        "arguments": c.arguments.to_string(),
-                    }
-                });
-
-                if let Some(ts) = call_sig {
-                    call_obj["thought_signature"] = json!(ts);
-                    call_obj["extra_fields"] = json!({
-                        "thought_signature": ts
-                    });
-                    call_obj["function"]["thought_signature"] = json!(ts);
-                    call_obj["function"]["extra_fields"] = json!({
-                        "thought_signature": ts
-                    });
-                }
-
-                call_obj
-            })
-            .collect();
-        obj["tool_calls"] = json!(calls_json);
-    }
-
-    if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
-        m.tool_calls
-            .as_ref()
-            .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
-    }) {
-        obj["thought_signature"] = json!(ts);
-        obj["extra_fields"] = json!({
-            "thought_signature": ts
-        });
-    }
-
-    obj
-}
-
-/// Validates normalized message JSON objects immediately prior to sending HTTP requests.
-pub fn validate_chat_messages(messages_json: &[serde_json::Value]) -> Result<(), ProviderError> {
-    for (idx, msg) in messages_json.iter().enumerate() {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
-        let content = msg.get("content");
-
-        match role {
-            "system" | "assistant" | "tool" => {
-                if let Some(c) = content {
-                    if !c.is_string() {
-                        let content_type = match c {
-                            serde_json::Value::Null => "null",
-                            serde_json::Value::Bool(_) => "bool",
-                            serde_json::Value::Number(_) => "number",
-                            serde_json::Value::Array(_) => "array",
-                            serde_json::Value::Object(_) => "object",
-                            serde_json::Value::String(_) => "string",
-                        };
-                        tracing::error!(
-                            index = idx,
-                            role = %role,
-                            content_type = %content_type,
-                            "Invalid non-string message content before provider serialization"
-                        );
-                        return Err(ProviderError::Api {
-                            code: 400,
-                            message: format!(
-                                "Message at index {} (role '{}') has invalid non-string content type '{}'",
-                                idx, role, content_type
-                            ),
-                        });
-                    }
-                } else {
-                    tracing::error!(
-                        index = idx,
-                        role = %role,
-                        "Missing content field in message before provider serialization"
-                    );
-                    return Err(ProviderError::Api {
-                        code: 400,
-                        message: format!("Message at index {} (role '{}') is missing content field", idx, role),
-                    });
-                }
-            }
-            "user" => {
-                if let Some(c) = content {
-                    if !c.is_string() && !c.is_array() {
-                        let content_type = match c {
-                            serde_json::Value::Null => "null",
-                            serde_json::Value::Bool(_) => "bool",
-                            serde_json::Value::Number(_) => "number",
-                            serde_json::Value::Array(_) => "array",
-                            serde_json::Value::Object(_) => "object",
-                            serde_json::Value::String(_) => "string",
-                        };
-                        tracing::error!(
-                            index = idx,
-                            role = %role,
-                            content_type = %content_type,
-                            "Invalid user message content type before provider serialization"
-                        );
-                        return Err(ProviderError::Api {
-                            code: 400,
-                            message: format!(
-                                "Message at index {} (role 'user') has invalid content type '{}'",
-                                idx, content_type
-                            ),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 pub struct OpenAiLlmProvider {
     base_url: String,
     api_key: Option<String>,
@@ -279,10 +95,94 @@ impl LlmProvider for OpenAiLlmProvider {
         let messages_json: Vec<serde_json::Value> = req
             .messages
             .iter()
-            .map(|m| normalize_chat_message(m, model))
-            .collect();
+            .map(|m| {
+                let role_str = match m.role {
+                    MessageRole::System => "system",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                };
 
-        validate_chat_messages(&messages_json)?;
+                let content_val = if let Some(ref imgs) = m.images {
+                    if imgs.is_empty() {
+                        json!(m.content)
+                    } else {
+                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
+                        for img in imgs {
+                            let url = if img.starts_with("data:") {
+                                img.clone()
+                            } else {
+                                format!("data:image/png;base64,{}", img)
+                            };
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": url }
+                            }));
+                        }
+                        json!(parts)
+                    }
+                } else {
+                    json!(m.content)
+                };
+
+                let mut obj = json!({
+                    "role": role_str,
+                    "content": content_val,
+                });
+
+                if let Some(ref t_id) = m.tool_call_id {
+                    obj["tool_call_id"] = json!(t_id);
+                }
+
+                if let Some(ref t_calls) = m.tool_calls {
+                    let calls_json: Vec<serde_json::Value> = t_calls
+                        .iter()
+                        .map(|c| {
+                            let call_sig = c
+                                .thought_signature
+                                .as_ref()
+                                .or(m.thought_signature.as_ref());
+
+                            let mut call_obj = json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": {
+                                    "name": c.name,
+                                    "arguments": c.arguments.to_string(),
+                                }
+                            });
+
+                            if let Some(ts) = call_sig {
+                                call_obj["thought_signature"] = json!(ts);
+                                call_obj["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                                call_obj["function"]["thought_signature"] = json!(ts);
+                                call_obj["function"]["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                            }
+
+                            call_obj
+                        })
+                        .collect();
+                    obj["tool_calls"] = json!(calls_json);
+                }
+
+                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
+                    m.tool_calls
+                        .as_ref()
+                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
+                }) {
+                    obj["thought_signature"] = json!(ts);
+                    obj["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
+                }
+
+                obj
+            })
+            .collect();
 
         let mut payload = json!({
             "model": model,
@@ -644,10 +544,93 @@ impl LlmProvider for OpenAiLlmProvider {
         let messages_json: Vec<serde_json::Value> = req
             .messages
             .iter()
-            .map(|m| normalize_chat_message(m, model))
-            .collect();
+            .map(|m| {
+                let role_str = match m.role {
+                    MessageRole::System => "system",
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                };
+                let content_val = if let Some(ref imgs) = m.images {
+                    if imgs.is_empty() {
+                        json!(m.content)
+                    } else {
+                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
+                        for img in imgs {
+                            let url = if img.starts_with("data:") {
+                                img.clone()
+                            } else {
+                                format!("data:image/png;base64,{}", img)
+                            };
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": url }
+                            }));
+                        }
+                        json!(parts)
+                    }
+                } else {
+                    json!(m.content)
+                };
 
-        validate_chat_messages(&messages_json)?;
+                let mut obj = json!({
+                    "role": role_str,
+                    "content": content_val,
+                });
+
+                if let Some(ref t_id) = m.tool_call_id {
+                    obj["tool_call_id"] = json!(t_id);
+                }
+
+                if let Some(ref t_calls) = m.tool_calls {
+                    let calls_json: Vec<serde_json::Value> = t_calls
+                        .iter()
+                        .map(|c| {
+                            let call_sig = c
+                                .thought_signature
+                                .as_ref()
+                                .or(m.thought_signature.as_ref());
+
+                            let mut call_obj = json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": {
+                                    "name": c.name,
+                                    "arguments": c.arguments.to_string(),
+                                }
+                            });
+
+                            if let Some(ts) = call_sig {
+                                call_obj["thought_signature"] = json!(ts);
+                                call_obj["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                                call_obj["function"]["thought_signature"] = json!(ts);
+                                call_obj["function"]["extra_fields"] = json!({
+                                    "thought_signature": ts
+                                });
+                            }
+
+                            call_obj
+                        })
+                        .collect();
+                    obj["tool_calls"] = json!(calls_json);
+                }
+
+                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
+                    m.tool_calls
+                        .as_ref()
+                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
+                }) {
+                    obj["thought_signature"] = json!(ts);
+                    obj["extra_fields"] = json!({
+                        "thought_signature": ts
+                    });
+                }
+
+                obj
+            })
+            .collect();
 
         let mut payload = json!({
             "model": model,
@@ -1222,155 +1205,6 @@ mod tests {
             "gpt-4o",
         );
         assert_eq!(provider.name(), "openai-compatible");
-    }
-
-    #[test]
-    fn test_normalize_normal_user_assistant_messages() {
-        let sys = ChatMessage::system("System instructions");
-        let user = ChatMessage::user("User question");
-        let asst = ChatMessage::assistant("Assistant reply");
-
-        let model = "llama-3.3-70b-versatile";
-        let sys_json = normalize_chat_message(&sys, model);
-        let user_json = normalize_chat_message(&user, model);
-        let asst_json = normalize_chat_message(&asst, model);
-
-        assert_eq!(sys_json["role"], "system");
-        assert_eq!(sys_json["content"], "System instructions");
-
-        assert_eq!(user_json["role"], "user");
-        assert_eq!(user_json["content"], "User question");
-
-        assert_eq!(asst_json["role"], "assistant");
-        assert_eq!(asst_json["content"], "Assistant reply");
-
-        assert!(validate_chat_messages(&[sys_json, user_json, asst_json]).is_ok());
-    }
-
-    #[test]
-    fn test_normalize_compacted_conversation_summaries() {
-        let summary_msg = ChatMessage::user("Summary of previous turns:\n- User asked to list files\n- System returned 3 files");
-        let model = "llama-3.3-70b-versatile";
-        let json_val = normalize_chat_message(&summary_msg, model);
-
-        assert_eq!(json_val["role"], "user");
-        assert!(json_val["content"].is_string());
-        assert!(json_val["content"].as_str().unwrap().contains("Summary of previous turns"));
-        assert!(validate_chat_messages(&[json_val]).is_ok());
-    }
-
-    #[test]
-    fn test_normalize_tool_calls_and_tool_results() {
-        let tool_call_msg = ChatMessage {
-            role: MessageRole::Assistant,
-            content: "".to_string(),
-            images: None,
-            tool_call_id: None,
-            tool_calls: Some(vec![ToolCall {
-                id: "call_abc123".to_string(),
-                name: "take_screenshot".to_string(),
-                arguments: json!({}),
-                thought_signature: None,
-            }]),
-            thought_signature: None,
-        };
-
-        let tool_result_msg = ChatMessage::tool("call_abc123", "{\"status\": \"ok\", \"width\": 1920}");
-
-        let model = "llama-3.3-70b-versatile";
-        let call_json = normalize_chat_message(&tool_call_msg, model);
-        let result_json = normalize_chat_message(&tool_result_msg, model);
-
-        assert_eq!(call_json["role"], "assistant");
-        assert_eq!(call_json["content"], "");
-        assert_eq!(call_json["tool_calls"][0]["id"], "call_abc123");
-        assert_eq!(call_json["tool_calls"][0]["function"]["name"], "take_screenshot");
-
-        assert_eq!(result_json["role"], "tool");
-        assert_eq!(result_json["tool_call_id"], "call_abc123");
-        assert!(result_json["content"].is_string());
-
-        assert!(validate_chat_messages(&[call_json, result_json]).is_ok());
-    }
-
-    #[test]
-    fn test_normalize_multiple_tool_call_result_cycles() {
-        let msgs = vec![
-            ChatMessage::system("System prompt"),
-            ChatMessage::user("Do task"),
-            ChatMessage {
-                role: MessageRole::Assistant,
-                content: "".to_string(),
-                images: None,
-                tool_call_id: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_1".to_string(),
-                    name: "open_app".to_string(),
-                    arguments: json!({ "name": "Chrome" }),
-                    thought_signature: None,
-                }]),
-                thought_signature: None,
-            },
-            ChatMessage::tool("call_1", "App opened"),
-            ChatMessage {
-                role: MessageRole::Assistant,
-                content: "".to_string(),
-                images: None,
-                tool_call_id: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_2".to_string(),
-                    name: "take_screenshot".to_string(),
-                    arguments: json!({}),
-                    thought_signature: None,
-                }]),
-                thought_signature: None,
-            },
-            ChatMessage::tool("call_2", "Screenshot captured"),
-            ChatMessage::user_with_images("Visual observation:", vec!["base64data".to_string()]),
-            ChatMessage::assistant("Finished task!"),
-        ];
-
-        let model = "llama-3.3-70b-versatile";
-        let normalized: Vec<_> = msgs.iter().map(|m| normalize_chat_message(m, model)).collect();
-
-        // Check index 6 (the user_with_images message) on non-vision model normalizes to plain string content
-        assert_eq!(normalized[6]["role"], "user");
-        assert!(normalized[6]["content"].is_string());
-        assert_eq!(normalized[6]["content"], "Visual observation:");
-
-        assert!(validate_chat_messages(&normalized).is_ok());
-    }
-
-    #[test]
-    fn test_validate_chat_messages_catches_invalid_content_type() {
-        let invalid_msg = json!({
-            "role": "tool",
-            "content": ["invalid", "array", "in", "tool", "content"]
-        });
-
-        let err = validate_chat_messages(&[invalid_msg]).unwrap_err();
-        match err {
-            ProviderError::Api { message, .. } => {
-                assert!(message.contains("index 0"));
-                assert!(message.contains("role 'tool'"));
-                assert!(message.contains("array"));
-            }
-            _ => panic!("Expected ProviderError::Api"),
-        }
-    }
-
-    #[test]
-    fn test_user_with_images_on_vision_model_serializes_array() {
-        let msg = ChatMessage::user_with_images("Visual observation:", vec!["b64data".to_string()]);
-        let model = "gpt-4o";
-        let json_val = normalize_chat_message(&msg, model);
-
-        assert_eq!(json_val["role"], "user");
-        assert!(json_val["content"].is_array());
-        assert_eq!(json_val["content"][0]["type"], "text");
-        assert_eq!(json_val["content"][1]["type"], "image_url");
-
-        assert!(validate_chat_messages(&[json_val]).is_ok());
     }
 
     #[test]
