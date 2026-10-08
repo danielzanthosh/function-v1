@@ -13,7 +13,14 @@ pub struct ContextCompactionReport {
     pub removed_messages: usize,
     pub removed_images: usize,
     pub truncated_outputs: usize,
+    /// The budget could not be met even after maximal compaction (for example
+    /// when the system prompt and tool schemas alone exceed it).
+    pub budget_unreachable: bool,
 }
+
+const TRUNCATE_KEEP_CHARS: usize = 256;
+const TRUNCATION_MARKER: &str = "\n[context truncated]";
+const TRUNCATED_MESSAGE_CHARS: usize = TRUNCATE_KEEP_CHARS + TRUNCATION_MARKER.len();
 
 pub fn format_token_k(tokens: usize) -> String {
     if tokens < 1000 {
@@ -33,7 +40,12 @@ pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
     let tool_call_tokens: usize = message
         .tool_calls
         .as_ref()
-        .map(|calls| calls.iter().map(|c| c.arguments.to_string().chars().count() / 4 + 4).sum::<usize>())
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|c| c.arguments.to_string().chars().count() / 4 + 4)
+                .sum::<usize>()
+        })
         .unwrap_or_default();
     text_tokens + image_tokens + tool_call_tokens + 4
 }
@@ -56,7 +68,11 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDefinition]) -> us
     msg_tokens + tool_tokens
 }
 
-pub fn messages_fit(messages: &[ChatMessage], tools: &[ToolDefinition], target_budget: usize) -> bool {
+pub fn messages_fit(
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    target_budget: usize,
+) -> bool {
     estimate_tokens(messages, tools) <= target_budget
 }
 
@@ -129,21 +145,29 @@ pub fn compact_messages(
     }
 
     // If one current tool result is still too large, bounded truncation is
-    // preferable to dispatching an invalid request.
+    // preferable to dispatching an invalid request. Only messages that are
+    // still longer than an already-truncated message are candidates, so every
+    // iteration strictly shrinks the context and the loop always terminates
+    // (even when the system prompt and tool schemas alone exceed the budget).
     while !messages_fit(&compacted, tools, target_budget) {
         let candidate = compacted
             .iter()
             .enumerate()
             .skip(1)
+            .filter(|(_, message)| message.content.chars().count() > TRUNCATED_MESSAGE_CHARS)
             .max_by_key(|(_, message)| estimate_message_tokens(message))
             .map(|(index, _)| index);
-        let Some(index) = candidate else { break };
-        let message = &mut compacted[index];
-        if message.content.len() <= 256 {
+        let Some(index) = candidate else {
+            report.budget_unreachable = true;
             break;
-        }
-        let shortened = message.content.chars().take(256).collect::<String>();
-        message.content = format!("{}\n[context truncated]", shortened);
+        };
+        let message = &mut compacted[index];
+        let shortened = message
+            .content
+            .chars()
+            .take(TRUNCATE_KEEP_CHARS)
+            .collect::<String>();
+        message.content = format!("{}{}", shortened, TRUNCATION_MARKER);
         report.truncated_outputs += 1;
     }
 

@@ -12,6 +12,44 @@ use std::process::Command;
 
 const CURL_STATUS_MARKER: &str = "\n__FUNCTION_HTTP_STATUS__:";
 
+/// Seconds allowed to establish the provider connection.
+const CURL_CONNECT_TIMEOUT_SECS: u64 = 30;
+/// A streaming response that delivers no bytes for this long is considered
+/// stalled and aborted. This bounds only *silence*, not total stream length,
+/// so long generations are unaffected.
+const CURL_STREAM_STALL_SECS: u64 = 120;
+
+fn stream_stall_args() -> [String; 6] {
+    [
+        "--connect-timeout".to_string(),
+        CURL_CONNECT_TIMEOUT_SECS.to_string(),
+        "--speed-limit".to_string(),
+        "1".to_string(),
+        "--speed-time".to_string(),
+        CURL_STREAM_STALL_SECS.to_string(),
+    ]
+}
+
+/// Map a non-zero curl exit code to a provider error. Without this, a curl
+/// process that died mid-stream was indistinguishable from an empty success.
+fn curl_transport_error(exit_code: Option<i32>) -> Option<ProviderError> {
+    match exit_code {
+        Some(0) => None,
+        Some(28) => Some(ProviderError::Network(format!(
+            "Provider stream stalled: no data received for {CURL_STREAM_STALL_SECS}s (or connection not established within {CURL_CONNECT_TIMEOUT_SECS}s)"
+        ))),
+        Some(code @ (5 | 6 | 7 | 35 | 52 | 55 | 56)) => Some(ProviderError::Network(format!(
+            "Provider connection failed (curl exit code {code})"
+        ))),
+        Some(code) => Some(ProviderError::Network(format!(
+            "Provider request failed (curl exit code {code})"
+        ))),
+        None => Some(ProviderError::Network(
+            "Provider request was terminated by a signal".to_string(),
+        )),
+    }
+}
+
 fn provider_error_message(parsed: &serde_json::Value, raw_body: &str) -> String {
     if let Some(error) = parsed.get("error") {
         if let Some(message) = error.get("message").and_then(|value| value.as_str()) {
@@ -614,6 +652,7 @@ impl LlmProvider for OpenAiLlmProvider {
             let mut cmd = Command::new(curl_bin);
             cmd.arg("-s")
                 .arg("-N")
+                .args(stream_stall_args())
                 .arg("-X")
                 .arg("POST")
                 .arg(&base_url)
@@ -651,6 +690,7 @@ impl LlmProvider for OpenAiLlmProvider {
             let mut current_event_type: Option<String> = None;
             let mut http_status: Option<u16> = None;
             let mut raw_response_buffer = String::new();
+            let mut stream_done = false;
 
             if let Some(stdout) = child.stdout.take() {
                 let reader = BufReader::new(stdout);
@@ -696,6 +736,7 @@ impl LlmProvider for OpenAiLlmProvider {
                         );
 
                         if data_str == "[DONE]" {
+                            stream_done = true;
                             break;
                         }
 
@@ -841,7 +882,22 @@ impl LlmProvider for OpenAiLlmProvider {
                 }
             }
 
-            let _ = child.wait();
+            if stream_done {
+                // The response is complete; don't wait on a connection the
+                // server keeps open after `[DONE]`.
+                let _ = child.kill();
+                let _ = child.wait();
+            } else {
+                let exit_code = child.wait().ok().and_then(|status| status.code());
+                if let Some(err) = curl_transport_error(exit_code) {
+                    tracing::warn!(
+                        error = %err,
+                        received_bytes = raw_response_buffer.len(),
+                        "Streaming provider request aborted by transport"
+                    );
+                    return Err(err);
+                }
+            }
 
             let status_code = http_status.unwrap_or(200);
             if status_code >= 400 {
@@ -1129,6 +1185,49 @@ impl TextToSpeechProvider for OpenAiTtsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curl_success_is_not_a_transport_error() {
+        assert!(curl_transport_error(Some(0)).is_none());
+    }
+
+    #[test]
+    fn curl_stall_maps_to_network_error() {
+        // curl exit code 28 = operation timed out (connect timeout or the
+        // --speed-limit/--speed-time stall detector). This used to fall
+        // through as an empty successful response.
+        let err = curl_transport_error(Some(28)).expect("stall must be an error");
+        assert!(matches!(err, ProviderError::Network(_)));
+        assert!(err.to_string().contains("stalled"));
+        assert!(
+            !err.is_rate_limit(),
+            "stalls must not trigger rate-limit retries"
+        );
+    }
+
+    #[test]
+    fn curl_failures_and_signals_are_errors() {
+        assert!(matches!(
+            curl_transport_error(Some(7)),
+            Some(ProviderError::Network(_))
+        ));
+        assert!(matches!(
+            curl_transport_error(Some(56)),
+            Some(ProviderError::Network(_))
+        ));
+        assert!(matches!(
+            curl_transport_error(None),
+            Some(ProviderError::Network(_))
+        ));
+    }
+
+    #[test]
+    fn stream_stall_args_bound_silence_not_total_length() {
+        let args = stream_stall_args();
+        assert!(args.contains(&"--speed-time".to_string()));
+        assert!(args.contains(&"--connect-timeout".to_string()));
+        assert!(!args.contains(&"--max-time".to_string()));
+    }
 
     #[tokio::test]
     async fn test_openai_call_structure() {
