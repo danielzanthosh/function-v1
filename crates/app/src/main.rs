@@ -323,6 +323,34 @@ fn main() {
                                             tracing::error!(error = ?e, "Failed cx.update on OpenSettings");
                                         }
                                     }
+                                    Ok(PlatformCommand::StartPushToTalk) => {
+                                        tracing::info!("PlatformCommand::StartPushToTalk received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.start_push_to_talk(window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to start Push-To-Talk");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on StartPushToTalk");
+                                        }
+                                    }
+                                    Ok(PlatformCommand::StopPushToTalk) => {
+                                        tracing::info!("PlatformCommand::StopPushToTalk received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.stop_push_to_talk(window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to stop Push-To-Talk");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on StopPushToTalk");
+                                        }
+                                    }
                                     Ok(PlatformCommand::Quit) => {
                                         tracing::info!("PlatformCommand::Quit received, shutting down");
                                         let _ = cx.update(|cx| {

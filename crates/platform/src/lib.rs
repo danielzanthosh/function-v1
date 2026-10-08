@@ -149,6 +149,8 @@ pub enum PlatformCommand {
     DismissWindow,
     OpenSettings,
     Quit,
+    StartPushToTalk,
+    StopPushToTalk,
 }
 
 static WINDOW_IS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2690,6 +2692,25 @@ pub fn setup_macos_double_command_listener() {
         let key_code = msg_send_u16(event, key_code_sel);
         let flags = msg_send_usize(event, modifier_flags_sel);
 
+        // Control + Option Push-To-Talk hotkey tracking
+        static PTT_ACTIVE: AtomicBool = AtomicBool::new(false);
+        const NSEVENT_MODIFIER_FLAG_CONTROL: usize = 0x0004_0000;
+        const NSEVENT_MODIFIER_FLAG_OPTION: usize = 0x0008_0000;
+
+        let ctrl_pressed = (flags & NSEVENT_MODIFIER_FLAG_CONTROL) != 0;
+        let opt_pressed = (flags & NSEVENT_MODIFIER_FLAG_OPTION) != 0;
+        let both_pressed = ctrl_pressed && opt_pressed;
+
+        if both_pressed {
+            if !PTT_ACTIVE.swap(true, Ordering::SeqCst) {
+                tracing::info!("[Push-To-Talk] Hotkey detected (Control + Option pressed)");
+                send_platform_command(PlatformCommand::StartPushToTalk);
+            }
+        } else if PTT_ACTIVE.swap(false, Ordering::SeqCst) {
+            tracing::info!("[Push-To-Talk] Key released (Control or Option released)");
+            send_platform_command(PlatformCommand::StopPushToTalk);
+        }
+
         // Left Command = 55 (0x37), Right Command = 54 (0x36)
         if key_code == 54 || key_code == 55 {
             // NSEventModifierFlagCommand = 0x0010_0000 (bit 20)
@@ -3400,6 +3421,12 @@ mod tests {
 
         send_platform_command(PlatformCommand::OpenSettings);
         assert_eq!(rx.recv().await.unwrap(), PlatformCommand::OpenSettings);
+
+        send_platform_command(PlatformCommand::StartPushToTalk);
+        assert_eq!(rx.recv().await.unwrap(), PlatformCommand::StartPushToTalk);
+
+        send_platform_command(PlatformCommand::StopPushToTalk);
+        assert_eq!(rx.recv().await.unwrap(), PlatformCommand::StopPushToTalk);
 
         send_platform_command(PlatformCommand::Quit);
         assert_eq!(rx.recv().await.unwrap(), PlatformCommand::Quit);
