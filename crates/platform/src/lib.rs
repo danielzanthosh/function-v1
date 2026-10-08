@@ -280,6 +280,40 @@ pub fn ensure_single_instance() -> bool {
     }
 }
 
+static AUDIO_PROCESSES: std::sync::Mutex<
+    Vec<std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>>,
+> = std::sync::Mutex::new(Vec::new());
+
+/// Stop any active audio playback processes immediately.
+pub fn stop_audio_playback() {
+    if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
+        for handle in lock.drain(..) {
+            if let Ok(mut guard) = handle.lock() {
+                if let Some(mut child) = guard.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+    }
+}
+
+/// Returns whether any audio playback processes are currently active.
+pub fn is_audio_playing() -> bool {
+    if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
+        lock.retain(|handle| {
+            if let Ok(guard) = handle.lock() {
+                guard.is_some()
+            } else {
+                false
+            }
+        });
+        !lock.is_empty()
+    } else {
+        false
+    }
+}
+
 /// Speak text using the operating system's native speech facilities (TTS fallback).
 pub fn speak_text(text: &str) {
     let clean_text = text.replace(['"', '\\', '\n', '\r'], " ");
@@ -290,22 +324,53 @@ pub fn speak_text(text: &str) {
 
     #[cfg(target_os = "macos")]
     {
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("say").arg(&text_owned).spawn();
-        });
+        if let Ok(child) = std::process::Command::new("say").arg(&text_owned).spawn() {
+            let handle = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
+            if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
+                lock.push(std::sync::Arc::clone(&handle));
+            }
+            std::thread::spawn(move || {
+                let child_opt = {
+                    if let Ok(mut guard) = handle.lock() {
+                        guard.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(mut child) = child_opt {
+                    let _ = child.wait();
+                }
+            });
+        }
     }
 
     #[cfg(target_os = "windows")]
     {
-        std::thread::spawn(move || {
-            let script = format!(
-                "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak('{}')",
-                text_owned.replace('\'', "''")
-            );
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-                .spawn();
-        });
+        let script = format!(
+            "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak('{}')",
+            text_owned.replace('\'', "''")
+        );
+        if let Ok(child) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .spawn()
+        {
+            let handle = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
+            if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
+                lock.push(std::sync::Arc::clone(&handle));
+            }
+            std::thread::spawn(move || {
+                let child_opt = {
+                    if let Ok(mut guard) = handle.lock() {
+                        guard.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(mut child) = child_opt {
+                    let _ = child.wait();
+                }
+            });
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -358,9 +423,22 @@ pub fn play_audio_bytes(bytes: &[u8], extension: &str) -> Result<(), PlatformErr
     command.arg(&path);
 
     match command.spawn() {
-        Ok(mut child) => {
+        Ok(child) => {
+            let handle = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
+            if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
+                lock.push(std::sync::Arc::clone(&handle));
+            }
             std::thread::spawn(move || {
-                let _ = child.wait();
+                let child_opt = {
+                    if let Ok(mut guard) = handle.lock() {
+                        guard.take()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(mut child) = child_opt {
+                    let _ = child.wait();
+                }
                 let _ = std::fs::remove_file(path);
             });
             Ok(())
@@ -3441,5 +3519,12 @@ mod tests {
 
         // Verify SoundEffect::WindowToggle can be passed to play_sound without panic
         play_sound(SoundEffect::WindowToggle);
+    }
+
+    #[test]
+    fn test_audio_playback_tracking_and_stop() {
+        assert!(!is_audio_playing());
+        stop_audio_playback();
+        assert!(!is_audio_playing());
     }
 }
