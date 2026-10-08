@@ -2872,6 +2872,8 @@ pub enum SoundEffect {
     Error,
     /// Tactile mechanical keyboard switch press / click (played strictly when toggling via keybind)
     HotkeyToggle,
+    /// Short subtle native-style click sound played whenever the Function window is shown or hidden
+    WindowToggle,
 }
 
 /// Play native system audio feedback without blocking the UI thread.
@@ -2885,7 +2887,7 @@ pub fn play_sound(effect: SoundEffect) {
             }
             unsafe {
                 match effect {
-                    SoundEffect::HotkeyToggle => {
+                    SoundEffect::HotkeyToggle | SoundEffect::WindowToggle => {
                         // Crisp high-frequency tactile mechanical switch click
                         let _ = Beep(2400, 10);
                         let _ = Beep(1300, 6);
@@ -2915,7 +2917,7 @@ pub fn play_sound(effect: SoundEffect) {
             fn AudioServicesPlaySystemSound(inSystemSoundID: u32);
         }
         match effect {
-            SoundEffect::HotkeyToggle => unsafe {
+            SoundEffect::HotkeyToggle | SoundEffect::WindowToggle => unsafe {
                 // 1104 is the native tactile Apple keyboard click sound
                 AudioServicesPlaySystemSound(1104);
             },
@@ -3401,5 +3403,16 @@ mod tests {
 
         send_platform_command(PlatformCommand::Quit);
         assert_eq!(rx.recv().await.unwrap(), PlatformCommand::Quit);
+    }
+
+    #[test]
+    fn test_window_visibility_state_and_sound_effect_window_toggle() {
+        set_window_visibility_state(true);
+        assert!(is_window_visible());
+        set_window_visibility_state(false);
+        assert!(!is_window_visible());
+
+        // Verify SoundEffect::WindowToggle can be passed to play_sound without panic
+        play_sound(SoundEffect::WindowToggle);
     }
 }
