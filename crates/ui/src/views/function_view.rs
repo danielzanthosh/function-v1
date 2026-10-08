@@ -199,6 +199,8 @@ pub struct FunctionView {
     pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub activation_settling: bool,
     pub last_toggle_time: Option<std::time::Instant>,
+    pub is_playing_audio: bool,
+    pub audio_session_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 pub type AssistantView = FunctionView;
@@ -305,6 +307,8 @@ impl FunctionView {
             activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             activation_settling: false,
             last_toggle_time: None,
+            is_playing_audio: false,
+            audio_session_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -504,32 +508,65 @@ impl FunctionView {
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
                                     if view.config.tts.enabled && !summary.is_empty() {
-                                        if let Some(tts) = view.tts_provider.clone() {
-                                            let text = summary.clone();
-                                            let output_format =
-                                                view.config.tts.output_format.clone();
-                                            if let Some(handle) = crate::get_runtime_handle() {
-                                                handle.spawn(async move {
-                                                    match tts.synthesize_speech(&text).await {
-                                                        Ok(audio) => {
-                                                            let _ =
-                                                                function_platform::play_audio_bytes(
+                                        let current_audio_session = view
+                                            .audio_session_id
+                                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                                            + 1;
+                                        let session_guard = view.audio_session_id.clone();
+                                        view.is_playing_audio = true;
+
+                                        let text_to_speak = summary.clone();
+                                        let tts_opt = view.tts_provider.clone();
+                                        let output_format = view.config.tts.output_format.clone();
+
+                                        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                                            let cx = cx.clone();
+                                            async move {
+                                                if let Some(tts) = tts_opt {
+                                                    let synth_res = tts.synthesize_speech(&text_to_speak).await;
+                                                    if session_guard.load(std::sync::atomic::Ordering::SeqCst)
+                                                        == current_audio_session
+                                                    {
+                                                        match synth_res {
+                                                            Ok(audio) => {
+                                                                let _ = function_platform::play_audio_bytes(
                                                                     &audio,
                                                                     &output_format,
                                                                 );
+                                                            }
+                                                            Err(error) => {
+                                                                tracing::error!("TTS request failed: {}", error);
+                                                            }
                                                         }
-                                                        Err(error) => eprintln!(
-                                                            "TTS request failed: {}",
-                                                            error
-                                                        ),
                                                     }
+                                                } else {
+                                                    function_platform::speak_text(&text_to_speak);
+                                                }
+
+                                                while function_platform::is_audio_playing() {
+                                                    Timer::after(Duration::from_millis(100)).await;
+                                                    if session_guard.load(std::sync::atomic::Ordering::SeqCst)
+                                                        != current_audio_session
+                                                    {
+                                                        break;
+                                                    }
+                                                }
+
+                                                let _ = cx.update(|cx| {
+                                                    let _ = this.update(cx, |view, cx| {
+                                                        if view
+                                                            .audio_session_id
+                                                            .load(std::sync::atomic::Ordering::SeqCst)
+                                                            == current_audio_session
+                                                        {
+                                                            view.is_playing_audio = false;
+                                                            cx.notify();
+                                                        }
+                                                    });
                                                 });
-                                            } else {
-                                                function_platform::speak_text(&summary);
                                             }
-                                        } else {
-                                            function_platform::speak_text(&summary);
-                                        }
+                                        })
+                                        .detach();
                                     }
                                     view.save_current_conversation();
                                     if !view.user_scrolled_up {
@@ -639,6 +676,28 @@ impl FunctionView {
         if self.config.sound_enabled {
             play_sound(effect);
         }
+    }
+
+    pub fn stop_audio(&mut self, cx: &mut Context<Self>) {
+        self.audio_session_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        function_platform::stop_audio_playback();
+        if self.is_playing_audio {
+            self.is_playing_audio = false;
+            cx.notify();
+        }
+    }
+
+    pub fn stop_response(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref agent) = self.agent {
+            agent.cancel();
+        }
+        self.stop_audio(cx);
+        self.active_task = None;
+        self.activities.clear();
+        self.state = AgentState::Idle;
+        self.play_sound_feedback(SoundEffect::Select);
+        cx.notify();
     }
 
     pub fn set_state(&mut self, state: AgentState, cx: &mut Context<Self>) {
@@ -875,6 +934,8 @@ impl FunctionView {
                                             view.voice_error = None;
                                             view.play_sound_feedback(SoundEffect::Success);
                                             if let Some(agent_arc) = agent {
+                                                agent_arc.cancel();
+                                                view.stop_audio(cx);
                                                 view.active_task = Some(text.clone());
                                                 view.input_buffer.clear();
                                                 view.mode = FunctionMode::Command;
@@ -1003,6 +1064,8 @@ impl FunctionView {
                                                     view.voice_error = None;
                                                     view.play_sound_feedback(SoundEffect::Success);
                                                     if let Some(agent_arc) = agent {
+                                                        agent_arc.cancel();
+                                                        view.stop_audio(cx);
                                                         view.active_task = Some(text.clone());
                                                         view.input_buffer.clear();
                                                         view.mode = FunctionMode::Command;
@@ -1563,10 +1626,12 @@ impl FunctionView {
         if !self.chat_display.is_empty()
             || self.latest_result.is_some()
             || self.active_task.is_some()
+            || self.is_playing_audio
         {
             if let Some(ref agent) = self.agent {
                 agent.cancel();
             }
+            self.stop_audio(cx);
             tracing::info!("Escape: returning to home state from active chat/results");
             self.chat_display.clear();
             self.chat_history_api.clear();
@@ -1593,9 +1658,7 @@ impl FunctionView {
     }
 
     pub fn cancel(&mut self, _: &CancelTask, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ref agent) = self.agent {
-            agent.cancel();
-        }
+        self.stop_response(cx);
         self.go_back(window, cx);
     }
 
@@ -1896,6 +1959,23 @@ impl FunctionView {
         let prompt = self.input_buffer.trim().to_string();
         if prompt.is_empty() {
             return;
+        }
+
+        let is_busy = matches!(
+            self.state,
+            AgentState::Processing { .. }
+                | AgentState::Streaming { .. }
+                | AgentState::Acting { .. }
+                | AgentState::WaitingForConfirmation { .. }
+        );
+        if is_busy || self.is_playing_audio {
+            if let Some(ref agent) = self.agent {
+                agent.cancel();
+            }
+            self.stop_audio(cx);
+            self.active_task = None;
+            self.activities.clear();
+            self.state = AgentState::Idle;
         }
 
         if let Some(command) = resolve_shell_command(&prompt) {
@@ -2979,17 +3059,100 @@ impl Render for FunctionView {
                                     .flex_shrink_0()
                                     .flex()
                                     .items_center()
-                                    .gap(px(8.0))
-                                    .child(render_brand_mark_with_mode(
-                                        16.0,
-                                        theme.mode == crate::theme::ThemeMode::Light,
-                                    ))
+                                    .justify_between()
                                     .child(
                                         div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .child(render_brand_mark_with_mode(
+                                                16.0,
+                                                theme.mode == crate::theme::ThemeMode::Light,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::NORMAL)
+                                                    .text_color(theme.text_muted)
+                                                    .child(status),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("stop_response_btn")
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(theme.surface_input)
+                                            .border_1()
+                                            .border_color(theme.border_subtle)
+                                            .hover(|s| s.bg(theme.surface_active))
                                             .text_xs()
-                                            .font_weight(gpui::FontWeight::NORMAL)
-                                            .text_color(theme.text_muted)
-                                            .child(status),
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(theme.status_error)
+                                            .child("Stop Response")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.stop_response(cx);
+                                                }),
+                                            ),
+                                    ),
+                            )
+                        })
+                        .when(self.is_playing_audio && !is_busy, |p| {
+                            p.child(
+                                div()
+                                    .id("audio_playing_indicator")
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .child(render_brand_mark_with_mode(
+                                                16.0,
+                                                theme.mode == crate::theme::ThemeMode::Light,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(theme.accent_primary)
+                                                    .child("Playing audio response..."),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("stop_audio_btn")
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(theme.surface_input)
+                                            .border_1()
+                                            .border_color(theme.border_subtle)
+                                            .hover(|s| s.bg(theme.surface_active))
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(theme.status_error)
+                                            .child("Stop Audio")
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.stop_audio(cx);
+                                                }),
+                                            ),
                                     ),
                             )
                         }),
@@ -3246,6 +3409,58 @@ impl Render for FunctionView {
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .text_color(theme.text_muted)
                                                 .child("Close"),
+                                        ),
+                                )
+                            })
+                            .when(is_busy, |p| {
+                                p.child(
+                                    div()
+                                        .id("bar_stop_response_btn")
+                                        .cursor_pointer()
+                                        .flex()
+                                        .items_center()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme.surface_input)
+                                        .border_1()
+                                        .border_color(theme.border_subtle)
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(theme.status_error)
+                                        .child("Stop Response")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.stop_response(cx);
+                                            }),
+                                        ),
+                                )
+                            })
+                            .when(!is_busy && self.is_playing_audio, |p| {
+                                p.child(
+                                    div()
+                                        .id("bar_stop_audio_btn")
+                                        .cursor_pointer()
+                                        .flex()
+                                        .items_center()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme.surface_input)
+                                        .border_1()
+                                        .border_color(theme.border_subtle)
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(theme.status_error)
+                                        .child("Stop Audio")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.stop_audio(cx);
+                                            }),
                                         ),
                                 )
                             })
