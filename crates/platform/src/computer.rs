@@ -429,6 +429,8 @@ pub mod macos {
         fn CGDisplayPixelsWide(display: u32) -> usize;
         fn CGDisplayPixelsHigh(display: u32) -> usize;
         fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGEventSourceCreate(state_id: u32) -> *mut std::ffi::c_void;
+        fn CGPreflightPostEventAccess() -> bool;
         fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
         fn CGWarpMouseCursorPosition(new_pos: CGPoint) -> i32;
         fn CGEventCreateMouseEvent(
