@@ -194,7 +194,8 @@ impl LlmProvider for OpenAiLlmProvider {
         )
     }
 
-    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
+    async fn complete(&self, mut req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
+        crate::image_util::process_request_messages(&mut req.messages)?;
         let endpoint = format!("{}/chat/completions", self.base_url);
         let model = if req.model.is_empty() || req.model == "default" {
             &self.default_model
@@ -551,9 +552,10 @@ impl LlmProvider for OpenAiLlmProvider {
 
     async fn complete_stream(
         &self,
-        req: CompletionRequest,
+        mut req: CompletionRequest,
         mut on_token: Box<dyn FnMut(String) + Send>,
     ) -> Result<CompletionResponse, ProviderError> {
+        crate::image_util::process_request_messages(&mut req.messages)?;
         let endpoint = format!("{}/chat/completions", self.base_url);
         let model = if req.model.is_empty() || req.model == "default" {
             &self.default_model

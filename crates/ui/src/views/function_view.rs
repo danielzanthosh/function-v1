@@ -198,6 +198,7 @@ pub struct FunctionView {
     pub expanded_errors: std::collections::HashSet<usize>,
     pub activation_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub activation_settling: bool,
+    pub last_toggle_time: Option<std::time::Instant>,
 }
 
 pub type AssistantView = FunctionView;
@@ -303,6 +304,7 @@ impl FunctionView {
             expanded_errors: std::collections::HashSet::new(),
             activation_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             activation_settling: false,
+            last_toggle_time: None,
         }
     }
 
@@ -1411,18 +1413,24 @@ impl FunctionView {
 
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
+        if !self.is_visible {
+            return;
+        }
+        if let Some(last) = self.last_toggle_time {
+            if last.elapsed() < Duration::from_millis(150) {
+                return;
+            }
+        }
+        self.last_toggle_time = Some(std::time::Instant::now());
         self.activation_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.activation_settling = false;
         tracing::info!("Dismissing Function window (hiding)");
-        let prev_visible = self.is_visible;
         self.is_visible = false;
         self.is_active_window = false;
         function_platform::set_window_visibility_state(false);
-        if prev_visible {
-            tracing::info!("Window transition: visible -> hidden");
-        }
-        self.play_sound_feedback(SoundEffect::Select);
+        tracing::info!("Window transition: visible -> hidden");
+        self.play_sound_feedback(SoundEffect::WindowToggle);
         #[cfg(target_os = "macos")]
         function_platform::macos_hide_app();
         #[cfg(not(target_os = "macos"))]
@@ -1431,13 +1439,22 @@ impl FunctionView {
     }
 
     fn dismiss_after_external_deactivation(&mut self, cx: &mut Context<Self>) {
+        if !self.is_visible {
+            return;
+        }
+        if let Some(last) = self.last_toggle_time {
+            if last.elapsed() < Duration::from_millis(150) {
+                return;
+            }
+        }
+        self.last_toggle_time = Some(std::time::Instant::now());
         self.activation_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.activation_settling = false;
         self.is_visible = false;
         self.is_active_window = false;
         function_platform::set_window_visibility_state(false);
-        self.play_sound_feedback(SoundEffect::Select);
+        self.play_sound_feedback(SoundEffect::WindowToggle);
         #[cfg(target_os = "macos")]
         function_platform::macos_hide_app();
         #[cfg(not(target_os = "macos"))]
@@ -1446,6 +1463,15 @@ impl FunctionView {
     }
 
     pub fn summon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_visible {
+            return;
+        }
+        if let Some(last) = self.last_toggle_time {
+            if last.elapsed() < Duration::from_millis(150) {
+                return;
+            }
+        }
+        self.last_toggle_time = Some(std::time::Instant::now());
         let activation_generation = self
             .activation_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -1472,14 +1498,11 @@ impl FunctionView {
             }
         })
         .detach();
-        let prev_visible = self.is_visible;
         self.is_visible = true;
         self.is_active_window = true;
         self.is_text_selected = false;
         function_platform::set_window_visibility_state(true);
-        if !prev_visible {
-            tracing::info!("Window transition: hidden -> visible");
-        }
+        tracing::info!("Window transition: hidden -> visible");
         let target_size = self.target_window_size();
         tracing::info!(
             ?target_size,
@@ -1490,7 +1513,7 @@ impl FunctionView {
         self.cursor_visible = true;
         self.selected_index = 0;
         self.mode = FunctionMode::Command;
-        self.play_sound_feedback(SoundEffect::Select);
+        self.play_sound_feedback(SoundEffect::WindowToggle);
         #[cfg(target_os = "macos")]
         {
             tracing::info!("Activating macOS application and ordering window front");
@@ -1549,9 +1572,6 @@ impl FunctionView {
     }
 
     pub fn toggle_visibility_from_hotkey(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.config.sound_enabled {
-            function_platform::play_sound(SoundEffect::HotkeyToggle);
-        }
         self.toggle_visibility(window, cx);
     }
 

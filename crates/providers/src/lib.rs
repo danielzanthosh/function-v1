@@ -7,6 +7,7 @@ pub mod chatgpt_oauth;
 pub mod codex;
 pub mod context_limits;
 pub mod gemini;
+pub mod image_util;
 pub mod openai;
 pub mod retry;
 pub mod search;
