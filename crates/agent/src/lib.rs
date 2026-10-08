@@ -442,13 +442,15 @@ impl Agent {
 
     fn begin_run(&self) -> RunHandle {
         // A new run supersedes (and cancels) any run still in flight.
-        self.cancel_tx
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
-        let cancel_base = *self.cancel_tx.borrow();
+        let mut cancel_base = 0;
+        self.cancel_tx.send_modify(|generation| {
+            *generation = generation.wrapping_add(1);
+            cancel_base = *generation;
+        });
         self.current_run_cancel_base
             .store(cancel_base, Ordering::SeqCst);
         let run_id = self.run_counter.fetch_add(1, Ordering::SeqCst) + 1;
-        self.active_run.store(run_id, Ordering::SeqCst);
+        self.active_run.fetch_max(run_id, Ordering::SeqCst);
         RunHandle {
             run_id,
             cancel_base,
@@ -567,12 +569,17 @@ impl Agent {
 
         let memory_started = Instant::now();
         tracing::info!(target: LIFECYCLE_LOG_TARGET, run_id, "memory retrieval started");
-        let context_items = match tokio::time::timeout(
-            MEMORY_RECALL_TIMEOUT,
-            self.memory.recall(user_prompt, None, 5),
-        )
-        .await
-        {
+        let recall = tokio::select! {
+            biased;
+            _ = run.canceled() => {
+                return Err(RunFailure::new(AgentError::Canceled, &history_tail));
+            }
+            recall = tokio::time::timeout(
+                MEMORY_RECALL_TIMEOUT,
+                self.memory.recall(user_prompt, None, 5),
+            ) => recall,
+        };
+        let context_items = match recall {
             Ok(Ok(items)) => {
                 tracing::info!(
                     target: LIFECYCLE_LOG_TARGET,
@@ -929,7 +936,7 @@ Agentic Multi-Step & Observation Loop:
                     run_id,
                     step,
                     tool = %call.name,
-                    arguments = %call.arguments,
+                    argument_bytes = call.arguments.to_string().len(),
                     "tool call started"
                 );
 
