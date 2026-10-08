@@ -520,6 +520,16 @@ pub mod macos {
         }
 
         fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            // CGEventPost requires macOS Post Event permission. Accessibility being
+            // enabled in the UI is not enough to assume synthetic events are accepted.
+            unsafe {
+                if !CGPreflightPostEventAccess() {
+                    return Err(PlatformError::SystemApi(
+                        "macOS Post Event access is denied. Enable Function under System Settings > Privacy & Security > Accessibility.".into(),
+                    ));
+                }
+            }
+
             let (x, y) = self.get_cursor_position();
             let pt = CGPoint {
                 x: x as f64,
@@ -532,20 +542,42 @@ pub mod macos {
             };
 
             unsafe {
-                let down = CGEventCreateMouseEvent(std::ptr::null(), down_type, pt, btn_num);
-                if !down.is_null() {
-                    CGEventSetIntegerValueField(down, K_CG_MOUSE_EVENT_CLICK_STATE, 1);
-                    CGEventPost(K_CG_HID_EVENT_TAP, down);
-                    CFRelease(down);
+                // Use an explicit HID-system event source so synthetic clicks are
+                // treated consistently with the real pointer event stream.
+                let source = CGEventSourceCreate(1);
+                if source.is_null() {
+                    return Err(PlatformError::SystemApi(
+                        "Failed to create macOS HID event source".into(),
+                    ));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(40));
-                let up = CGEventCreateMouseEvent(std::ptr::null(), up_type, pt, btn_num);
-                if !up.is_null() {
-                    CGEventSetIntegerValueField(up, K_CG_MOUSE_EVENT_CLICK_STATE, 1);
-                    CGEventPost(K_CG_HID_EVENT_TAP, up);
-                    CFRelease(up);
+
+                let down = CGEventCreateMouseEvent(source, down_type, pt, btn_num);
+                if down.is_null() {
+                    CFRelease(source);
+                    return Err(PlatformError::SystemApi(
+                        "Failed to create mouse-down event".into(),
+                    ));
                 }
+                CGEventSetIntegerValueField(down, K_CG_MOUSE_EVENT_CLICK_STATE, 1);
+                CGEventPost(K_CG_HID_EVENT_TAP, down);
+                CFRelease(down);
+
+                std::thread::sleep(std::time::Duration::from_millis(35));
+
+                let up = CGEventCreateMouseEvent(source, up_type, pt, btn_num);
+                if up.is_null() {
+                    CFRelease(source);
+                    return Err(PlatformError::SystemApi(
+                        "Failed to create mouse-up event".into(),
+                    ));
+                }
+                CGEventSetIntegerValueField(up, K_CG_MOUSE_EVENT_CLICK_STATE, 1);
+                CGEventPost(K_CG_HID_EVENT_TAP, up);
+                CFRelease(up);
+                CFRelease(source);
             }
+
+            tracing::debug!(x, y, ?button, "Posted macOS synthetic mouse click");
             Ok(())
         }
 
