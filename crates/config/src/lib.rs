@@ -228,6 +228,8 @@ pub struct AppConfig {
     pub request_delay: RequestDelay,
     #[serde(default)]
     pub input_token_limit: InputTokenLimit,
+    #[serde(default = "default_context_optimization_enabled")]
+    pub context_optimization_enabled: bool,
     pub ai_provider: AiProviderConfig,
     pub speech: SpeechConfig,
     #[serde(default)]
@@ -241,6 +243,10 @@ fn default_sound_enabled() -> bool {
 }
 
 fn default_start_hidden() -> bool {
+    true
+}
+
+fn default_context_optimization_enabled() -> bool {
     true
 }
 
@@ -260,6 +266,7 @@ impl Default for AppConfig {
             start_hidden: true,
             request_delay: RequestDelay::Disabled,
             input_token_limit: InputTokenLimit::Auto,
+            context_optimization_enabled: true,
             ai_provider: AiProviderConfig::default(),
             speech: SpeechConfig::default(),
             tts: TtsConfig::default(),
