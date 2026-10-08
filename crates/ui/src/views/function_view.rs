@@ -751,6 +751,194 @@ impl FunctionView {
         cx.notify();
     }
 
+    pub fn start_push_to_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.listening {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let perm_status = function_platform::audio::macos_mic::ensure_mic_permission();
+            if perm_status == function_platform::audio::macos_mic::MacMicPermission::Denied
+                || perm_status == function_platform::audio::macos_mic::MacMicPermission::Restricted
+            {
+                tracing::error!("[Push-To-Talk] Microphone permission missing or denied");
+                let err_msg = "Microphone access denied. Please allow microphone access in System Settings -> Privacy & Security -> Microphone.".to_string();
+                self.set_voice_error(err_msg, cx);
+                return;
+            }
+        }
+
+        if !self.mic_available || self.audio_capture.is_none() {
+            tracing::error!("[Push-To-Talk] Microphone unavailable");
+            let err_msg = "Microphone unavailable. You can type your request directly.".to_string();
+            self.set_voice_error(err_msg, cx);
+            return;
+        }
+
+        if !self.is_visible {
+            self.summon(window, cx);
+        }
+
+        if let Some(ref capture) = self.audio_capture {
+            if let Err(e) = capture.start_recording() {
+                tracing::error!(error = %e, "[Push-To-Talk] Failed to start audio recording");
+                self.set_voice_error(format!("Mic error: {}. Type your request directly.", e), cx);
+                return;
+            }
+        }
+
+        self.listening = true;
+        self.voice_error = None;
+        self.state = AgentState::Listening;
+        tracing::info!("[Push-To-Talk] Recording started");
+        self.play_sound_feedback(SoundEffect::Select);
+        cx.notify();
+    }
+
+    pub fn stop_push_to_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = window;
+        if !self.listening {
+            return;
+        }
+
+        self.listening = false;
+        tracing::info!("[Push-To-Talk] Recording stopped");
+        self.play_sound_feedback(SoundEffect::Select);
+
+        let Some(ref capture) = self.audio_capture else {
+            self.state = AgentState::Idle;
+            cx.notify();
+            return;
+        };
+
+        match capture.stop_recording() {
+            Ok(wav_bytes) => {
+                tracing::info!(byte_count = wav_bytes.len(), "[Push-To-Talk] Audio captured");
+                if wav_bytes.is_empty() {
+                    self.state = AgentState::Idle;
+                    self.set_voice_error("No speech detected. Type your request instead.".to_string(), cx);
+                    return;
+                }
+
+                self.is_transcribing = true;
+                self.state = AgentState::Processing {
+                    thought_summary: Some("Transcribing speech with Whisper...".to_string()),
+                };
+                self.voice_error = None;
+                tracing::info!("[Push-To-Talk] Audio sent to STT");
+                cx.notify();
+
+                let stt = self.stt_provider.clone();
+                let agent = self.agent.clone();
+                let runtime_handle = crate::get_runtime_handle();
+
+                cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    let cx = cx.clone();
+                    async move {
+                        let result = if let Some(stt) = stt {
+                            if let Some(handle) = runtime_handle {
+                                match handle
+                                    .spawn(async move {
+                                        stt.transcribe_audio(&wav_bytes, 16000).await
+                                    })
+                                    .await
+                                {
+                                    Ok(result) => result,
+                                    Err(error) => Err(function_providers::ProviderError::Network(
+                                        format!("Transcription task failed: {error}"),
+                                    )),
+                                }
+                            } else {
+                                Err(function_providers::ProviderError::Network(
+                                    "Tokio runtime unavailable for transcription".to_string(),
+                                ))
+                            }
+                        } else {
+                            Err(function_providers::ProviderError::NotConfigured(
+                                "Speech-to-text provider not configured".to_string(),
+                            ))
+                        };
+
+                        let _ = cx.update(|cx| {
+                            this.update(cx, |view, cx| {
+                                view.is_transcribing = false;
+                                match result {
+                                    Ok(transcript) => {
+                                        let text = transcript.trim().to_string();
+                                        tracing::info!(
+                                            transcription = %text,
+                                            "[Push-To-Talk] Transcription received"
+                                        );
+
+                                        if !text.is_empty() {
+                                            view.voice_error = None;
+                                            view.play_sound_feedback(SoundEffect::Success);
+                                            if let Some(agent_arc) = agent {
+                                                view.active_task = Some(text.clone());
+                                                view.input_buffer.clear();
+                                                view.mode = FunctionMode::Command;
+                                                view.activities.clear();
+                                                view.activities.push(ActivityEntry {
+                                                    step: 1,
+                                                    description: format!("Spoken prompt: \"{}\"", text),
+                                                    status: ActivityStatus::Done,
+                                                });
+                                                view.activities.push(ActivityEntry {
+                                                    step: 2,
+                                                    description: "Executing computer task".to_string(),
+                                                    status: ActivityStatus::Running,
+                                                });
+                                                view.state = AgentState::Processing {
+                                                    thought_summary: Some("Executing spoken request...".to_string()),
+                                                };
+                                                let prompt_text = text.clone();
+                                                if let Some(handle) = crate::get_runtime_handle() {
+                                                    handle.spawn(async move {
+                                                        let _ = agent_arc.execute_task(&prompt_text).await;
+                                                    });
+                                                } else {
+                                                    tokio::spawn(async move {
+                                                        let _ = agent_arc.execute_task(&prompt_text).await;
+                                                    });
+                                                }
+                                            } else {
+                                                view.input_buffer = text;
+                                                view.state = AgentState::Idle;
+                                            }
+                                        } else {
+                                            view.voice_error = Some(
+                                                "No speech detected. Type your request instead.".to_string(),
+                                            );
+                                            view.state = AgentState::Idle;
+                                            view.play_sound_feedback(SoundEffect::Error);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Voice transcription failed");
+                                        view.voice_error = Some(format!(
+                                            "Speech error: {}. You can type your request instead.",
+                                            e
+                                        ));
+                                        view.state = AgentState::Idle;
+                                        view.play_sound_feedback(SoundEffect::Error);
+                                    }
+                                }
+                                cx.notify();
+                            })
+                        });
+                    }
+                })
+                .detach();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to stop audio recording");
+                self.state = AgentState::Idle;
+                self.set_voice_error(format!("Audio recording error: {}", e), cx);
+            }
+        }
+    }
+
     pub fn toggle_voice(&mut self, _: &ToggleVoice, _window: &mut Window, cx: &mut Context<Self>) {
         if self.listening {
             self.listening = false;
