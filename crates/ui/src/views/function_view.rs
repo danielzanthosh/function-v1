@@ -545,12 +545,51 @@ impl FunctionView {
                                         let text_to_speak = summary.clone();
                                         let tts_opt = view.tts_provider.clone();
                                         let output_format = view.config.tts.output_format.clone();
+                                        let runtime_handle = crate::get_runtime_handle();
 
                                         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                                             let cx = cx.clone();
                                             async move {
                                                 if let Some(tts) = tts_opt {
-                                                    let synth_res = tts.synthesize_speech(&text_to_speak).await;
+                                                    // GPUI's executor is not necessarily inside a Tokio runtime.
+                                                    // Run the TTS provider future on Function's shared Tokio runtime
+                                                    // because the OpenAI-compatible provider uses spawn_blocking.
+                                                    let synth_res = if let Some(handle) = runtime_handle {
+                                                        match handle
+                                                            .spawn(async move {
+                                                                tts.synthesize_speech(&text_to_speak).await
+                                                            })
+                                                            .await
+                                                        {
+                                                            Ok(result) => result,
+                                                            Err(error) => {
+                                                                Err(function_providers::ProviderError::Network(
+                                                                    format!("TTS task failed: {error}"),
+                                                                ))
+                                                            }
+                                                        }
+                                                    } else if let Ok(handle) =
+                                                        tokio::runtime::Handle::try_current()
+                                                    {
+                                                        match handle
+                                                            .spawn(async move {
+                                                                tts.synthesize_speech(&text_to_speak).await
+                                                            })
+                                                            .await
+                                                        {
+                                                            Ok(result) => result,
+                                                            Err(error) => {
+                                                                Err(function_providers::ProviderError::Network(
+                                                                    format!("TTS task failed: {error}"),
+                                                                ))
+                                                            }
+                                                        }
+                                                    } else {
+                                                        Err(function_providers::ProviderError::Network(
+                                                            "Tokio runtime unavailable for TTS".to_string(),
+                                                        ))
+                                                    };
+
                                                     if session_guard.load(std::sync::atomic::Ordering::SeqCst)
                                                         == current_audio_session
                                                     {
