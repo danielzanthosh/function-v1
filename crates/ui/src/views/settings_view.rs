@@ -83,6 +83,7 @@ pub fn render_settings_view(
     let window_position = view.config.window_position;
     let request_delay = view.config.request_delay;
     let input_token_limit = view.config.input_token_limit;
+    let context_optimization_enabled = view.config.context_optimization_enabled;
     let show_key = view.settings_show_key;
     let focused_field = view.settings_focused_field;
     let cursor_visible = view.cursor_visible;
@@ -437,13 +438,13 @@ pub fn render_settings_view(
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(text_primary)
-                                        .child("REQUEST DELAY & TOKEN LIMIT"),
+                                        .child("REQUEST DELAY, TOKEN LIMIT & CONTEXT"),
                                 )
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("Throttling delay before dispatch & adaptive token budget"),
+                                        .child("Throttle requests, limit input tokens, or disable automatic context optimization"),
                                 ),
                         )
                         .child(
@@ -488,6 +489,42 @@ pub fn render_settings_view(
                                             MouseButton::Left,
                                             cx.listener(|this, _, _, cx| {
                                                 this.cycle_input_token_limit(cx);
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2p5()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(if context_optimization_enabled {
+                                            accent_col
+                                        } else {
+                                            theme.surface_base
+                                        })
+                                        .border_1()
+                                        .border_color(if context_optimization_enabled {
+                                            accent_col
+                                        } else {
+                                            card_border
+                                        })
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .text_xs()
+                                        .text_color(if context_optimization_enabled {
+                                            theme.surface_base
+                                        } else {
+                                            text_muted
+                                        })
+                                        .child(if context_optimization_enabled {
+                                            "Context: ON"
+                                        } else {
+                                            "Context: OFF"
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.toggle_context_optimization(cx);
                                             }),
                                         ),
                                 ),
