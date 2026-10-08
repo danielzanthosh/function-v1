@@ -743,6 +743,10 @@ mod tests {
             "repeating-tool-mock"
         }
 
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
         async fn complete(
             &self,
             _req: function_providers::CompletionRequest,
