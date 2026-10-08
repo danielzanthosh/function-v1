@@ -2666,6 +2666,42 @@ impl FunctionView {
                             self.open_conversations(window, cx);
                             return;
                         }
+                        LocalCommand::ToggleTheme => {
+                            self.execute_launcher_action(LauncherAction::ToggleTheme, window, cx);
+                            return;
+                        }
+                        LocalCommand::ToggleVoice => {
+                            self.execute_launcher_action(LauncherAction::ToggleVoice, window, cx);
+                            return;
+                        }
+                        LocalCommand::ToggleSound => {
+                            self.execute_launcher_action(LauncherAction::ToggleSound, window, cx);
+                            return;
+                        }
+                        LocalCommand::ClearInput => {
+                            self.execute_launcher_action(LauncherAction::ClearInput, window, cx);
+                            return;
+                        }
+                        LocalCommand::OpenMemory => {
+                            self.execute_launcher_action(LauncherAction::OpenMemory, window, cx);
+                            return;
+                        }
+                        LocalCommand::OpenAbout => {
+                            self.execute_launcher_action(LauncherAction::OpenAbout, window, cx);
+                            return;
+                        }
+                        LocalCommand::Help => {
+                            self.execute_launcher_action(
+                                LauncherAction::RunTask("Provide a clear overview of Function slash commands and desktop capabilities.".to_string()),
+                                window,
+                                cx,
+                            );
+                            return;
+                        }
+                        LocalCommand::SetModel(model) => {
+                            self.execute_launcher_action(LauncherAction::SetModel(model), window, cx);
+                            return;
+                        }
                     }
                 }
 
