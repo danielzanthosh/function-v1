@@ -72,8 +72,9 @@ fn main() {
     let permission_status = runtime.block_on(platform.request_permissions());
     tracing::info!(?permission_status, "Platform permissions checked");
 
-    // Check microphone availability and configuration
-    let mic_available = runtime.block_on(platform.is_microphone_available());
+    // Microphone checks are deferred until user explicitly presses Record.
+    // Default mic_available to true so app startup does not query or open audio devices.
+    let mic_available = true;
     let mic_configured = config.speech.is_configured();
 
     // Register global hotkey (Windows uses native RegisterHotKey; macOS uses global Double Command)

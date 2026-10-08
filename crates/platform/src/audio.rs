@@ -62,18 +62,22 @@ pub mod macos_mic {
         unsafe {
             let cls = objc_getClass(b"AVCaptureDevice\0".as_ptr() as *const i8);
             if cls.is_null() {
+                tracing::warn!("AVCaptureDevice class not found");
                 return MacMicPermission::Unavailable;
             }
             let sel_status = sel_registerName(b"authorizationStatusForMediaType:\0".as_ptr() as *const i8);
             let sel_str = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as *const i8);
             let ns_string_cls = objc_getClass(b"NSString\0".as_ptr() as *const i8);
-            if ns_string_cls.is_null() {
+            if ns_string_cls.is_null() || sel_status.is_null() || sel_str.is_null() {
                 return MacMicPermission::Unavailable;
             }
 
             let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
                 std::mem::transmute(objc_msgSend as *const ());
-            let media_type = msg_send_str(ns_string_cls, sel_str, b"avcp\0".as_ptr() as *const i8);
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+            if media_type.is_null() {
+                return MacMicPermission::Unavailable;
+            }
 
             let msg_send_status: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i64 =
                 std::mem::transmute(objc_msgSend as *const ());
@@ -122,7 +126,7 @@ pub mod macos_mic {
         let mut block = BlockWithTx {
             literal: BlockLiteral {
                 isa: unsafe { &_NSConcreteStackBlock as *const c_void },
-                flags: 1 << 30,
+                flags: (1 << 28) | (1 << 30), // BLOCK_HAS_SIGNATURE | BLOCK_HAS_COPY_DISPOSE
                 reserved: 0,
                 invoke: invoke_block,
                 descriptor: &BLOCK_DESCRIPTOR,
@@ -137,9 +141,20 @@ pub mod macos_mic {
             );
             let sel_str = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as *const i8);
             let ns_string_cls = objc_getClass(b"NSString\0".as_ptr() as *const i8);
+
+            if cls.is_null() || sel_req.is_null() || sel_str.is_null() || ns_string_cls.is_null() {
+                let _ = Box::from_raw(tx_ptr);
+                return MacMicPermission::Unavailable;
+            }
+
             let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
                 std::mem::transmute(objc_msgSend as *const ());
-            let media_type = msg_send_str(ns_string_cls, sel_str, b"avcp\0".as_ptr() as *const i8);
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+
+            if media_type.is_null() {
+                let _ = Box::from_raw(tx_ptr);
+                return MacMicPermission::Unavailable;
+            }
 
             let msg_send_req:
                 unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut BlockWithTx) =
