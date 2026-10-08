@@ -693,6 +693,7 @@ impl FunctionView {
         self._agent_sub_task = Some(sub_task);
         agent.set_request_delay(self.config.request_delay.as_millis());
         agent.set_input_token_limit(self.config.input_token_limit);
+        agent.set_context_optimization_enabled(self.config.context_optimization_enabled);
         self.agent = Some(agent);
         self
     }
@@ -714,6 +715,7 @@ impl FunctionView {
         if let Some(ref agent) = self.agent {
             agent.set_request_delay(config.request_delay.as_millis());
             agent.set_input_token_limit(config.input_token_limit);
+            agent.set_context_optimization_enabled(config.context_optimization_enabled);
         }
         self.config = config;
         self
@@ -1376,6 +1378,7 @@ impl FunctionView {
         if let Some(ref agent) = self.agent {
             agent.set_request_delay(self.config.request_delay.as_millis());
             agent.set_input_token_limit(self.config.input_token_limit);
+            agent.set_context_optimization_enabled(self.config.context_optimization_enabled);
         }
 
         match self.config.save() {
@@ -1562,6 +1565,15 @@ impl FunctionView {
         self.config.input_token_limit = self.config.input_token_limit.next();
         if let Some(ref agent) = self.agent {
             agent.set_input_token_limit(self.config.input_token_limit);
+        }
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    pub fn toggle_context_optimization(&mut self, cx: &mut Context<Self>) {
+        self.config.context_optimization_enabled = !self.config.context_optimization_enabled;
+        if let Some(ref agent) = self.agent {
+            agent.set_context_optimization_enabled(self.config.context_optimization_enabled);
         }
         self.play_sound_feedback(SoundEffect::Navigate);
         cx.notify();
