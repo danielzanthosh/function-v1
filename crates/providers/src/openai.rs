@@ -1,11 +1,13 @@
 //! OpenAI-compatible LLM and Speech-to-Text provider implementations.
 
 use crate::{
-    ChatMessage, CompletionRequest, CompletionResponse, LlmProvider, MessageRole, ProviderError,
-    SpeechToTextProvider, TextToSpeechProvider, ToolCall,
+    is_rate_limit_message, parse_retry_delay_from_message, ChatMessage, CompletionRequest,
+    CompletionResponse, LlmProvider, MessageRole, ProviderError, SpeechToTextProvider,
+    TextToSpeechProvider, ToolCall,
 };
 use async_trait::async_trait;
 use serde_json::json;
+use std::any::Any;
 use std::process::Command;
 
 const CURL_STATUS_MARKER: &str = "\n__FUNCTION_HTTP_STATUS__:";
@@ -65,6 +67,10 @@ impl OpenAiLlmProvider {
 impl LlmProvider for OpenAiLlmProvider {
     fn name(&self) -> &str {
         "openai-compatible"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn context_limit(&self, model: &str) -> usize {
@@ -280,6 +286,14 @@ impl LlmProvider for OpenAiLlmProvider {
                     "Failed to parse provider response JSON: {}",
                     e
                 );
+                if status_code == 429 || is_rate_limit_message(&response_body) {
+                    let retry_after = parse_retry_delay_from_message(&response_body);
+                    return Err(ProviderError::RateLimit {
+                        code: status_code,
+                        message: response_body,
+                        retry_after,
+                    });
+                }
                 return Err(ProviderError::Api {
                     code: status_code,
                     message: format!("Invalid JSON response from provider: {}", e),
@@ -297,6 +311,15 @@ impl LlmProvider for OpenAiLlmProvider {
                 raw_response = %sanitized_body,
                 "Provider returned HTTP error status or error payload"
             );
+            if status_code == 429 || is_rate_limit_message(&msg) || is_rate_limit_message(&response_body) {
+                let retry_after = parse_retry_delay_from_message(&msg)
+                    .or_else(|| parse_retry_delay_from_message(&response_body));
+                return Err(ProviderError::RateLimit {
+                    code: status_code,
+                    message: msg,
+                    retry_after,
+                });
+            }
             return Err(ProviderError::Api {
                 code: status_code,
                 message: msg,
@@ -825,8 +848,16 @@ impl SpeechToTextProvider for WhisperSttProvider {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("Whisper API error");
+                let status_code = err_obj.get("code").and_then(|c| c.as_u64()).unwrap_or(400) as u16;
+                if status_code == 429 || is_rate_limit_message(msg) {
+                    return Err(ProviderError::RateLimit {
+                        code: status_code,
+                        message: msg.to_string(),
+                        retry_after: parse_retry_delay_from_message(msg),
+                    });
+                }
                 return Err(ProviderError::Api {
-                    code: 400,
+                    code: status_code,
                     message: msg.to_string(),
                 });
             }

@@ -3,6 +3,7 @@ use crate::{
     OpenAiLlmProvider, ProviderError,
 };
 use async_trait::async_trait;
+use std::any::Any;
 
 pub const GEMINI_OPENAI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
@@ -29,6 +30,10 @@ impl GeminiLlmProvider {
 impl LlmProvider for GeminiLlmProvider {
     fn name(&self) -> &str {
         "gemini"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn context_limit(&self, model: &str) -> usize {

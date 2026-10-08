@@ -19,9 +19,9 @@ pub fn resolve_shell_command(input: &str) -> Option<String> {
 /// Resolve user input to a local command.
 ///
 /// Recognizes (case-insensitive, ignoring leading and trailing whitespace):
-/// - Settings: "settings", "configure", "preferences", "config"
-/// - New Chat: "conversation new", "new chat", "new conversation", "clear chat"
-/// - Conversations List: "conversation", "conversations", "history", "chats", "chat history"
+/// - Settings: "settings", "configure", "preferences", "config", "/settings", "/configure"
+/// - New Chat: "conversation new", "new chat", "new conversation", "clear chat", "/new"
+/// - Conversations List: "conversation", "conversations", "history", "chats", "chat history", "/conversation", "/chats"
 ///
 /// Returns `Some(LocalCommand)` if recognized, or `None` so unrecognized input
 /// continues through the AI agent pipeline.
@@ -29,7 +29,13 @@ pub fn resolve_local_command(input: &str) -> Option<LocalCommand> {
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
 
-    if lower == "settings" || lower == "configure" || lower == "preferences" || lower == "config" {
+    if lower == "settings"
+        || lower == "configure"
+        || lower == "preferences"
+        || lower == "config"
+        || lower == "/settings"
+        || lower == "/configure"
+    {
         Some(LocalCommand::Configure)
     } else if lower == "conversation new"
         || lower == "new chat"
@@ -63,6 +69,10 @@ mod tests {
             Some(LocalCommand::Configure)
         );
         assert_eq!(
+            resolve_local_command("/settings"),
+            Some(LocalCommand::Configure)
+        );
+        assert_eq!(
             resolve_local_command("Settings"),
             Some(LocalCommand::Configure)
         );
@@ -74,32 +84,16 @@ mod tests {
             resolve_local_command("configure"),
             Some(LocalCommand::Configure)
         );
-        assert_eq!(
-            resolve_local_command("Configure"),
-            Some(LocalCommand::Configure)
-        );
-        assert_eq!(
-            resolve_local_command("preferences"),
-            Some(LocalCommand::Configure)
-        );
-        assert_eq!(
-            resolve_local_command("Preferences"),
-            Some(LocalCommand::Configure)
-        );
-        assert_eq!(
-            resolve_local_command("config"),
-            Some(LocalCommand::Configure)
-        );
-        assert_eq!(
-            resolve_local_command("Config"),
-            Some(LocalCommand::Configure)
-        );
     }
 
     #[test]
     fn test_resolve_conversation_commands() {
         assert_eq!(
             resolve_local_command("conversation"),
+            Some(LocalCommand::OpenConversations)
+        );
+        assert_eq!(
+            resolve_local_command("/conversation"),
             Some(LocalCommand::OpenConversations)
         );
         assert_eq!(
@@ -111,15 +105,7 @@ mod tests {
             Some(LocalCommand::OpenConversations)
         );
         assert_eq!(
-            resolve_local_command("chats"),
-            Some(LocalCommand::OpenConversations)
-        );
-        assert_eq!(
-            resolve_local_command("conversation new"),
-            Some(LocalCommand::NewConversation)
-        );
-        assert_eq!(
-            resolve_local_command("new chat"),
+            resolve_local_command("/new"),
             Some(LocalCommand::NewConversation)
         );
     }

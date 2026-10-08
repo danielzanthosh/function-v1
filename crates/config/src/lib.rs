@@ -104,6 +104,112 @@ pub enum WindowPositionMode {
     UpperThird,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestDelay {
+    #[default]
+    Disabled,
+    Ms250,
+    Ms500,
+    Sec1,
+    Sec2,
+    Sec5,
+    Sec10,
+}
+
+impl RequestDelay {
+    pub fn as_millis(&self) -> u64 {
+        match self {
+            RequestDelay::Disabled => 0,
+            RequestDelay::Ms250 => 250,
+            RequestDelay::Ms500 => 500,
+            RequestDelay::Sec1 => 1000,
+            RequestDelay::Sec2 => 2000,
+            RequestDelay::Sec5 => 5000,
+            RequestDelay::Sec10 => 10000,
+        }
+    }
+
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            RequestDelay::Disabled => "Disabled",
+            RequestDelay::Ms250 => "250 ms",
+            RequestDelay::Ms500 => "500 ms",
+            RequestDelay::Sec1 => "1 s",
+            RequestDelay::Sec2 => "2 s",
+            RequestDelay::Sec5 => "5 s",
+            RequestDelay::Sec10 => "10 s",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            RequestDelay::Disabled => RequestDelay::Ms250,
+            RequestDelay::Ms250 => RequestDelay::Ms500,
+            RequestDelay::Ms500 => RequestDelay::Sec1,
+            RequestDelay::Sec1 => RequestDelay::Sec2,
+            RequestDelay::Sec2 => RequestDelay::Sec5,
+            RequestDelay::Sec5 => RequestDelay::Sec10,
+            RequestDelay::Sec10 => RequestDelay::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InputTokenLimit {
+    #[default]
+    Auto,
+    K2,
+    K3,
+    K4,
+    K5,
+    K6,
+    K7,
+    K8,
+}
+
+impl InputTokenLimit {
+    pub fn token_budget(&self, provider_context_limit: usize) -> usize {
+        match self {
+            InputTokenLimit::Auto => (provider_context_limit * 82) / 100,
+            InputTokenLimit::K2 => 2_000,
+            InputTokenLimit::K3 => 3_000,
+            InputTokenLimit::K4 => 4_000,
+            InputTokenLimit::K5 => 5_000,
+            InputTokenLimit::K6 => 6_000,
+            InputTokenLimit::K7 => 7_000,
+            InputTokenLimit::K8 => 8_000,
+        }
+    }
+
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            InputTokenLimit::Auto => "Auto",
+            InputTokenLimit::K2 => "2K",
+            InputTokenLimit::K3 => "3K",
+            InputTokenLimit::K4 => "4K",
+            InputTokenLimit::K5 => "5K",
+            InputTokenLimit::K6 => "6K",
+            InputTokenLimit::K7 => "7K",
+            InputTokenLimit::K8 => "8K",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            InputTokenLimit::Auto => InputTokenLimit::K2,
+            InputTokenLimit::K2 => InputTokenLimit::K3,
+            InputTokenLimit::K3 => InputTokenLimit::K4,
+            InputTokenLimit::K4 => InputTokenLimit::K5,
+            InputTokenLimit::K5 => InputTokenLimit::K6,
+            InputTokenLimit::K6 => InputTokenLimit::K7,
+            InputTokenLimit::K7 => InputTokenLimit::K8,
+            InputTokenLimit::K8 => InputTokenLimit::Auto,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub hotkey: String,
@@ -118,6 +224,10 @@ pub struct AppConfig {
     pub sound_enabled: bool,
     #[serde(default = "default_start_hidden")]
     pub start_hidden: bool,
+    #[serde(default)]
+    pub request_delay: RequestDelay,
+    #[serde(default)]
+    pub input_token_limit: InputTokenLimit,
     pub ai_provider: AiProviderConfig,
     pub speech: SpeechConfig,
     #[serde(default)]
@@ -148,6 +258,8 @@ impl Default for AppConfig {
             window_position: WindowPositionMode::UpperThird,
             sound_enabled: true,
             start_hidden: true,
+            request_delay: RequestDelay::Disabled,
+            input_token_limit: InputTokenLimit::Auto,
             ai_provider: AiProviderConfig::default(),
             speech: SpeechConfig::default(),
             tts: TtsConfig::default(),
