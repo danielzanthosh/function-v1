@@ -38,7 +38,7 @@ impl Tool for MouseTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["move", "click", "double_click", "right_click", "scroll", "drag"]
+                    "enum": ["move", "click", "double_click", "right_click", "middle_click", "scroll", "drag"]
                 },
                 "x": { "type": "integer", "description": "Target X pixel coordinate" },
                 "y": { "type": "integer", "description": "Target Y pixel coordinate" },
@@ -91,40 +91,40 @@ impl Tool for MouseTool {
                     json!({ "x": x, "y": y }),
                 ))
             }
-            "click" => {
-                self.control.mouse_click(MouseButton::Left).map_err(|e| {
-                    ToolError::ExecutionFailed {
-                        tool: self.name().into(),
-                        details: e.to_string(),
-                    }
+            "click" | "double_click" | "right_click" | "middle_click" => {
+                // The model may provide coordinates for a click action. Previously these
+                // actions ignored x/y and clicked wherever the cursor happened to be.
+                if let (Some(x), Some(y)) = (
+                    params.get("x").and_then(|v| v.as_i64()),
+                    params.get("y").and_then(|v| v.as_i64()),
+                ) {
+                    self.control
+                        .mouse_move_smooth(x as i32, y as i32)
+                        .map_err(|e| ToolError::ExecutionFailed {
+                            tool: self.name().into(),
+                            details: format!("Failed to move to click target: {}", e),
+                        })?;
+                }
+
+                let button = match action {
+                    "right_click" => MouseButton::Right,
+                    "middle_click" => MouseButton::Middle,
+                    _ => MouseButton::Left,
+                };
+
+                match action {
+                    "double_click" => self.control.mouse_double_click(button),
+                    _ => self.control.mouse_click(button),
+                }
+                .map_err(|e| ToolError::ExecutionFailed {
+                    tool: self.name().into(),
+                    details: e.to_string(),
                 })?;
+
+                let (x, y) = self.control.get_cursor_position();
                 Ok(ToolResult::success(
-                    "Mouse clicked",
-                    json!({ "button": "left" }),
-                ))
-            }
-            "double_click" => {
-                self.control
-                    .mouse_double_click(MouseButton::Left)
-                    .map_err(|e| ToolError::ExecutionFailed {
-                        tool: self.name().into(),
-                        details: e.to_string(),
-                    })?;
-                Ok(ToolResult::success(
-                    "Mouse double clicked",
-                    json!({ "button": "left" }),
-                ))
-            }
-            "right_click" => {
-                self.control.mouse_click(MouseButton::Right).map_err(|e| {
-                    ToolError::ExecutionFailed {
-                        tool: self.name().into(),
-                        details: e.to_string(),
-                    }
-                })?;
-                Ok(ToolResult::success(
-                    "Mouse right clicked",
-                    json!({ "button": "right" }),
+                    format!("{} at ({}, {})", action.replace('_', " "), x, y),
+                    json!({ "action": action, "x": x, "y": y, "button": format!("{:?}", button).to_lowercase() }),
                 ))
             }
             "scroll" => {
