@@ -140,6 +140,7 @@ pub struct Agent {
     max_steps: usize,
     request_delay_ms: AtomicU64,
     input_token_limit: RwLock<function_config::InputTokenLimit>,
+    context_optimization_enabled: RwLock<bool>,
 }
 
 /// Per-run handle used to emit state updates and observe cancellation.
@@ -381,6 +382,7 @@ impl Agent {
             max_steps: 15,
             request_delay_ms: AtomicU64::new(0),
             input_token_limit: RwLock::new(function_config::InputTokenLimit::Auto),
+            context_optimization_enabled: RwLock::new(true),
         }
     }
 
@@ -393,6 +395,13 @@ impl Agent {
     pub fn set_input_token_limit(&self, limit: function_config::InputTokenLimit) {
         if let Ok(mut lock) = self.input_token_limit.write() {
             *lock = limit;
+        }
+    }
+
+    /// Enable or disable automatic context compaction before provider requests.
+    pub fn set_context_optimization_enabled(&self, enabled: bool) {
+        if let Ok(mut lock) = self.context_optimization_enabled.write() {
+            *lock = enabled;
         }
     }
 
@@ -729,43 +738,63 @@ Agentic Multi-Step & Observation Loop:
                 .unwrap_or_else(|e| e.into_inner());
             let target_budget = limit_setting.token_budget(provider.context_limit("default"));
 
+            let context_optimization_enabled = *self
+                .context_optimization_enabled
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+
             let compaction_started = Instant::now();
-            let (request_messages, compaction) =
-                context::compact_messages(&messages, &tool_definitions, target_budget);
-            tracing::info!(
-                target: LIFECYCLE_LOG_TARGET,
-                run_id,
-                step,
-                provider = %provider.name(),
-                before_tokens = compaction.before_tokens,
-                after_tokens = compaction.after_tokens,
-                budget = target_budget,
-                removed_messages = compaction.removed_messages,
-                removed_images = compaction.removed_images,
-                truncated_outputs = compaction.truncated_outputs,
-                elapsed_ms = compaction_started.elapsed().as_millis() as u64,
-                "context compaction completed"
-            );
-            if compaction.budget_unreachable {
-                tracing::warn!(
+            let (request_messages, compaction) = if context_optimization_enabled {
+                context::compact_messages(&messages, &tool_definitions, target_budget)
+            } else {
+                let estimated_tokens = context::estimate_tokens(&messages, &tool_definitions);
+                (
+                    messages.clone(),
+                    context::ContextCompactionReport {
+                        before_tokens: estimated_tokens,
+                        after_tokens: estimated_tokens,
+                        target_budget,
+                        ..Default::default()
+                    },
+                )
+            };
+
+            if context_optimization_enabled {
+                tracing::info!(
                     target: LIFECYCLE_LOG_TARGET,
                     run_id,
                     step,
+                    provider = %provider.name(),
+                    before_tokens = compaction.before_tokens,
                     after_tokens = compaction.after_tokens,
                     budget = target_budget,
-                    "context exceeds the input token budget even after compaction; dispatching anyway"
+                    removed_messages = compaction.removed_messages,
+                    removed_images = compaction.removed_images,
+                    truncated_outputs = compaction.truncated_outputs,
+                    elapsed_ms = compaction_started.elapsed().as_millis() as u64,
+                    "context compaction completed"
                 );
-            }
+                if compaction.budget_unreachable {
+                    tracing::warn!(
+                        target: LIFECYCLE_LOG_TARGET,
+                        run_id,
+                        step,
+                        after_tokens = compaction.after_tokens,
+                        budget = target_budget,
+                        "context exceeds the input token budget even after compaction; dispatching anyway"
+                    );
+                }
 
-            if compaction.before_tokens > compaction.after_tokens {
-                let msg = format!(
-                    "Context optimized {} → {} tokens",
-                    context::format_token_k(compaction.before_tokens),
-                    context::format_token_k(compaction.after_tokens)
-                );
-                run.emit(AgentState::Processing {
-                    thought_summary: Some(msg),
-                });
+                if compaction.before_tokens > compaction.after_tokens {
+                    let msg = format!(
+                        "Context optimized {} → {} tokens",
+                        context::format_token_k(compaction.before_tokens),
+                        context::format_token_k(compaction.after_tokens)
+                    );
+                    run.emit(AgentState::Processing {
+                        thought_summary: Some(msg),
+                    });
+                }
             }
 
             let req = CompletionRequest {
