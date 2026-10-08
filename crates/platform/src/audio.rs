@@ -73,7 +73,7 @@ pub mod macos_mic {
 
             let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
                 std::mem::transmute(objc_msgSend as *const ());
-            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"avcp\0".as_ptr() as *const i8);
 
             let msg_send_status: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i64 =
                 std::mem::transmute(objc_msgSend as *const ());
@@ -103,10 +103,13 @@ pub mod macos_mic {
 
         extern "C" fn invoke_block(block: *mut BlockLiteral, granted: bool) {
             unsafe {
-                let tx_ptr = (block as *mut c_void).offset(std::mem::size_of::<BlockLiteral>() as isize)
-                    as *mut std::sync::mpsc::Sender<bool>;
-                let tx = Box::from_raw(tx_ptr);
-                let _ = tx.send(granted);
+                let tx_ptr_location = (block as *mut c_void).offset(std::mem::size_of::<BlockLiteral>() as isize)
+                    as *mut *mut std::sync::mpsc::Sender<bool>;
+                let tx_ptr = *tx_ptr_location;
+                if !tx_ptr.is_null() {
+                    let tx = Box::from_raw(tx_ptr);
+                    let _ = tx.send(granted);
+                }
             }
         }
 
@@ -136,7 +139,7 @@ pub mod macos_mic {
             let ns_string_cls = objc_getClass(b"NSString\0".as_ptr() as *const i8);
             let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
                 std::mem::transmute(objc_msgSend as *const ());
-            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"avcp\0".as_ptr() as *const i8);
 
             let msg_send_req:
                 unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut BlockWithTx) =

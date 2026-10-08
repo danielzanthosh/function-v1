@@ -39,6 +39,116 @@ fn split_curl_response(raw_response: String) -> (String, Option<u16>) {
     (raw_response, None)
 }
 
+fn serialize_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(idx, m)| {
+            let role_str = match m.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+
+            let content_val = if let Some(ref imgs) = m.images {
+                if imgs.is_empty() {
+                    json!(m.content)
+                } else {
+                    let mut parts = vec![json!({ "type": "text", "text": m.content })];
+                    for img in imgs {
+                        let url = if img.starts_with("data:") {
+                            img.clone()
+                        } else {
+                            format!("data:image/png;base64,{}", img)
+                        };
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": { "url": url }
+                        }));
+                    }
+                    json!(parts)
+                }
+            } else {
+                json!(m.content)
+            };
+
+            if !content_val.is_string() && !content_val.is_array() {
+                let content_type = match &content_val {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "boolean",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::Object(_) => "object",
+                    _ => "unknown",
+                };
+                tracing::warn!(
+                    message_index = idx,
+                    message_role = %role_str,
+                    content_type = %content_type,
+                    "Serializing message with non-string and non-array content"
+                );
+            }
+
+            let mut obj = json!({
+                "role": role_str,
+                "content": content_val,
+            });
+
+            if let Some(ref t_id) = m.tool_call_id {
+                obj["tool_call_id"] = json!(t_id);
+            }
+
+            if let Some(ref t_calls) = m.tool_calls {
+                let calls_json: Vec<serde_json::Value> = t_calls
+                    .iter()
+                    .map(|c| {
+                        let call_sig = c
+                            .thought_signature
+                            .as_ref()
+                            .or(m.thought_signature.as_ref());
+
+                        let mut call_obj = json!({
+                            "id": c.id,
+                            "type": "function",
+                            "function": {
+                                "name": c.name,
+                                "arguments": c.arguments.to_string(),
+                            }
+                        });
+
+                        if let Some(ts) = call_sig {
+                            call_obj["thought_signature"] = json!(ts);
+                            call_obj["extra_fields"] = json!({
+                                "thought_signature": ts
+                            });
+                            call_obj["function"]["thought_signature"] = json!(ts);
+                            call_obj["function"]["extra_fields"] = json!({
+                                "thought_signature": ts
+                            });
+                        }
+
+                        call_obj
+                    })
+                    .collect();
+                obj["tool_calls"] = json!(calls_json);
+            }
+
+            if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
+                m.tool_calls
+                    .as_ref()
+                    .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
+            }) {
+                obj["thought_signature"] = json!(ts);
+                obj["extra_fields"] = json!({
+                    "thought_signature": ts
+                });
+            }
+
+            obj
+        })
+        .collect()
+}
+
 pub struct OpenAiLlmProvider {
     base_url: String,
     api_key: Option<String>,
@@ -92,97 +202,7 @@ impl LlmProvider for OpenAiLlmProvider {
             &req.model
         };
 
-        let messages_json: Vec<serde_json::Value> = req
-            .messages
-            .iter()
-            .map(|m| {
-                let role_str = match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                };
-
-                let content_val = if let Some(ref imgs) = m.images {
-                    if imgs.is_empty() {
-                        json!(m.content)
-                    } else {
-                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
-                        for img in imgs {
-                            let url = if img.starts_with("data:") {
-                                img.clone()
-                            } else {
-                                format!("data:image/png;base64,{}", img)
-                            };
-                            parts.push(json!({
-                                "type": "image_url",
-                                "image_url": { "url": url }
-                            }));
-                        }
-                        json!(parts)
-                    }
-                } else {
-                    json!(m.content)
-                };
-
-                let mut obj = json!({
-                    "role": role_str,
-                    "content": content_val,
-                });
-
-                if let Some(ref t_id) = m.tool_call_id {
-                    obj["tool_call_id"] = json!(t_id);
-                }
-
-                if let Some(ref t_calls) = m.tool_calls {
-                    let calls_json: Vec<serde_json::Value> = t_calls
-                        .iter()
-                        .map(|c| {
-                            let call_sig = c
-                                .thought_signature
-                                .as_ref()
-                                .or(m.thought_signature.as_ref());
-
-                            let mut call_obj = json!({
-                                "id": c.id,
-                                "type": "function",
-                                "function": {
-                                    "name": c.name,
-                                    "arguments": c.arguments.to_string(),
-                                }
-                            });
-
-                            if let Some(ts) = call_sig {
-                                call_obj["thought_signature"] = json!(ts);
-                                call_obj["extra_fields"] = json!({
-                                    "thought_signature": ts
-                                });
-                                call_obj["function"]["thought_signature"] = json!(ts);
-                                call_obj["function"]["extra_fields"] = json!({
-                                    "thought_signature": ts
-                                });
-                            }
-
-                            call_obj
-                        })
-                        .collect();
-                    obj["tool_calls"] = json!(calls_json);
-                }
-
-                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
-                    m.tool_calls
-                        .as_ref()
-                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
-                }) {
-                    obj["thought_signature"] = json!(ts);
-                    obj["extra_fields"] = json!({
-                        "thought_signature": ts
-                    });
-                }
-
-                obj
-            })
-            .collect();
+        let messages_json = serialize_messages(&req.messages);
 
         let mut payload = json!({
             "model": model,
@@ -541,96 +561,7 @@ impl LlmProvider for OpenAiLlmProvider {
             &req.model
         };
 
-        let messages_json: Vec<serde_json::Value> = req
-            .messages
-            .iter()
-            .map(|m| {
-                let role_str = match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                };
-                let content_val = if let Some(ref imgs) = m.images {
-                    if imgs.is_empty() {
-                        json!(m.content)
-                    } else {
-                        let mut parts = vec![json!({ "type": "text", "text": m.content })];
-                        for img in imgs {
-                            let url = if img.starts_with("data:") {
-                                img.clone()
-                            } else {
-                                format!("data:image/png;base64,{}", img)
-                            };
-                            parts.push(json!({
-                                "type": "image_url",
-                                "image_url": { "url": url }
-                            }));
-                        }
-                        json!(parts)
-                    }
-                } else {
-                    json!(m.content)
-                };
-
-                let mut obj = json!({
-                    "role": role_str,
-                    "content": content_val,
-                });
-
-                if let Some(ref t_id) = m.tool_call_id {
-                    obj["tool_call_id"] = json!(t_id);
-                }
-
-                if let Some(ref t_calls) = m.tool_calls {
-                    let calls_json: Vec<serde_json::Value> = t_calls
-                        .iter()
-                        .map(|c| {
-                            let call_sig = c
-                                .thought_signature
-                                .as_ref()
-                                .or(m.thought_signature.as_ref());
-
-                            let mut call_obj = json!({
-                                "id": c.id,
-                                "type": "function",
-                                "function": {
-                                    "name": c.name,
-                                    "arguments": c.arguments.to_string(),
-                                }
-                            });
-
-                            if let Some(ts) = call_sig {
-                                call_obj["thought_signature"] = json!(ts);
-                                call_obj["extra_fields"] = json!({
-                                    "thought_signature": ts
-                                });
-                                call_obj["function"]["thought_signature"] = json!(ts);
-                                call_obj["function"]["extra_fields"] = json!({
-                                    "thought_signature": ts
-                                });
-                            }
-
-                            call_obj
-                        })
-                        .collect();
-                    obj["tool_calls"] = json!(calls_json);
-                }
-
-                if let Some(ref ts) = m.thought_signature.as_ref().or_else(|| {
-                    m.tool_calls
-                        .as_ref()
-                        .and_then(|calls| calls.iter().find_map(|c| c.thought_signature.as_ref()))
-                }) {
-                    obj["thought_signature"] = json!(ts);
-                    obj["extra_fields"] = json!({
-                        "thought_signature": ts
-                    });
-                }
-
-                obj
-            })
-            .collect();
+        let messages_json = serialize_messages(&req.messages);
 
         let mut payload = json!({
             "model": model,
@@ -1625,5 +1556,78 @@ mod tests {
         let parsed_404: serde_json::Value = serde_json::from_str(body_404).unwrap();
         let msg_404 = provider_error_message(&parsed_404, body_404);
         assert_eq!(msg_404, "Model not found");
+    }
+
+    #[test]
+    fn test_serialize_messages_regression_normal_compacted_tool_calls_and_results() {
+        let messages = vec![
+            ChatMessage::system("You are Function assistant."),
+            ChatMessage::user("Search for Rust documentation"),
+            ChatMessage {
+                role: MessageRole::Assistant,
+                content: String::new(),
+                images: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_search_1".to_string(),
+                    name: "web_search".to_string(),
+                    arguments: json!({ "query": "Rust doc" }),
+                    thought_signature: None,
+                }]),
+                thought_signature: None,
+            },
+            ChatMessage::tool("call_search_1", "Found 3 results..."),
+            ChatMessage {
+                role: MessageRole::Tool,
+                content: "System log [tool output compacted: 1500 chars omitted]\nSuffix info".to_string(),
+                images: None,
+                tool_call_id: Some("call_log_2".to_string()),
+                tool_calls: None,
+                thought_signature: None,
+            },
+            ChatMessage::assistant("Here is what I found."),
+        ];
+
+        let serialized = serialize_messages(&messages);
+
+        assert_eq!(serialized.len(), 6);
+
+        // 1. System msg
+        assert_eq!(serialized[0]["role"], "system");
+        assert_eq!(serialized[0]["content"], "You are Function assistant.");
+        assert!(serialized[0]["content"].is_string());
+
+        // 2. User msg
+        assert_eq!(serialized[1]["role"], "user");
+        assert_eq!(serialized[1]["content"], "Search for Rust documentation");
+        assert!(serialized[1]["content"].is_string());
+
+        // 3. Assistant msg with tool calls
+        assert_eq!(serialized[2]["role"], "assistant");
+        assert_eq!(serialized[2]["content"], "");
+        assert!(serialized[2]["content"].is_string());
+        let tc = &serialized[2]["tool_calls"][0];
+        assert_eq!(tc["id"], "call_search_1");
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "web_search");
+        assert_eq!(tc["function"]["arguments"], "{\"query\":\"Rust doc\"}");
+        assert!(tc["function"]["arguments"].is_string());
+
+        // 4. Tool result msg
+        assert_eq!(serialized[3]["role"], "tool");
+        assert_eq!(serialized[3]["content"], "Found 3 results...");
+        assert!(serialized[3]["content"].is_string());
+        assert_eq!(serialized[3]["tool_call_id"], "call_search_1");
+
+        // 5. Compacted tool output msg
+        assert_eq!(serialized[4]["role"], "tool");
+        assert!(serialized[4]["content"].as_str().unwrap().contains("[tool output compacted:"));
+        assert!(serialized[4]["content"].is_string());
+        assert_eq!(serialized[4]["tool_call_id"], "call_log_2");
+
+        // 6. Assistant final msg
+        assert_eq!(serialized[5]["role"], "assistant");
+        assert_eq!(serialized[5]["content"], "Here is what I found.");
+        assert!(serialized[5]["content"].is_string());
     }
 }
