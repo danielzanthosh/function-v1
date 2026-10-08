@@ -2,6 +2,7 @@
 //!
 //! Provides comprehensive in-app customization:
 //! - AI Provider API Key, Model & Base URL
+//! - Request Delay & Input Token Limit
 //! - Theme Style (Carbon Dark, Obsidian OLED, Slate Midnight, Studio Light)
 //! - Accent Color (White, Cyan, Emerald, Violet, Amber)
 //! - Window Positioning (Center, Upper-Third)
@@ -80,6 +81,8 @@ pub fn render_settings_view(
     let theme_style = view.config.theme_style;
     let accent_color = view.config.accent_color;
     let window_position = view.config.window_position;
+    let request_delay = view.config.request_delay;
+    let input_token_limit = view.config.input_token_limit;
     let show_key = view.settings_show_key;
     let focused_field = view.settings_focused_field;
     let cursor_visible = view.cursor_visible;
@@ -152,7 +155,7 @@ pub fn render_settings_view(
                                     div()
                                         .text_xs()
                                         .text_color(text_muted)
-                                        .child("AI Provider, Appearance & Native Behavior"),
+                                        .child("AI Provider, Limits, Appearance & Behavior"),
                                 ),
                         ),
                 )
@@ -411,6 +414,82 @@ pub fn render_settings_view(
                                         } else {
                                             div()
                                         }),
+                                ),
+                        ),
+                )
+                // Customization Row: Request Delay & Input Token Limit
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p_3()
+                        .rounded_md()
+                        .bg(card_bg)
+                        .border_1()
+                        .border_color(card_border)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(text_primary)
+                                        .child("REQUEST DELAY & TOKEN LIMIT"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(text_muted)
+                                        .child("Throttling delay before dispatch & adaptive token budget"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2p5()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme.surface_base)
+                                        .border_1()
+                                        .border_color(card_border)
+                                        .hover(|s| s.border_color(accent_col))
+                                        .text_xs()
+                                        .text_color(text_primary)
+                                        .child(format!("Delay: {}", request_delay.display_label()))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.cycle_request_delay(cx);
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2p5()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(theme.surface_base)
+                                        .border_1()
+                                        .border_color(accent_col)
+                                        .hover(|s| s.bg(theme.surface_active))
+                                        .text_xs()
+                                        .text_color(accent_col)
+                                        .child(format!("Limit: {}", input_token_limit.display_label()))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.cycle_input_token_limit(cx);
+                                            }),
+                                        ),
                                 ),
                         ),
                 )

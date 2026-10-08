@@ -8,15 +8,19 @@ pub mod codex;
 pub mod context_limits;
 pub mod gemini;
 pub mod openai;
+pub mod retry;
 pub mod search;
 
 pub use codex::CodexChatGptProvider;
 pub use gemini::GeminiLlmProvider;
 pub use openai::{OpenAiLlmProvider, OpenAiTtsProvider, WhisperSttProvider};
+pub use retry::{RetryingLlmProvider, StatusCallback};
 pub use search::DuckDuckGoSearchProvider;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -27,10 +31,119 @@ pub enum ProviderError {
     Network(String),
     #[error("API error ({code}): {message}")]
     Api { code: u16, message: String },
+    #[error("Rate limit error ({code}): {message}")]
+    RateLimit {
+        code: u16,
+        message: String,
+        retry_after: Option<Duration>,
+    },
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("Provider not configured: {0}")]
     NotConfigured(String),
+}
+
+impl ProviderError {
+    pub fn is_rate_limit(&self) -> bool {
+        match self {
+            ProviderError::RateLimit { .. } => true,
+            ProviderError::Api { code, message } => {
+                *code == 429 || is_rate_limit_message(message)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            ProviderError::Authentication(_) | ProviderError::NotConfigured(_) => true,
+            ProviderError::Api { code, message } => {
+                if *code == 429 || is_rate_limit_message(message) {
+                    return false;
+                }
+                if *code == 401 || *code == 403 || *code == 400 || *code == 404 {
+                    return true;
+                }
+                let lower = message.to_lowercase();
+                lower.contains("invalid api key")
+                    || lower.contains("invalid_api_key")
+                    || lower.contains("unauthorized")
+                    || lower.contains("model_not_found")
+                    || lower.contains("invalid model")
+            }
+            ProviderError::RateLimit { .. } => false,
+            _ => false,
+        }
+    }
+
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            ProviderError::RateLimit { retry_after, .. } => *retry_after,
+            ProviderError::Api { message, .. } => parse_retry_delay_from_message(message),
+            _ => None,
+        }
+    }
+}
+
+pub fn is_rate_limit_message(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("429")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("resource_exhausted")
+        || lower.contains("resource exhausted")
+        || lower.contains("too many requests")
+        || lower.contains("tokens per minute")
+        || lower.contains("tpm")
+        || lower.contains("requests per minute")
+        || lower.contains("rpm")
+        || lower.contains("quota exceeded")
+        || lower.contains("retry after")
+}
+
+pub fn parse_retry_delay_from_message(msg: &str) -> Option<Duration> {
+    let lower = msg.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    for i in 0..words.len() {
+        let clean_word = words[i].trim_matches(|c: char| !c.is_alphanumeric());
+        if clean_word == "in" || clean_word == "after" || clean_word == "wait" {
+            if i + 1 < words.len() {
+                let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
+                if let Some(dur) = parse_time_str(next) {
+                    return Some(dur);
+                }
+                if i + 2 < words.len() {
+                    let unit_part = words[i + 2].trim_matches(|c: char| !c.is_alphanumeric());
+                    if let Ok(val) = next.parse::<f64>() {
+                        if unit_part.starts_with("sec") || unit_part == "s" {
+                            return Some(Duration::from_secs_f64(val.max(0.1)));
+                        } else if unit_part.starts_with("ms") || unit_part.starts_with("milli") {
+                            return Some(Duration::from_millis((val.max(1.0)) as u64));
+                        } else if unit_part.starts_with("min") || unit_part == "m" {
+                            return Some(Duration::from_secs_f64((val * 60.0).max(1.0)));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(dur) = parse_time_str(clean_word) {
+            return Some(dur);
+        }
+    }
+    None
+}
+
+fn parse_time_str(s: &str) -> Option<Duration> {
+    let clean = s.trim_matches(|c: char| !c.is_alphanumeric());
+    if clean.ends_with("ms") {
+        let num = clean.trim_end_matches("ms").parse::<f64>().ok()?;
+        Some(Duration::from_millis(num.max(1.0) as u64))
+    } else if clean.ends_with('s') {
+        let num = clean.trim_end_matches('s').parse::<f64>().ok()?;
+        Some(Duration::from_secs_f64(num.max(0.1)))
+    } else {
+        None
+    }
 }
 
 /// Message role for LLM completions.
@@ -155,6 +268,9 @@ pub trait LlmProvider: Send + Sync {
     /// Return the provider identifier name.
     fn name(&self) -> &str;
 
+    /// Return Any reference for downcasting if needed.
+    fn as_any(&self) -> &dyn Any;
+
     /// Context window size in tokens for the selected model.
     fn context_limit(&self, _model: &str) -> usize {
         32_000
@@ -214,7 +330,6 @@ pub struct SearchResult {
 }
 
 /// Mock LLM provider for testing and development.
-/// Mock LLM provider for testing and development.
 pub struct MockLlmProvider {
     pub canned_response: String,
 }
@@ -231,6 +346,10 @@ impl MockLlmProvider {
 impl LlmProvider for MockLlmProvider {
     fn name(&self) -> &str {
         "mock-llm"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
@@ -275,6 +394,44 @@ impl SpeechToTextProvider for MockSttProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_retry_delay_from_message() {
+        let msg1 = "Please try again in 2.5s.";
+        assert_eq!(
+            parse_retry_delay_from_message(msg1),
+            Some(Duration::from_secs_f64(2.5))
+        );
+
+        let msg2 = "RESOURCE_EXHAUSTED: Rate limit exceeded. Retry after 10 seconds.";
+        assert_eq!(
+            parse_retry_delay_from_message(msg2),
+            Some(Duration::from_secs(10))
+        );
+
+        let msg3 = "Wait 500ms before retrying";
+        assert_eq!(
+            parse_retry_delay_from_message(msg3),
+            Some(Duration::from_millis(500))
+        );
+    }
+
+    #[test]
+    fn test_provider_error_rate_limit_detection() {
+        let err1 = ProviderError::Api {
+            code: 429,
+            message: "Too many requests".to_string(),
+        };
+        assert!(err1.is_rate_limit());
+        assert!(!err1.is_permanent());
+
+        let err2 = ProviderError::Api {
+            code: 401,
+            message: "Invalid API key".to_string(),
+        };
+        assert!(!err2.is_rate_limit());
+        assert!(err2.is_permanent());
+    }
 
     #[tokio::test]
     async fn test_mock_llm_provider() {

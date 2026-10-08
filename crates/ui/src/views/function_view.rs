@@ -41,6 +41,7 @@ use gpui::{
     MouseDownEvent, Render, Rgba, ScrollHandle, Size, Task, Timer, WeakEntity, Window,
 };
 use std::time::Duration;
+
 /// Checks if a key string represents a named control key rather than text to type.
 fn is_named_control_key(k: &str) -> bool {
     matches!(
@@ -323,13 +324,9 @@ impl FunctionView {
                 let pending_flag = deactivation_pending_sub.clone();
                 let transition_generation = activation_generation.load(std::sync::atomic::Ordering::SeqCst);
                 let generation_guard = activation_generation.clone();
-                // Defer deactivation handling to the next run loop turn.
-                // This guarantees we never synchronously re-enter AppKit window management
-                // or lock GPUI mutexes while inside becomeKeyWindow / resignKeyWindow callbacks!
                 cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                     let cx = cx.clone();
                     async move {
-                        // Allow AppKit key-window exchange and our summon settling guard to finish.
                         Timer::after(Duration::from_millis(
                             function_platform::MACOS_ACTIVATION_SETTLE_MS + 80,
                         ))
@@ -339,8 +336,6 @@ impl FunctionView {
                                 let same_transition = generation_guard.load(
                                     std::sync::atomic::Ordering::SeqCst,
                                 ) == transition_generation;
-                                // If the window is still inactive and visible after the transition,
-                                // dismiss cleanly. Summon/dismiss invalidates stale callbacks.
                                 if same_transition
                                     && function_platform::should_dismiss_after_deactivation(
                                         this.is_visible,
@@ -502,7 +497,6 @@ impl FunctionView {
                                             text: summary.clone(),
                                         });
                                     }
-                                    // Store updated API history for next turn
                                     view.chat_history_api = new_history.clone();
                                     view.active_task = None;
                                     view.activities.clear();
@@ -580,6 +574,8 @@ impl FunctionView {
             }
         });
         self._agent_sub_task = Some(sub_task);
+        agent.set_request_delay(self.config.request_delay.as_millis());
+        agent.set_input_token_limit(self.config.input_token_limit);
         self.agent = Some(agent);
         self
     }
@@ -598,6 +594,10 @@ impl FunctionView {
         self.settings_tts_voice = config.tts.voice.clone();
         self.settings_sound_enabled = config.sound_enabled;
         self.theme = Theme::from_config(&config);
+        if let Some(ref agent) = self.agent {
+            agent.set_request_delay(config.request_delay.as_millis());
+            agent.set_input_token_limit(config.input_token_limit);
+        }
         self.config = config;
         self
     }
@@ -652,7 +652,6 @@ impl FunctionView {
             };
         }
 
-        // If we have a chat history, size the window dynamically to show it
         if !self.chat_display.is_empty() {
             let total_lines: usize = self
                 .chat_display
@@ -699,7 +698,6 @@ impl FunctionView {
                 }
             }
         } else {
-            // Idle state: Clean, minimal floating command layer with centered brand mark
             Size {
                 width: px(640.0),
                 height: px(112.0),
@@ -746,7 +744,6 @@ impl FunctionView {
 
     pub fn toggle_voice(&mut self, _: &ToggleVoice, _window: &mut Window, cx: &mut Context<Self>) {
         if self.listening {
-            // Stop recording & begin transcription
             self.listening = false;
             self.play_sound_feedback(SoundEffect::Select);
 
@@ -878,7 +875,6 @@ impl FunctionView {
                 cx.notify();
             }
         } else {
-            // Start recording
             if !self.mic_available || self.audio_capture.is_none() {
                 tracing::warn!("Microphone is not available or audio capture uninitialized");
                 self.voice_error =
@@ -907,7 +903,6 @@ impl FunctionView {
         }
     }
 
-    /// Save the active conversation to the persistent ConversationStore.
     pub fn save_current_conversation(&mut self) {
         if self.chat_display.is_empty() {
             return;
@@ -931,7 +926,6 @@ impl FunctionView {
         self.conversation_store.save_conversation(conv);
     }
 
-    /// Reset to the pristine home state (like when the app starts the first time).
     pub fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.chat_display.is_empty() {
             self.save_current_conversation();
@@ -957,12 +951,10 @@ impl FunctionView {
         cx.notify();
     }
 
-    /// Start a new conversation, saving the current one if not empty.
     pub fn start_new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.go_home(window, cx);
     }
 
-    /// Open the Conversations history view.
     pub fn open_conversations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.chat_display.is_empty() {
             self.save_current_conversation();
@@ -976,7 +968,6 @@ impl FunctionView {
         cx.notify();
     }
 
-    /// Load a past conversation by ID.
     pub fn load_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(conv) = self.conversation_store.get(id).cloned() {
             self.chat_display = conv.display_messages;
@@ -1050,6 +1041,11 @@ impl FunctionView {
         }
         self.config.sound_enabled = self.settings_sound_enabled;
         self.theme = Theme::from_config(&self.config);
+
+        if let Some(ref agent) = self.agent {
+            agent.set_request_delay(self.config.request_delay.as_millis());
+            agent.set_input_token_limit(self.config.input_token_limit);
+        }
 
         match self.config.save() {
             Ok(_) => {
@@ -1222,6 +1218,24 @@ impl FunctionView {
         cx.notify();
     }
 
+    pub fn cycle_request_delay(&mut self, cx: &mut Context<Self>) {
+        self.config.request_delay = self.config.request_delay.next();
+        if let Some(ref agent) = self.agent {
+            agent.set_request_delay(self.config.request_delay.as_millis());
+        }
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
+    pub fn cycle_input_token_limit(&mut self, cx: &mut Context<Self>) {
+        self.config.input_token_limit = self.config.input_token_limit.next();
+        if let Some(ref agent) = self.agent {
+            agent.set_input_token_limit(self.config.input_token_limit);
+        }
+        self.play_sound_feedback(SoundEffect::Navigate);
+        cx.notify();
+    }
+
     pub fn toggle_advanced_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_advanced_expanded = !self.settings_advanced_expanded;
         self.play_sound_feedback(SoundEffect::Navigate);
@@ -1303,14 +1317,12 @@ impl FunctionView {
     }
 
     pub fn go_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // If window is visible but not active (e.g. backgrounded or un-focused), immediately dismiss it
         if self.is_visible && !self.is_active_window {
             tracing::info!("Escape: window is visible but inactive, dismissing directly");
             self.dismiss(window, cx);
             return;
         }
 
-        // 0. If voice error message is active, dismiss it
         if self.voice_error.is_some() {
             tracing::info!("Escape: dismissing voice error message");
             self.voice_error = None;
@@ -1319,7 +1331,6 @@ impl FunctionView {
             return;
         }
 
-        // 1. If in Settings or Conversations mode, go back to Command mode
         if self.mode == FunctionMode::Settings || self.mode == FunctionMode::Conversations {
             tracing::info!("Escape: going back to Command mode");
             self.mode = FunctionMode::Command;
@@ -1330,7 +1341,6 @@ impl FunctionView {
             return;
         }
 
-        // 2. If listening/recording voice, cancel recording and return to idle
         if self.listening {
             tracing::info!("Escape: canceling voice recording");
             self.listening = false;
@@ -1345,7 +1355,6 @@ impl FunctionView {
             return;
         }
 
-        // 3. If text is selected, deselect it
         if self.is_text_selected {
             tracing::info!("Escape: deselecting input text");
             self.is_text_selected = false;
@@ -1354,7 +1363,6 @@ impl FunctionView {
             return;
         }
 
-        // 4. If there is active chat history, task, or result: return to home state (preserving input)
         if !self.chat_display.is_empty()
             || self.latest_result.is_some()
             || self.active_task.is_some()
@@ -1377,7 +1385,6 @@ impl FunctionView {
             return;
         }
 
-        // 5. At the root prompt: hide/dismiss the function window, keeping any typed text preserved temporarily!
         tracing::info!(
             "Escape: at root prompt, dismissing function window and preserving input text"
         );
@@ -1472,7 +1479,6 @@ impl FunctionView {
             "Summoning Function window (showing and focusing)"
         );
         tracing::info!("Activating Function window");
-        // Preserve any previously typed input text so the user's thought is never lost
         self.cursor_offset = self.input_buffer.chars().count();
         self.cursor_visible = true;
         self.selected_index = 0;
@@ -1490,9 +1496,6 @@ impl FunctionView {
             window.activate_window();
         }
         window.resize(target_size);
-        // A hidden GPUI window can retain an off-screen origin after a display
-        // change or a previous resize. Recompute its position whenever it is
-        // summoned so the full chat surface remains inside the active screen.
         let upper_third =
             self.config.window_position == function_config::WindowPositionMode::UpperThird;
         std::thread::spawn(move || {
@@ -1685,7 +1688,6 @@ impl FunctionView {
             return;
         }
 
-        // Local command resolver - intercepts BEFORE AI agent and does NOT require API key
         if let Some(cmd) = resolve_local_command(&prompt) {
             match cmd {
                 LocalCommand::Configure => {
@@ -1709,13 +1711,11 @@ impl FunctionView {
         self.input_buffer.clear();
         self.cursor_visible = true;
 
-        // Push user message to the visible chat log immediately
         self.chat_display.push(ChatEntry {
             is_user: true,
             text: prompt.clone(),
         });
 
-        // Retain command surface and adapt window height to show execution progress
         self.mode = FunctionMode::Command;
         window.resize(self.target_window_size());
         self.chat_scroll_handle
@@ -1733,15 +1733,10 @@ impl FunctionView {
                 thought_summary: None,
             };
 
-            // Snapshot the API history to pass into the Tokio task.
-            // Results (reply + new_history) come back via AgentState::Completed broadcast
-            // which the with_agent() subscription handles on the GPUI thread.
             let history_snapshot = self.chat_history_api.clone();
             let prompt_clone = prompt.clone();
 
             let task = async move {
-                // execute_with_history broadcasts Completed { summary, new_history }
-                // before returning, so the subscription picks up everything we need.
                 let _ = agent
                     .execute_with_history(&prompt_clone, history_snapshot)
                     .await;
@@ -1786,9 +1781,6 @@ impl FunctionView {
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
 
-        // ==========================================
-        // SECURITY CONFIRMATION INTERCEPTOR
-        // ==========================================
         if let AgentState::WaitingForConfirmation { action, .. } = &self.state {
             match key {
                 "enter" | "y" => {
@@ -1815,9 +1807,6 @@ impl FunctionView {
             }
         }
 
-        // ==========================================
-        // SETTINGS MODE KEY HANDLING
-        // ==========================================
         if self.mode == FunctionMode::Settings {
             match key {
                 "escape" => {
@@ -1961,9 +1950,6 @@ impl FunctionView {
             return;
         }
 
-        // ==========================================
-        // CONVERSATIONS MODE KEY HANDLING
-        // ==========================================
         if self.mode == FunctionMode::Conversations {
             let convs = self.conversation_store.list();
             let total_items = convs.len() + 1;
@@ -2030,9 +2016,6 @@ impl FunctionView {
             return;
         }
 
-        // ==========================================
-        // TEXT SELECTION & CLIPBOARD SHORTCUTS
-        // ==========================================
         if key == "a" && (modifiers.secondary() || modifiers.control || modifiers.platform) {
             if !self.input_buffer.is_empty() {
                 self.is_text_selected = true;
@@ -2162,17 +2145,11 @@ impl FunctionView {
             std::process::exit(0);
         }
 
-        // ==========================================
-        // GLOBAL HOTKEY DISMISS/SUMMON INTERCEPTOR (Ctrl+Space)
-        // ==========================================
         if modifiers.control && (key == " " || key == "space") {
             self.dismiss(window, cx);
             return;
         }
 
-        // ==========================================
-        // SPOTLIGHT / COMPACT MODE KEY HANDLING
-        // ==========================================
         if modifiers.alt && !modifiers.control {
             match key {
                 "1" => {
@@ -2299,12 +2276,7 @@ impl FunctionView {
                     match cmd {
                         LocalCommand::Configure => {
                             self.input_buffer.clear();
-                            self.cursor_offset = 0;
-                            self.selected_index = 0;
-                            self.mode = FunctionMode::Settings;
-                            self.play_sound_feedback(SoundEffect::Select);
-                            window.resize(self.target_window_size());
-                            cx.notify();
+                            self.open_settings(&crate::actions::OpenSettings, window, cx);
                             return;
                         }
                         LocalCommand::NewConversation => {
@@ -2323,8 +2295,6 @@ impl FunctionView {
                     .iter()
                     .any(|item| matches!(item.action, LauncherAction::OpenPath(_)));
 
-                // Control+Enter on Windows and Command+Enter on macOS open a
-                // matched file, folder, or application immediately.
                 if has_openable
                     && function_platform::is_file_search_open_shortcut(
                         modifiers.control,
@@ -2336,7 +2306,6 @@ impl FunctionView {
                     return;
                 }
 
-                // A plain Enter sends file/app/folder searches to the AI.
                 if has_openable {
                     if !prompt.is_empty() {
                         self.submit(&SubmitRequest, window, cx);
@@ -2345,7 +2314,6 @@ impl FunctionView {
                 }
 
                 if !has_openable {
-                    // Standard action or AI query
                     if let Some(item) = items.get(self.selected_index).cloned() {
                         self.execute_launcher_action(item.action, window, cx);
                     } else if !prompt.is_empty() {
@@ -2519,9 +2487,6 @@ impl Render for FunctionView {
                 .into_any_element();
         }
 
-        // ==========================================
-        // UNIFIED FUNCTION COMMAND LAYER
-        // ==========================================
         let has_query = !self.input_buffer.is_empty();
         let is_busy = matches!(
             self.state,
@@ -2532,7 +2497,6 @@ impl Render for FunctionView {
         let has_chat = !self.chat_display.is_empty();
         let is_focused = self.focus_handle.is_focused(window);
 
-        // Dynamically adjust window size if content has grown or shrunk
         let target_sz = self.target_window_size();
         if window.bounds().size != target_sz {
             window.resize(target_sz);
@@ -2613,8 +2577,6 @@ impl Render for FunctionView {
             .rounded_2xl()
             .shadow_xl()
             .overflow_hidden()
-            // ── CHAT LOG ──────────────────────────────────────────────────────────
-            // Shown whenever there is at least one message in the display history.
             .when(!self.chat_display.is_empty() || is_busy, |parent| {
                 let chat_entries = self.chat_display.clone();
                 let busy_state_text: Option<String> = if is_busy {
@@ -2656,7 +2618,6 @@ impl Render for FunctionView {
                         .gap(px(8.0))
                         .children(chat_entries.into_iter().enumerate().map(|(idx, entry)| {
                             if entry.is_user {
-                                // User bubble — right-aligned, clearly contrasting background
                                 let user_bg = if theme.is_dark() {
                                     gpui::rgb(0x2f2c22)
                                 } else {
@@ -2684,7 +2645,6 @@ impl Render for FunctionView {
                                     )
                                     .into_any_element()
                             } else {
-                                // Assistant reply — check if message is an error or standard markdown response
                                 if let Some(error_info) =
                                     crate::components::parse_error_info(&entry.text)
                                 {
@@ -2797,7 +2757,6 @@ impl Render for FunctionView {
                                 }
                             }
                         }))
-                        // "Thinking…" indicator at bottom of chat when agent is busy
                         .when_some(busy_state_text, |p, status| {
                             p.child(
                                 div()
@@ -2821,7 +2780,6 @@ impl Render for FunctionView {
                         }),
                 )
             })
-            // Security confirmation prompt (shown on top of chat when needed)
             .when(
                 matches!(self.state, AgentState::WaitingForConfirmation { .. }),
                 |p| {
@@ -2869,11 +2827,9 @@ impl Render for FunctionView {
                     }
                 },
             )
-            // Subtle spacing before input bar when content is showing
             .when(!self.chat_display.is_empty() || is_busy, |parent| {
                 parent.child(div().h(px(2.0)))
             })
-            // Brand mark / motif header — shown only when chat is empty and idle
             .when(self.chat_display.is_empty() && !is_busy, |parent| {
                 parent.child(
                     div()
@@ -2898,7 +2854,6 @@ impl Render for FunctionView {
                         )),
                 )
             })
-            // Clean floating command input surface
             .child(
                 div()
                     .id("command_input_bar")
@@ -2948,12 +2903,10 @@ impl Render for FunctionView {
                                     if char_count == 0 {
                                         this.cursor_offset = 0;
                                     } else {
-                                        // Margin (14px) + Padding (14px) = 28px
                                         let click_x = f32::from(event.position.x) - 28.0;
                                         if click_x <= 0.0 {
                                             this.cursor_offset = 0;
                                         } else {
-                                            // Average advance for text_lg is approx 10.2px
                                             let approx_idx = (click_x / 10.2).round() as usize;
                                             this.cursor_offset = approx_idx.min(char_count);
                                         }
@@ -3049,7 +3002,6 @@ impl Render for FunctionView {
                                     )
                             }),
                     )
-                    // Right: Contextual micro triggers
                     .child(
                         div()
                             .flex()
@@ -3116,7 +3068,6 @@ impl Render for FunctionView {
                             }),
                     ),
             )
-            // Launcher suggestions list (when typing query without active task)
             .when(!launcher_items.is_empty(), |parent| {
                 let mut list_container = div()
                     .flex()

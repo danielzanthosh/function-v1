@@ -3,6 +3,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+use std::any::Any;
 use std::process::{Command, Stdio};
 
 /// GUI applications on macOS do not inherit the interactive shell's PATH.
@@ -181,6 +182,11 @@ impl LlmProvider for CodexChatGptProvider {
     fn name(&self) -> &str {
         "chatgpt-plan"
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn context_limit(&self, _model: &str) -> usize {
         128_000
     }

@@ -11,6 +11,7 @@ use function_providers::{
     ProviderError, ToolCall,
 };
 use function_tools::ToolRegistry;
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -240,6 +241,10 @@ struct GeminiToolCallingMockProvider {
 impl LlmProvider for GeminiToolCallingMockProvider {
     fn name(&self) -> &str {
         "gemini"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, ProviderError> {

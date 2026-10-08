@@ -5,9 +5,12 @@
 //! changes cleanly to the UI layer without coupling to visual views.
 
 use function_memory::MemoryStore;
-use function_providers::{ChatMessage, CompletionRequest, LlmProvider, ToolDefinition};
+use function_providers::{
+    ChatMessage, CompletionRequest, LlmProvider, RetryingLlmProvider, ToolDefinition,
+};
 use function_tools::{ToolContext, ToolRegistry, ToolResult};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -113,8 +116,10 @@ pub struct Agent {
     tools: ToolRegistry,
     memory: Arc<dyn MemoryStore>,
     state_tx: broadcast::Sender<AgentState>,
-    cancel_requested: Arc<std::sync::atomic::AtomicBool>,
+    cancel_requested: Arc<AtomicBool>,
     max_steps: usize,
+    request_delay_ms: AtomicU64,
+    input_token_limit: RwLock<function_config::InputTokenLimit>,
 }
 
 impl Agent {
@@ -129,21 +134,33 @@ impl Agent {
             tools,
             memory,
             state_tx,
-            cancel_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancel_requested: Arc::new(AtomicBool::new(false)),
             max_steps: 15,
+            request_delay_ms: AtomicU64::new(0),
+            input_token_limit: RwLock::new(function_config::InputTokenLimit::Auto),
+        }
+    }
+
+    /// Set a request delay in milliseconds applied before sending new requests to the provider.
+    pub fn set_request_delay(&self, delay_ms: u64) {
+        self.request_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    /// Set the input token budget limit setting.
+    pub fn set_input_token_limit(&self, limit: function_config::InputTokenLimit) {
+        if let Ok(mut lock) = self.input_token_limit.write() {
+            *lock = limit;
         }
     }
 
     /// Request cancellation of the currently executing task.
     pub fn cancel(&self) {
-        self.cancel_requested
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel_requested.store(true, Ordering::Relaxed);
     }
 
     /// Check if cancellation was requested.
     pub fn is_canceled(&self) -> bool {
-        self.cancel_requested
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.cancel_requested.load(Ordering::Relaxed)
     }
 
     /// Replace the active provider without rebuilding the agent or losing its
@@ -179,8 +196,7 @@ impl Agent {
         user_prompt: &str,
         prior_history: Vec<ChatMessage>,
     ) -> Result<(String, Vec<ChatMessage>), AgentError> {
-        self.cancel_requested
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.cancel_requested.store(false, Ordering::Relaxed);
         self.update_state(AgentState::Processing {
             thought_summary: None,
         });
@@ -265,18 +281,37 @@ Agentic Multi-Step & Observation Loop:
             }
             step += 1;
 
-            let provider = self
+            let raw_provider = self
                 .provider
                 .read()
                 .map_err(|e| AgentError::Provider(format!("Provider lock poisoned: {e}")))?
                 .clone();
-            let context_budget = context::ContextBudget {
-                context_limit: provider.context_limit("default"),
-                output_reserve: 4_096,
-            };
+
+            let state_tx_clone_for_retry = self.state_tx.clone();
+            let provider: Arc<dyn LlmProvider> = Arc::new(RetryingLlmProvider::with_status_callback(
+                raw_provider,
+                Arc::new(move |status_msg| {
+                    let _ = state_tx_clone_for_retry.send(AgentState::Processing {
+                        thought_summary: Some(status_msg),
+                    });
+                }),
+            ));
+
+            let limit_setting = *self
+                .input_token_limit
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let target_budget = limit_setting.token_budget(provider.context_limit("default"));
+
             let (request_messages, compaction) =
-                context::compact_messages(&messages, context_budget);
-            if compaction.before_tokens != compaction.after_tokens {
+                context::compact_messages(&messages, &tool_definitions, target_budget);
+
+            if compaction.before_tokens > compaction.after_tokens {
+                let msg = format!(
+                    "Context optimized {} → {} tokens",
+                    context::format_token_k(compaction.before_tokens),
+                    context::format_token_k(compaction.after_tokens)
+                );
                 tracing::info!(
                     provider = %provider.name(),
                     before_tokens = compaction.before_tokens,
@@ -286,6 +321,16 @@ Agentic Multi-Step & Observation Loop:
                     truncated_outputs = compaction.truncated_outputs,
                     "Compacted model context before dispatch"
                 );
+                self.update_state(AgentState::Processing {
+                    thought_summary: Some(msg),
+                });
+            } else {
+                tracing::info!(
+                    provider = %provider.name(),
+                    tokens = %context::format_token_k(compaction.after_tokens),
+                    budget = %context::format_token_k(target_budget),
+                    "Model context state before dispatch"
+                );
             }
 
             let req = CompletionRequest {
@@ -294,6 +339,12 @@ Agentic Multi-Step & Observation Loop:
                 tools: tool_definitions.clone(),
                 temperature: Some(0.7),
             };
+
+            // Apply configured request delay before dispatch (separate from rate-limit retries)
+            let delay_ms = self.request_delay_ms.load(Ordering::Relaxed);
+            if delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
 
             let state_tx_clone = self.state_tx.clone();
             let mut stream_accumulated = String::new();

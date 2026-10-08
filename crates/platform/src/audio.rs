@@ -11,6 +11,150 @@ use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "macos")]
+pub mod macos_mic {
+    use std::ffi::c_void;
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    #[link(name = "AVFoundation", kind = "framework")]
+    #[link(name = "Foundation", kind = "framework")]
+    extern "C" {
+        fn objc_getClass(name: *const i8) -> *mut c_void;
+        fn sel_registerName(name: *const i8) -> *mut c_void;
+        fn objc_msgSend();
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MacMicPermission {
+        Authorized,
+        Denied,
+        Restricted,
+        NotDetermined,
+        Unavailable,
+    }
+
+    #[repr(C)]
+    struct BlockDescriptor {
+        reserved: u64,
+        size: u64,
+    }
+
+    #[repr(C)]
+    struct BlockLiteral {
+        isa: *const c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: extern "C" fn(*mut BlockLiteral, bool),
+        descriptor: *const BlockDescriptor,
+    }
+
+    static BLOCK_DESCRIPTOR: BlockDescriptor = BlockDescriptor {
+        reserved: 0,
+        size: std::mem::size_of::<BlockLiteral>() as u64,
+    };
+
+    extern "C" {
+        static _NSConcreteStackBlock: c_void;
+    }
+
+    pub fn check_mic_permission() -> MacMicPermission {
+        unsafe {
+            let cls = objc_getClass(b"AVCaptureDevice\0".as_ptr() as *const i8);
+            if cls.is_null() {
+                return MacMicPermission::Unavailable;
+            }
+            let sel_status = sel_registerName(b"authorizationStatusForMediaType:\0".as_ptr() as *const i8);
+            let sel_str = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as *const i8);
+            let ns_string_cls = objc_getClass(b"NSString\0".as_ptr() as *const i8);
+            if ns_string_cls.is_null() {
+                return MacMicPermission::Unavailable;
+            }
+
+            let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
+                std::mem::transmute(objc_msgSend as *const ());
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+
+            let msg_send_status: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i64 =
+                std::mem::transmute(objc_msgSend as *const ());
+            let status = msg_send_status(cls, sel_status, media_type);
+
+            match status {
+                3 => MacMicPermission::Authorized,
+                2 => MacMicPermission::Denied,
+                1 => MacMicPermission::Restricted,
+                0 => MacMicPermission::NotDetermined,
+                _ => MacMicPermission::Unavailable,
+            }
+        }
+    }
+
+    pub fn ensure_mic_permission() -> MacMicPermission {
+        let status = check_mic_permission();
+        tracing::info!("macOS microphone permission state: {:?}", status);
+
+        if status != MacMicPermission::NotDetermined {
+            return status;
+        }
+
+        tracing::info!("Requesting macOS microphone permission...");
+        let (tx, rx) = channel::<bool>();
+        let tx_ptr = Box::into_raw(Box::new(tx));
+
+        extern "C" fn invoke_block(block: *mut BlockLiteral, granted: bool) {
+            unsafe {
+                let tx_ptr = (block as *mut c_void).offset(std::mem::size_of::<BlockLiteral>() as isize)
+                    as *mut std::sync::mpsc::Sender<bool>;
+                let tx = Box::from_raw(tx_ptr);
+                let _ = tx.send(granted);
+            }
+        }
+
+        #[repr(C)]
+        struct BlockWithTx {
+            literal: BlockLiteral,
+            tx_ptr: *mut std::sync::mpsc::Sender<bool>,
+        }
+
+        let mut block = BlockWithTx {
+            literal: BlockLiteral {
+                isa: unsafe { &_NSConcreteStackBlock as *const c_void },
+                flags: 1 << 30,
+                reserved: 0,
+                invoke: invoke_block,
+                descriptor: &BLOCK_DESCRIPTOR,
+            },
+            tx_ptr,
+        };
+
+        unsafe {
+            let cls = objc_getClass(b"AVCaptureDevice\0".as_ptr() as *const i8);
+            let sel_req = sel_registerName(
+                b"requestAccessForMediaType:completionHandler:\0".as_ptr() as *const i8,
+            );
+            let sel_str = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as *const i8);
+            let ns_string_cls = objc_getClass(b"NSString\0".as_ptr() as *const i8);
+            let msg_send_str: unsafe extern "C" fn(*mut c_void, *mut c_void, *const i8) -> *mut c_void =
+                std::mem::transmute(objc_msgSend as *const ());
+            let media_type = msg_send_str(ns_string_cls, sel_str, b"soun\0".as_ptr() as *const i8);
+
+            let msg_send_req:
+                unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut BlockWithTx) =
+                std::mem::transmute(objc_msgSend as *const ());
+            msg_send_req(cls, sel_req, media_type, &mut block);
+        }
+
+        let granted = rx.recv_timeout(Duration::from_secs(30)).unwrap_or(false);
+        let final_status = if granted {
+            MacMicPermission::Authorized
+        } else {
+            MacMicPermission::Denied
+        };
+        tracing::info!("macOS microphone permission request result: {:?}", final_status);
+        final_status
+    }
+}
+
 /// Abstraction for recording audio from the system's microphone.
 pub trait AudioCapture: Send + Sync {
     /// Check whether a microphone input device is currently detected by the OS.
@@ -56,17 +200,44 @@ impl CpalAudioCapture {
 
 impl AudioCapture for CpalAudioCapture {
     fn is_microphone_available(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let status = macos_mic::check_mic_permission();
+            if status == macos_mic::MacMicPermission::Denied
+                || status == macos_mic::MacMicPermission::Restricted
+            {
+                return false;
+            }
+        }
         let host = cpal::default_host();
         host.default_input_device().is_some()
     }
 
     fn start_recording(&self) -> Result<(), PlatformError> {
+        #[cfg(target_os = "macos")]
+        {
+            let status = macos_mic::ensure_mic_permission();
+            if status == macos_mic::MacMicPermission::Denied
+                || status == macos_mic::MacMicPermission::Restricted
+            {
+                tracing::error!("macOS microphone permission denied or restricted");
+                return Err(PlatformError::PermissionDenied(
+                    "Microphone access denied. Please grant microphone access in System Settings -> Privacy & Security -> Microphone.".to_string(),
+                ));
+            }
+        }
+
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or_else(|| {
+            tracing::error!("No audio input device detected by CPAL");
             PlatformError::SystemApi("No audio input device detected".to_string())
         })?;
 
+        let device_name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| device.to_string());
+        tracing::info!(device = %device_name, "Selected default audio input device");
+
         let supported_config = device.default_input_config().map_err(|e| {
+            tracing::error!(error = %e, "Failed to query default input config");
             PlatformError::SystemApi(format!("Failed to get default input config: {}", e))
         })?;
 
@@ -74,13 +245,20 @@ impl AudioCapture for CpalAudioCapture {
         let channels = supported_config.channels();
         let sample_format = supported_config.sample_format();
 
+        tracing::info!(
+            rate = sample_rate,
+            channels = channels,
+            format = ?sample_format,
+            "Creating CPAL audio input stream"
+        );
+
         let samples_buf = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
             sample_rate as usize * 10,
         )));
         let samples_clone = samples_buf.clone();
 
         let err_fn = |err| {
-            tracing::error!(error = %err, "Audio input stream error");
+            tracing::error!(error = %err, "Audio input stream callback error");
         };
 
         let stream_config: cpal::StreamConfig = supported_config.into();
@@ -88,7 +266,7 @@ impl AudioCapture for CpalAudioCapture {
         let stream = match sample_format {
             SampleFormat::F32 => device
                 .build_input_stream(
-                    stream_config,
+                    stream_config.clone(),
                     move |data: &[f32], _: &_| {
                         if let Ok(mut buf) = samples_clone.lock() {
                             buf.extend_from_slice(data);
@@ -102,7 +280,7 @@ impl AudioCapture for CpalAudioCapture {
                 })?,
             SampleFormat::I16 => device
                 .build_input_stream(
-                    stream_config,
+                    stream_config.clone(),
                     move |data: &[i16], _: &_| {
                         if let Ok(mut buf) = samples_clone.lock() {
                             buf.extend(data.iter().map(|&s| (s as f32) / 32768.0));
@@ -137,6 +315,7 @@ impl AudioCapture for CpalAudioCapture {
         };
 
         stream.play().map_err(|e| {
+            tracing::error!(error = %e, "Failed to start CPAL audio stream");
             PlatformError::SystemApi(format!("Failed to start audio stream: {}", e))
         })?;
 
@@ -152,7 +331,7 @@ impl AudioCapture for CpalAudioCapture {
         tracing::info!(
             rate = sample_rate,
             channels = channels,
-            "Audio recording started"
+            "CPAL audio recording started"
         );
         Ok(())
     }
@@ -166,6 +345,7 @@ impl AudioCapture for CpalAudioCapture {
         };
 
         let Some(active) = active else {
+            tracing::info!("stop_recording called with no active audio stream");
             return Ok(Vec::new());
         };
 
@@ -177,14 +357,23 @@ impl AudioCapture for CpalAudioCapture {
         tracing::info!(
             sample_count = raw_samples.len(),
             source_rate = active.source_sample_rate,
-            "Encoding captured audio to 16kHz mono WAV"
+            source_channels = active.source_channels,
+            "CPAL audio recording stopped"
         );
 
-        encode_to_16k_mono_wav(
+        let wav_bytes = encode_to_16k_mono_wav(
             &raw_samples,
             active.source_sample_rate,
             active.source_channels,
-        )
+        )?;
+
+        tracing::info!(
+            sample_count = raw_samples.len(),
+            byte_count = wav_bytes.len(),
+            "Finalized audio buffer encoded as 16kHz mono WAV"
+        );
+
+        Ok(wav_bytes)
     }
 
     fn is_recording(&self) -> bool {

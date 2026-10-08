@@ -137,6 +137,49 @@ pub fn get_launcher_items(query: &str) -> Vec<LauncherItem> {
     let trimmed = query.trim();
     let lower = trimmed.to_lowercase();
 
+    // 0. Slash commands plugin (starts with '/')
+    if lower.starts_with('/') {
+        let all_slash_commands = vec![
+            LauncherItem {
+                keyword: "/conversation".to_string(),
+                description: "Open Conversations page and chat history".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::OpenConversations,
+            },
+            LauncherItem {
+                keyword: "/settings".to_string(),
+                description: "Configure AI Provider, API Key, Model & Preferences".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Settings,
+                action: LauncherAction::OpenSettings,
+            },
+            LauncherItem {
+                keyword: "/new".to_string(),
+                description: "Start a fresh conversation and clear prompt history".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::NewConversation,
+            },
+            LauncherItem {
+                keyword: "/help".to_string(),
+                description: "View assistance guide and Function assistant capabilities".to_string(),
+                shortcut: "Enter".to_string(),
+                icon_type: LauncherIconType::Function,
+                action: LauncherAction::RunTask("Provide a clear overview of Function slash commands and desktop capabilities.".to_string()),
+            },
+        ];
+
+        let filtered: Vec<LauncherItem> = all_slash_commands
+            .into_iter()
+            .filter(|item| item.keyword.to_lowercase().starts_with(&lower))
+            .collect();
+
+        if !filtered.is_empty() {
+            return filtered;
+        }
+    }
+
     // 1. Math calculation plugin
     if let Some(result) = evaluate_calculation(trimmed) {
         let formatted = format_result(result);
@@ -368,9 +411,6 @@ pub fn render_spotlight_bar(
         selected_index.min(items.len().saturating_sub(1))
     };
 
-    // Subtle Liquid Glass surface: mostly opaque (~95% opacity) to preserve high
-    // text contrast while allowing the native blurred backdrop on macOS to softly
-    // influence the palette.
     let bg_surface = Rgba {
         a: 0.95,
         ..theme.surface_elevated
@@ -390,12 +430,9 @@ pub fn render_spotlight_bar(
         .w_full()
         .h_full()
         .bg(bg_surface)
-        .rounded_2xl() // Function curved floating window (macOS Spotlight style)
+        .rounded_2xl()
         .shadow_xl()
         .overflow_hidden()
-        // ==========================================
-        // Top Search Bar (Function Mark | Input | Shortcut Tag)
-        // ==========================================
         .child(
             div()
                 .flex()
@@ -405,7 +442,6 @@ pub fn render_spotlight_bar(
                 .px_4()
                 .border_b_1()
                 .border_color(divider_color)
-                // Left: Function Logo & Search input
                 .child(
                     div()
                         .flex()
@@ -447,7 +483,6 @@ pub fn render_spotlight_bar(
                                 )
                         }),
                 )
-                // Right: Minimal technical badge
                 .child(
                     div().flex().items_center().gap_2().child(
                         div()
@@ -463,9 +498,6 @@ pub fn render_spotlight_bar(
                     ),
                 ),
         )
-        // ==========================================
-        // Results List with Precise Monochrome Indicator & Badges
-        // ==========================================
         .child(
             div().flex().flex_col().flex_1().p_2().gap_1().children(
                 items
@@ -492,13 +524,11 @@ pub fn render_spotlight_bar(
                                     s.bg(hover_bg)
                                 }
                             })
-                            // Left section: vertical indicator pill + icon + title/description
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .h_full()
-                                    // Left vertical indicator pill
                                     .child(
                                         div()
                                             .w(px(3.0))
@@ -512,7 +542,6 @@ pub fn render_spotlight_bar(
                                             .ml_1()
                                             .mr_2p5(),
                                     )
-                                    // Icon container
                                     .child(
                                         div()
                                             .flex()
@@ -523,7 +552,6 @@ pub fn render_spotlight_bar(
                                             .mr_3()
                                             .child(render_item_icon(item.icon_type)),
                                     )
-                                    // Title and Description
                                     .child(
                                         div()
                                             .flex()
@@ -548,7 +576,6 @@ pub fn render_spotlight_bar(
                                             ),
                                     ),
                             )
-                            // Right section: shortcut badge
                             .child(
                                 div()
                                     .px_2()
