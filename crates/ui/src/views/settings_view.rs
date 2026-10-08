@@ -422,8 +422,8 @@ pub fn render_settings_view(
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .justify_between()
+                        .flex_col()
+                        .gap_2()
                         .p_3()
                         .rounded_md()
                         .bg(card_bg)
