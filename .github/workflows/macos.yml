@@ -67,7 +67,7 @@ jobs:
           iconutil -c icns icon.iconset -o Function.app/Contents/Resources/AppIcon.icns
           rm -rf icon.iconset
 
-          # 5. Generate Info.plist with LSUIElement (agent/background app, no Dock icon)
+          # 5. Generate Info.plist with LSUIElement and NSMicrophoneUsageDescription
           cat << 'EOF' > Function.app/Contents/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -95,12 +95,15 @@ jobs:
               <true/>
               <key>NSSupportsAutomaticGraphicsSwitching</key>
               <true/>
+              <key>NSMicrophoneUsageDescription</key>
+              <string>Function needs microphone access for speech input.</string>
           </dict>
           </plist>
           EOF
 
-          # 6. Apply ad-hoc codesign to avoid Gatekeeper execution block
-          codesign --force --deep --sign - Function.app
+          # 6. Apply ad-hoc codesign with entitlements to avoid Gatekeeper execution block
+          cp assets/macos/entitlements.plist Function.app/Contents/entitlements.plist
+          codesign --force --deep --options runtime --entitlements assets/macos/entitlements.plist --sign - Function.app
 
           # 7. Create distribution zip preserving macOS filesystem permissions
           ditto -c -k --keepParent Function.app Function-macOS.zip
