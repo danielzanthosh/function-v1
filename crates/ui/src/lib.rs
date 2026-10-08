@@ -2,6 +2,8 @@
 //!
 //! Exposes views, components, theme tokens, and action bindings for the assistant interface.
 
+#![recursion_limit = "4096"]
+
 pub mod actions;
 pub mod components;
 pub mod conversation;

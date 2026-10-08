@@ -1909,6 +1909,54 @@ impl FunctionView {
             LauncherAction::OpenConversations => {
                 self.open_conversations(window, cx);
             }
+            LauncherAction::ToggleTheme => {
+                self.toggle_theme(&ToggleTheme, window, cx);
+                self.input_buffer.clear();
+            }
+            LauncherAction::ToggleVoice => {
+                self.toggle_voice(&ToggleVoice, window, cx);
+                self.input_buffer.clear();
+            }
+            LauncherAction::ToggleSound => {
+                self.toggle_sound_setting(cx);
+                self.input_buffer.clear();
+            }
+            LauncherAction::ClearInput => {
+                self.clear_input(&ClearInput, window, cx);
+            }
+            LauncherAction::OpenMemory => {
+                let memory_file = function_config::memory_path();
+                self.input_buffer.clear();
+                if memory_file.exists() {
+                    function_platform::open_path(memory_file.to_str().unwrap_or(""));
+                } else {
+                    self.latest_result = Some(format!("Memory file path: {}", memory_file.display()));
+                }
+            }
+            LauncherAction::OpenAbout => {
+                self.input_buffer.clear();
+                let about_info = format!(
+                    "Function Desktop v1\nAI Model: {}\nSound Feedback: {}",
+                    self.config.ai_provider.model,
+                    if self.config.sound_enabled { "Enabled" } else { "Disabled" }
+                );
+                self.latest_result = Some(about_info);
+                window.resize(self.target_window_size());
+                cx.notify();
+            }
+            LauncherAction::SetModel(model_name) => {
+                self.input_buffer.clear();
+                if !model_name.is_empty() {
+                    self.settings_model = model_name.clone();
+                    self.config.ai_provider.model = model_name.clone();
+                    let _ = self.config.save();
+                    self.latest_result = Some(format!("AI model set to: {}", model_name));
+                } else {
+                    self.latest_result = Some(format!("Current AI model: {}", self.config.ai_provider.model));
+                }
+                window.resize(self.target_window_size());
+                cx.notify();
+            }
             LauncherAction::RunTask(prompt) => {
                 self.input_buffer = prompt;
                 self.submit(&SubmitRequest, window, cx);
@@ -1996,6 +2044,42 @@ impl FunctionView {
                 }
                 LocalCommand::OpenConversations => {
                     self.open_conversations(window, cx);
+                    return;
+                }
+                LocalCommand::ToggleTheme => {
+                    self.execute_launcher_action(LauncherAction::ToggleTheme, window, cx);
+                    return;
+                }
+                LocalCommand::ToggleVoice => {
+                    self.execute_launcher_action(LauncherAction::ToggleVoice, window, cx);
+                    return;
+                }
+                LocalCommand::ToggleSound => {
+                    self.execute_launcher_action(LauncherAction::ToggleSound, window, cx);
+                    return;
+                }
+                LocalCommand::ClearInput => {
+                    self.execute_launcher_action(LauncherAction::ClearInput, window, cx);
+                    return;
+                }
+                LocalCommand::OpenMemory => {
+                    self.execute_launcher_action(LauncherAction::OpenMemory, window, cx);
+                    return;
+                }
+                LocalCommand::OpenAbout => {
+                    self.execute_launcher_action(LauncherAction::OpenAbout, window, cx);
+                    return;
+                }
+                LocalCommand::Help => {
+                    self.execute_launcher_action(
+                        LauncherAction::RunTask("Provide a clear overview of Function slash commands and desktop capabilities.".to_string()),
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                LocalCommand::SetModel(model) => {
+                    self.execute_launcher_action(LauncherAction::SetModel(model), window, cx);
                     return;
                 }
             }

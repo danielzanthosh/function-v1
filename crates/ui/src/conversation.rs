@@ -53,12 +53,13 @@ impl SavedConversation {
             if msg.is_user {
                 let clean = msg.text.trim();
                 if !clean.is_empty() {
-                    let mut title = clean.lines().next().unwrap_or(clean).to_string();
-                    if title.len() > 42 {
-                        title.truncate(42);
+                    let first_line = clean.lines().next().unwrap_or(clean);
+                    if first_line.chars().count() > 42 {
+                        let mut title: String = first_line.chars().take(42).collect();
                         title.push_str("…");
+                        return title;
                     }
-                    return title;
+                    return first_line.to_string();
                 }
             }
         }
@@ -68,12 +69,14 @@ impl SavedConversation {
     /// Formatted preview of the last assistant reply or message.
     pub fn preview(&self) -> String {
         if let Some(last) = self.display_messages.last() {
-            let mut text = last.text.trim().to_string();
-            if text.len() > 60 {
-                text.truncate(60);
-                text.push_str("…");
+            let text = last.text.trim();
+            if text.chars().count() > 60 {
+                let mut truncated: String = text.chars().take(60).collect();
+                truncated.push_str("…");
+                truncated
+            } else {
+                text.to_string()
             }
-            text
         } else {
             "Empty conversation".to_string()
         }
@@ -184,6 +187,28 @@ mod tests {
         let conv = SavedConversation::new(messages, Vec::new());
         assert_eq!(conv.title, "What is the capital of France?");
         assert_eq!(conv.display_messages.len(), 2);
+    }
+
+    #[test]
+    fn test_saved_conversation_unicode_safety() {
+        let emoji_msg = vec![ChatEntry {
+            is_user: true,
+            text: "🚀 Highly complex prompt with multi-byte unicode 🎉 and emojis that exceed forty-two characters long!".to_string(),
+        }];
+        let conv = SavedConversation::new(emoji_msg.clone(), Vec::new());
+        assert!(conv.title.ends_with('…'));
+        assert_eq!(conv.title.chars().count(), 43); // 42 chars + 1 ellipsis
+
+        let preview_msg = SavedConversation::new(
+            vec![ChatEntry {
+                is_user: false,
+                text: "🌟 Highly complex response with multi-byte unicode 💫 and accented characters like café, résumé, and ñ! Extra long text to trigger preview truncation.".to_string(),
+            }],
+            Vec::new(),
+        );
+        let preview = preview_msg.preview();
+        assert!(preview.ends_with('…'));
+        assert_eq!(preview.chars().count(), 61); // 60 chars + 1 ellipsis
     }
 
     #[test]
