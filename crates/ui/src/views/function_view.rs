@@ -3270,28 +3270,6 @@ impl Render for FunctionView {
                                     )
                                     .child(
                                         div()
-                                            .id("stop_response_btn")
-                                            .cursor_pointer()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded_md()
-                                            .bg(theme.surface_input)
-                                            .border_1()
-                                            .border_color(theme.border_subtle)
-                                            .hover(|s| s.bg(theme.surface_active))
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(theme.status_error)
-                                            .child("Stop Response")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.stop_response(cx);
-                                                }),
-                                            ),
                                     ),
                             )
                         })
@@ -3603,58 +3581,7 @@ impl Render for FunctionView {
                                         ),
                                 )
                             })
-                            .when(is_busy, |p| {
-                                p.child(
-                                    div()
-                                        .id("bar_stop_response_btn")
-                                        .cursor_pointer()
-                                        .flex()
-                                        .items_center()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_md()
-                                        .bg(theme.surface_input)
-                                        .border_1()
-                                        .border_color(theme.border_subtle)
-                                        .hover(|s| s.bg(theme.surface_active))
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(theme.status_error)
-                                        .child("Stop Response")
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.stop_response(cx);
-                                            }),
-                                        ),
-                                )
-                            })
-                            .when(!is_busy && self.is_playing_audio, |p| {
-                                p.child(
-                                    div()
-                                        .id("bar_stop_audio_btn")
-                                        .cursor_pointer()
-                                        .flex()
-                                        .items_center()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_md()
-                                        .bg(theme.surface_input)
-                                        .border_1()
-                                        .border_color(theme.border_subtle)
-                                        .hover(|s| s.bg(theme.surface_active))
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(theme.status_error)
-                                        .child("Stop Audio")
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.stop_audio(cx);
-                                            }),
-                                        ),
-                                )
-                            })
+                             .when(is_busy || self.is_playing_audio, |p| {,                                 p.child(,                                     div(),                                         .id("generation_stop_control"),                                         .cursor_pointer(),                                         .flex(),                                         .items_center(),                                         .justify_center(),                                         .w(px(28.0)),                                         .h(px(28.0)),                                         .rounded_md(),                                         .bg(theme.surface_input),                                         .border_1(),                                         .border_color(theme.border_subtle),                                         .hover(|s| s.bg(theme.surface_active)),                                         .child(,                                             div(),                                                 .w(px(8.0)),                                                 .h(px(8.0)),                                                 .rounded_sm(),                                                 .bg(theme.status_error),,                                         ),                                         .on_mouse_down(,                                             MouseButton::Left,,                                             cx.listener(|this, _, _, cx| {,                                                 if matches!(,                                                     this.state,,                                                     AgentState::Processing { .. },                                                         | AgentState::Streaming { .. },                                                         | AgentState::Acting { .. },                                                         | AgentState::WaitingForConfirmation { .. },                                                 ) {,                                                     this.stop_response(cx);,                                                 } else if this.is_playing_audio {,                                                     this.stop_audio(cx);,                                                 },                                             }),,                                         ),,                                 ),                             }),
                             .when(is_listening, |p| {
                                 p.child(
                                     div()
