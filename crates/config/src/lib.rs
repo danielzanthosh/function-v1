@@ -167,6 +167,7 @@ pub enum InputTokenLimit {
     K6,
     K7,
     K8,
+    Unlimited,
 }
 
 impl InputTokenLimit {
@@ -180,6 +181,7 @@ impl InputTokenLimit {
             InputTokenLimit::K6 => 6_000,
             InputTokenLimit::K7 => 7_000,
             InputTokenLimit::K8 => 8_000,
+            InputTokenLimit::Unlimited => usize::MAX,
         }
     }
 
@@ -193,6 +195,7 @@ impl InputTokenLimit {
             InputTokenLimit::K6 => "6K",
             InputTokenLimit::K7 => "7K",
             InputTokenLimit::K8 => "8K",
+            InputTokenLimit::Unlimited => "No Limit",
         }
     }
 
@@ -205,7 +208,8 @@ impl InputTokenLimit {
             InputTokenLimit::K5 => InputTokenLimit::K6,
             InputTokenLimit::K6 => InputTokenLimit::K7,
             InputTokenLimit::K7 => InputTokenLimit::K8,
-            InputTokenLimit::K8 => InputTokenLimit::Auto,
+            InputTokenLimit::K8 => InputTokenLimit::Unlimited,
+            InputTokenLimit::Unlimited => InputTokenLimit::Auto,
         }
     }
 }
