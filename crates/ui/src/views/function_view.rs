@@ -422,7 +422,29 @@ impl FunctionView {
         let sub_task = cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let cx = cx.clone();
             async move {
-                while let Ok(state) = rx.recv().await {
+                loop {
+                    // A slow UI frame can let the agent outrun the channel
+                    // (e.g. a burst of streamed tokens). Lagging must never end
+                    // this loop, or terminal states are never applied and the
+                    // view stays in "Thinking..." forever.
+                    let state = match rx.recv().await {
+                        Ok(state) => state,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(
+                                target: "function_ui",
+                                skipped,
+                                "UI lagged behind agent state updates; resuming from latest"
+                            );
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::warn!(
+                                target: "function_ui",
+                                "Agent state channel closed; stopping state subscription"
+                            );
+                            break;
+                        }
+                    };
                     let state_clone = state.clone();
                     let res = cx.update(|cx| {
                         this.update(cx, |view, cx| {
@@ -505,6 +527,11 @@ impl FunctionView {
                                     }
                                     view.chat_history_api = new_history.clone();
                                     view.active_task = None;
+                                    tracing::info!(
+                                        target: "function_ui",
+                                        reply_chars = summary.chars().count(),
+                                        "response rendering completed"
+                                    );
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
                                     if view.config.tts.enabled && !summary.is_empty() {
@@ -580,6 +607,11 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
+                                    tracing::warn!(
+                                        target: "function_ui",
+                                        error = %message,
+                                        "rendering agent error state"
+                                    );
                                     let err_text = format!("Error: {}", message);
                                     view.latest_result = Some(err_text.clone());
                                     view.chat_display.push(ChatEntry {
