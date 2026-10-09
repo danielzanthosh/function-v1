@@ -63,23 +63,8 @@ impl Tool for ScreenTool {
                     Ok(bytes) => {
                         let b64 = to_base64(&bytes);
 
-                        let home = std::env::var_os("USERPROFILE")
-                            .or_else(|| std::env::var_os("HOME"))
-                            .map(std::path::PathBuf::from)
-                            .unwrap_or_else(|| std::path::PathBuf::from("."));
-                        let mut dir = home;
-                        dir.push(".function");
-                        dir.push("attachments");
-                        let _ = std::fs::create_dir_all(&dir);
-
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis();
-                        let path = dir.join(format!("screenshot_{}.png", ts));
-                        let path_str = path.display().to_string();
-                        let _ = std::fs::write(&path, &bytes);
-
+                        // Screenshot bytes remain in memory and are passed directly to the model.
+                        // Do not persist temporary visual context in the user's attachments folder.
                         Ok(ToolResult::success(
                             format!(
                                 "Screenshot captured successfully ({}x{}, {} KB)",
@@ -91,7 +76,6 @@ impl Tool for ScreenTool {
                                 "status": "success",
                                 "width": dims.width,
                                 "height": dims.height,
-                                "path": path_str,
                                 "base64": b64,
                             }),
                         ))
