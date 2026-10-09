@@ -284,22 +284,8 @@ impl Tool for TakeScreenshotTool {
 
         let dims = self.control.get_screen_dimensions();
 
-        // Save screenshot to disk for persistent reference
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let mut out_dir = home;
-        out_dir.push(".function");
-        out_dir.push("attachments");
-        let _ = std::fs::create_dir_all(&out_dir);
-
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let file_path = out_dir.join(format!("screenshot_{}.png", ts));
-        let _ = std::fs::write(&file_path, &bytes);
+        // Keep screenshots in memory only. The native capture backend removes any
+        // temporary capture file after reading it, so no persistent screenshot is left behind.
 
         // Standard RFC4648 Base64 encoding
         const B64_CHARS: &[u8; 64] =
@@ -330,7 +316,6 @@ impl Tool for TakeScreenshotTool {
                 "success": true,
                 "width": dims.width,
                 "height": dims.height,
-                "path": file_path.to_string_lossy(),
                 "base64": b64,
                 "message": "Screenshot captured successfully"
             }),
