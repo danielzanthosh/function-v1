@@ -2181,6 +2181,61 @@ static G_STATUS_MENU: std::sync::atomic::AtomicIsize = std::sync::atomic::Atomic
 #[cfg(target_os = "macos")]
 static G_STATUS_TARGET: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
+/// Update the native macOS menu bar item's short status label while Function is active.
+/// An empty string restores the icon-only idle appearance.
+pub fn set_macos_status_text(status: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        static STATUS_TEXT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        if let Ok(mut last) = STATUS_TEXT.lock() {
+            if *last == status { return; }
+            *last = status.to_string();
+        }
+        let status = status.to_string();
+        unsafe {
+            type MsgSend0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type MsgSend1 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type MsgSendCStr = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            extern "C" {
+                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn objc_msgSend();
+                fn dispatch_async_f(queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void));
+                static _dispatch_main_q: std::ffi::c_void;
+            }
+            struct StatusUpdate { text: std::ffi::CString }
+            unsafe extern "C" fn apply_update(ctx: *mut std::ffi::c_void) {
+                let update = Box::from_raw(ctx as *mut StatusUpdate);
+                let send0: MsgSend0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                let send1: MsgSend1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                let send_cstr: MsgSendCStr = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                let item = G_STATUS_ITEM.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+                if item.is_null() { return; }
+                let button_sel = sel_registerName(c"button".as_ptr());
+                let button = send0(item, button_sel);
+                if button.is_null() { return; }
+                let string_cls = objc_getClass(c"NSString".as_ptr());
+                let string_sel = sel_registerName(c"stringWithUTF8String:".as_ptr());
+                let title = send_cstr(string_cls, string_sel, update.text.as_ptr());
+                if !title.is_null() {
+                    let set_title_sel = sel_registerName(c"setTitle:".as_ptr());
+                    send1(button, set_title_sel, title);
+                    let set_position_sel = sel_registerName(c"setImagePosition:".as_ptr());
+                    // NSImageLeft keeps the icon visible beside the status text.
+                    type MsgSendUsize = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+                    let send_usize: MsgSendUsize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                    send_usize(button, set_position_sel, if update.text.as_bytes().is_empty() { 1 } else { 2 });
+                }
+            }
+            let text = std::ffi::CString::new(status.replace('\0', "")).unwrap_or_default();
+            let ctx = Box::into_raw(Box::new(StatusUpdate { text })) as *mut std::ffi::c_void;
+            dispatch_async_f(&_dispatch_main_q as *const _ as *mut std::ffi::c_void, ctx, apply_update);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = status;
+}
+
 /// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
