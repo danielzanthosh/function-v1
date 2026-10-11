@@ -535,6 +535,9 @@ impl FunctionView {
                                     view.activities.clear();
                                     view.play_sound_feedback(SoundEffect::Success);
                                     if view.config.tts.enabled && !summary.is_empty() {
+                                        // Stop any previous native playback before starting a new
+                                        // response, then give the new response its own session ID.
+                                        function_platform::stop_audio_playback();
                                         let current_audio_session = view
                                             .audio_session_id
                                             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -757,6 +760,7 @@ impl FunctionView {
         function_platform::stop_audio_playback();
         if self.is_playing_audio {
             self.is_playing_audio = false;
+            function_platform::set_macos_status_text("");
             cx.notify();
         }
     }
@@ -920,9 +924,11 @@ impl FunctionView {
             }
         }
 
-        self.listening = true;
+        self.is_transcribing = false;
         self.voice_error = None;
+        self.listening = true;
         self.state = AgentState::Listening;
+        function_platform::set_macos_status_text("Listening…");
         tracing::info!("[Push-To-Talk] Recording started");
         self.play_sound_feedback(SoundEffect::Select);
         cx.notify();
@@ -935,6 +941,7 @@ impl FunctionView {
         }
 
         self.listening = false;
+        function_platform::set_macos_status_text("Transcribing…");
         tracing::info!("[Push-To-Talk] Recording stopped");
         self.play_sound_feedback(SoundEffect::Select);
 
@@ -954,6 +961,7 @@ impl FunctionView {
                 }
 
                 self.is_transcribing = true;
+                function_platform::set_macos_status_text("Transcribing…");
                 self.state = AgentState::Processing {
                     thought_summary: Some("Transcribing speech with Whisper...".to_string()),
                 };
@@ -995,6 +1003,7 @@ impl FunctionView {
                         let _ = cx.update(|cx| {
                             this.update(cx, |view, cx| {
                                 view.is_transcribing = false;
+                                function_platform::set_macos_status_text("");
                                 match result {
                                     Ok(transcript) => {
                                         let text = transcript.trim().to_string();
@@ -3391,7 +3400,7 @@ impl Render for FunctionView {
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(theme.status_error)
-                                            .child("Stop Audio")
+                                            .child("■")
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _, _, cx| {
