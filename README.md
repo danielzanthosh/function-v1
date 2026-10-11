@@ -82,6 +82,7 @@ Bug reports, small fixes, and thoughtful improvements are welcome. Please read [
 ## Project policies
 
 - [Privacy Policy](docs/PRIVACY.md)
+- [Memory Guide](docs/MEMORY.md)
 - [Terms of Use](docs/TERMS.md)
 - [Security Policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
