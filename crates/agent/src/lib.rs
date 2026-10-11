@@ -865,6 +865,37 @@ Agentic Multi-Step & Observation Loop:
             let response = match response {
                 Ok(res) => res,
                 Err(e) => {
+                    // Some OpenAI-compatible providers/models reject image content with HTTP 400,
+                    // even when they accept ordinary tool calls. A screenshot should not abort the
+                    // whole computer-control task: retry once without image payloads while keeping
+                    // the textual tool results and the rest of the conversation intact.
+                    let error_text = e.to_string();
+                    let has_images = messages.iter().any(|message| {
+                        message.images.as_ref().is_some_and(|images| !images.is_empty())
+                    });
+                    if error_text.contains("API error (400)") && has_images {
+                        for message in &mut messages {
+                            if message.images.as_ref().is_some_and(|images| !images.is_empty()) {
+                                message.images = None;
+                                if message.content.trim() == "Visual screen observation:" {
+                                    message.content = "Visual screen observation unavailable: the configured provider rejected image input. Continue using available textual tool results.".to_string();
+                                }
+                            }
+                        }
+                        tracing::warn!(
+                            target: LIFECYCLE_LOG_TARGET,
+                            run_id,
+                            step,
+                            provider = %provider.name(),
+                            error = %error_text,
+                            "Provider rejected screenshot input; retrying without image payloads"
+                        );
+                        run.emit(AgentState::Processing {
+                            thought_summary: Some("This provider rejected screenshot input. Retrying without the image...".to_string()),
+                        });
+                        continue;
+                    }
+
                     tracing::error!(
                         target: LIFECYCLE_LOG_TARGET,
                         run_id,
