@@ -80,9 +80,12 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
         message: format!("Failed to decode base64 image data: {}", e),
     })?;
 
-    if decoded_bytes.len() + if is_data_url { trimmed.split_once(',').map_or(0, |(prefix, _)| prefix.len() + 1) } else { "data:image/png;base64,".len() }
-        <= MAX_BASE64_IMAGE_BYTES
-    {
+    let formatted_len = if is_data_url {
+        trimmed.len()
+    } else {
+        "data:image/png;base64,".len() + raw_b64.len()
+    };
+    if formatted_len <= MAX_BASE64_IMAGE_BYTES {
         let dyn_img = image::load_from_memory(&decoded_bytes).map_err(|e| ProviderError::Api {
             code: 400,
             message: format!("Failed to parse image: {}", e),
