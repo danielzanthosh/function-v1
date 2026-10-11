@@ -451,6 +451,7 @@ impl FunctionView {
                             match &state_clone {
                                 AgentState::Processing { thought_summary } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_status_text("Working…");
                                     for activity in &mut view.activities {
                                         if activity.status == ActivityStatus::Running {
                                             activity.status = ActivityStatus::Done;
@@ -466,6 +467,7 @@ impl FunctionView {
                                 }
                                 AgentState::Acting { action_description } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_status_text("Acting…");
                                     for activity in &mut view.activities {
                                         if activity.status == ActivityStatus::Running {
                                             activity.status = ActivityStatus::Done;
@@ -509,6 +511,9 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
+                                    if !view.config.tts.enabled || summary.is_empty() {
+                                        function_platform::set_macos_status_text("Done");
+                                    }
                                     view.latest_result = Some(summary.clone());
                                     if let Some(last) = view.chat_display.last_mut() {
                                         if !last.is_user {
@@ -649,6 +654,7 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_status_text("Error");
                                     tracing::warn!(
                                         target: "function_ui",
                                         error = %message,
