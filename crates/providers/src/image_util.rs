@@ -49,12 +49,8 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
             "bmp" => "image/bmp",
             _ => "image/png",
         };
-        let formatted = format!("data:{};base64,{}", mime, b64);
-        if formatted.len() <= MAX_BASE64_IMAGE_BYTES {
-            return Ok(formatted);
-        }
-
-        // Oversized file image: load and compress
+        // Always normalize screenshots and image files before sending them to a
+        // vision model, even when the original file is under the byte-size limit.
         let dyn_img = image::load_from_memory(&file_bytes).map_err(|e| ProviderError::Api {
             code: 400,
             message: format!("Failed to decode image file '{}': {}", trimmed, e),
@@ -63,19 +59,10 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
     }
 
     // 2. Check current base64 payload size
-    let formatted_len = if is_data_url {
-        trimmed.len()
-    } else {
-        // "data:image/png;base64," + raw_b64
-        "data:image/png;base64,".len() + trimmed.len()
-    };
+    // Normalize all base64 images, not only oversized ones, to reduce vision
+    // token cost and keep screenshot dimensions bounded.
 
-    if formatted_len <= MAX_BASE64_IMAGE_BYTES {
-        // Already within 5 MB limit
-        return Ok(trimmed.to_string());
-    }
-
-    // 3. Oversized image -> Extract base64 payload
+    // 3. Extract base64 payload
     let raw_b64 = if is_data_url {
         if let Some((_, payload)) = trimmed.split_once(',') {
             payload
@@ -101,11 +88,23 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
 
 /// Compress and downscale a DynamicImage iteratively until its base64 payload is below 5 MB.
 fn compress_dynamic_image(img: &DynamicImage) -> Result<String, ProviderError> {
-    let mut current_img = img.clone();
+    const MAX_DIMENSION: u32 = 1600;
     let (orig_w, orig_h) = (img.width(), img.height());
+    let longest = orig_w.max(orig_h);
+    let mut current_img = if longest > MAX_DIMENSION {
+        let scale = MAX_DIMENSION as f32 / longest as f32;
+        img.resize(
+            ((orig_w as f32 * scale).round() as u32).max(1),
+            ((orig_h as f32 * scale).round() as u32).max(1),
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        img.clone()
+    };
 
-    // Try JPEG compression at decreasing qualities first
-    let qualities = [85, 75, 60, 45, 30];
+    // Re-encode every image as JPEG and try progressively lower qualities.
+    // Screenshots are capped at 1600 px on the longest edge.
+    let qualities = [75, 60, 45, 30];
     for &q in &qualities {
         let mut buffer = Vec::new();
         let mut cursor = Cursor::new(&mut buffer);
