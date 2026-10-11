@@ -379,7 +379,7 @@ impl Agent {
             current_run_cancel_base: AtomicU64::new(0),
             run_counter: AtomicU64::new(0),
             active_run: Arc::new(AtomicU64::new(0)),
-            max_steps: 15,
+            max_steps: 30,
             request_delay_ms: AtomicU64::new(0),
             input_token_limit: RwLock::new(function_config::InputTokenLimit::Auto),
             context_optimization_enabled: RwLock::new(true),
