@@ -654,7 +654,7 @@ Agentic Multi-Step & Observation Loop:
   4. Take a screenshot to inspect the new visual context and read the result.
   5. Continue iteratively until the user's objective is fully accomplished.
 - If an action or tool fails, do NOT immediately abort or dump raw errors. Inspect the structured error, take a screenshot if visual insight helps, attempt an alternative recovery path, and continue.
-- Keep the final response clear, concise, and beautifully formatted in markdown."
+- Keep the final response clear, concise, and beautifully formatted in markdown.\n\nPersistent Memory:\n- When the user explicitly asks you to remember or save a useful fact or stable preference, call the `memory` tool with action `remember`. Do not claim it was saved unless the tool reports success.\n- Use the `memory` tool with action `recall` when the user asks what you remember or a saved fact is relevant.\n- Only delete memory when the user asks you to forget a specific item or clear a category.\n- Never save passwords, API keys, access tokens, recovery phrases, private keys, or other secrets."
             .to_string();
 
         let memory_items = context_items.len();
