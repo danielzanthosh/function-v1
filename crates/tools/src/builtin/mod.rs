@@ -3,6 +3,7 @@ pub mod browser_tool;
 pub mod desktop_tools;
 pub mod file_tool;
 pub mod keyboard_tool;
+pub mod memory_tool;
 pub mod mouse_tool;
 pub mod screen_tool;
 pub mod search_tool;
@@ -16,6 +17,7 @@ pub use desktop_tools::{
 };
 pub use file_tool::FileTool;
 pub use keyboard_tool::KeyboardTool;
+pub use memory_tool::MemoryTool;
 pub use mouse_tool::MouseTool;
 pub use screen_tool::ScreenTool;
 pub use search_tool::WebSearchTool;
@@ -45,4 +47,12 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
     registry.register(WebSearchTool::new());
     registry.register(FileTool::new());
     registry.register(TerminalTool::new());
+}
+
+/// Register persistent memory access after the application has initialized its store.
+pub fn register_memory_tool(
+    registry: &mut ToolRegistry,
+    memory: std::sync::Arc<dyn function_memory::MemoryStore>,
+) {
+    registry.register(MemoryTool::new(memory));
 }
