@@ -1284,6 +1284,70 @@ impl FunctionView {
         cx.notify();
     }
 
+    /// Two-step destructive reset. Clears chat/session state and persistent memory,
+    /// while intentionally leaving AppConfig and credentials untouched.
+    pub fn reset_everything(&mut self, cx: &mut Context<Self>) {
+        const CONFIRM: &str = "Click Reset Everything again to permanently clear chats and memory.";
+        if self.settings_status_message.as_deref() != Some(CONFIRM) {
+            self.settings_status_message = Some(CONFIRM.to_string());
+            cx.notify();
+            return;
+        }
+
+        let Some(agent) = self.agent.clone() else {
+            self.settings_status_message = Some("Reset failed: agent is not initialized.".to_string());
+            cx.notify();
+            return;
+        };
+
+        agent.cancel();
+        if let Err(error) = self.conversation_store.clear_all() {
+            self.settings_status_message = Some(format!("Could not clear saved conversations: {error}"));
+            cx.notify();
+            return;
+        }
+
+        self.input_buffer.clear();
+        self.chat_display.clear();
+        self.chat_history_api.clear();
+        self.active_conversation_id = None;
+        self.latest_result = None;
+        self.active_task = None;
+        self.activities.clear();
+        self.state = AgentState::Idle;
+        self.voice_error = None;
+        self.conversation_status_message = None;
+        self.expanded_errors.clear();
+        self.conversation_selected_index = 0;
+        self.settings_status_message = Some("Resetting saved memory…".to_string());
+        cx.notify();
+
+        let runtime_handle = crate::get_runtime_handle();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let cx = cx.clone();
+            async move {
+                let result = if let Some(handle) = runtime_handle {
+                    match handle.spawn(async move { agent.clear_all_memory().await }).await {
+                        Ok(result) => result.map_err(|error| error.to_string()),
+                        Err(error) => Err(format!("Memory reset task failed: {error}")),
+                    }
+                } else {
+                    Err("Background runtime is unavailable.".to_string())
+                };
+
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |view, cx| {
+                        view.settings_status_message = Some(match result {
+                            Ok(()) => "Chats, memory, summary context, and session history cleared. Configuration preserved.".to_string(),
+                            Err(error) => format!("Chat history cleared, but memory reset failed: {error}"),
+                        });
+                        cx.notify();
+                    });
+                });
+            }
+        }).detach();
+    }
+
     pub fn start_new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.go_home(window, cx);
     }

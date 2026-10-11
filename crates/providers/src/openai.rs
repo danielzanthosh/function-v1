@@ -271,6 +271,14 @@ impl LlmProvider for OpenAiLlmProvider {
         }
 
         let body_str = payload.to_string();
+        tracing::info!(
+            target: "function_provider::openai",
+            model = %model,
+            request_json_bytes = body_str.len(),
+            message_count = req.messages.len(),
+            tool_count = req.tools.len(),
+            "serialized completion request size"
+        );
 
         // Perform HTTP request asynchronously via piped curl stdin to prevent Windows quote mangling
         let base_url = endpoint.clone();

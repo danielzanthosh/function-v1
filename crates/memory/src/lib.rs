@@ -63,6 +63,20 @@ pub trait MemoryStore: Send + Sync {
 
     /// Clear all memory items in a category.
     async fn clear_category(&self, category: MemoryCategory) -> Result<(), MemoryError>;
+
+    /// Permanently remove every saved memory item.
+    async fn clear_all(&self) -> Result<(), MemoryError> {
+        for category in [
+            MemoryCategory::UserPreference,
+            MemoryCategory::FrequentApplication,
+            MemoryCategory::FrequentWebsite,
+            MemoryCategory::TaskSummary,
+            MemoryCategory::CustomInstruction,
+        ] {
+            self.clear_category(category).await?;
+        }
+        Ok(())
+    }
 }
 
 /// In-memory implementation of MemoryStore for testing and default runtime fallback.
@@ -141,6 +155,14 @@ impl MemoryStore for InMemoryMemoryStore {
             .write()
             .map_err(|e| MemoryError::Database(e.to_string()))?;
         write.retain(|_, v| v.category != category);
+        Ok(())
+    }
+
+    async fn clear_all(&self) -> Result<(), MemoryError> {
+        self.items
+            .write()
+            .map_err(|e| MemoryError::Database(e.to_string()))?
+            .clear();
         Ok(())
     }
 }
