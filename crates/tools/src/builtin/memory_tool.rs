@@ -199,3 +199,69 @@ impl Tool for MemoryTool {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use function_memory::InMemoryMemoryStore;
+
+    #[tokio::test]
+    async fn memory_tool_remembers_and_recalls_a_note() {
+        let store = Arc::new(InMemoryMemoryStore::new());
+        let tool = MemoryTool::new(store);
+        let ctx = ToolContext::default();
+
+        let saved = tool.execute(json!({
+            "action": "remember",
+            "category": "user_preference",
+            "key": "response_style",
+            "value": "Keep answers concise"
+        }), &ctx).await.unwrap();
+        assert!(saved.success);
+
+        let recalled = tool.execute(json!({
+            "action": "recall",
+            "query": "concise answers",
+            "limit": 5
+        }), &ctx).await.unwrap();
+        assert!(recalled.success);
+        assert_eq!(recalled.output["memories"][0]["value"], "Keep answers concise");
+    }
+
+    #[tokio::test]
+    async fn memory_tool_refuses_secret_like_values() {
+        let store = Arc::new(InMemoryMemoryStore::new());
+        let tool = MemoryTool::new(store.clone());
+        let result = tool.execute(json!({
+            "action": "remember",
+            "category": "custom_instruction",
+            "key": "api_key",
+            "value": "api_key=do-not-store"
+        }), &ToolContext::default()).await.unwrap();
+        assert!(!result.success);
+
+        let memories = store.recall("", None, 10).await.unwrap();
+        assert!(memories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_tool_can_forget_a_saved_note() {
+        let store = Arc::new(InMemoryMemoryStore::new());
+        let tool = MemoryTool::new(store);
+        let ctx = ToolContext::default();
+        tool.execute(json!({
+            "action": "remember",
+            "category": "user_preference",
+            "key": "theme",
+            "value": "dark"
+        }), &ctx).await.unwrap();
+
+        tool.execute(json!({
+            "action": "forget",
+            "id": "user_preference:theme"
+        }), &ctx).await.unwrap();
+        let memories = tool.execute(json!({"action": "recall"}), &ctx).await.unwrap();
+        assert_eq!(memories.output["memories"].as_array().unwrap().len(), 0);
+    }
+}
