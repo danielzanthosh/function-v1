@@ -136,4 +136,15 @@ impl MemoryStore for FileMemoryStore {
         }
         self.persist()
     }
+
+    async fn clear_all(&self) -> Result<(), MemoryError> {
+        {
+            let mut write = self
+                .cache
+                .write()
+                .map_err(|e| MemoryError::Database(e.to_string()))?;
+            write.clear();
+        }
+        self.persist()
+    }
 }
