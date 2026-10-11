@@ -59,13 +59,6 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
     }
 
     // 2. Check current base64 payload size
-    let formatted_len = if is_data_url {
-        trimmed.len()
-    } else {
-        // "data:image/png;base64," + raw_b64
-        "data:image/png;base64,".len() + trimmed.len()
-    };
-
     // Normalize all base64 images, not only oversized ones, to reduce vision
     // token cost and keep screenshot dimensions bounded.
 
