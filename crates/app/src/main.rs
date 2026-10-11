@@ -107,6 +107,10 @@ fn main() {
             }
         };
 
+    // Give the agent explicit memory controls backed by the same persistent store
+    // used for recall at the start of each run.
+    function_tools::register_memory_tool(&mut tools, memory.clone());
+
     let provider = providers::build_llm_provider(&config);
     let stt_provider = providers::build_stt_provider(&config);
     let tts_provider = providers::build_tts_provider(&config);
