@@ -273,7 +273,7 @@ impl LlmProvider for OpenAiLlmProvider {
         let body_str = payload.to_string();
         tracing::info!(
             target: "function_provider::openai",
-            model = %self.model,
+            model = %model,
             request_json_bytes = body_str.len(),
             message_count = req.messages.len(),
             tool_count = req.tools.len(),
