@@ -744,10 +744,15 @@ Agentic Multi-Step & Observation Loop:
                 .unwrap_or_else(|e| e.into_inner());
 
             let compaction_started = Instant::now();
-            let (request_messages, compaction) = if context_optimization_enabled {
+            let estimated_tokens = context::estimate_tokens(&messages, &tool_definitions);
+            // Context optimization can be disabled by the user, but never allow an
+            // oversized request to escape the safety guard. Compact whenever enabled
+            // or whenever the request exceeds the configured input budget.
+            let (request_messages, compaction) = if context_optimization_enabled
+                || estimated_tokens > target_budget
+            {
                 context::compact_messages(&messages, &tool_definitions, target_budget)
             } else {
-                let estimated_tokens = context::estimate_tokens(&messages, &tool_definitions);
                 (
                     messages.clone(),
                     context::ContextCompactionReport {
@@ -759,7 +764,7 @@ Agentic Multi-Step & Observation Loop:
                 )
             };
 
-            if context_optimization_enabled {
+            if context_optimization_enabled || compaction.before_tokens > compaction.after_tokens {
                 tracing::info!(
                     target: LIFECYCLE_LOG_TARGET,
                     run_id,
