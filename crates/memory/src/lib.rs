@@ -98,7 +98,11 @@ impl MemoryStore for InMemoryMemoryStore {
             .items
             .read()
             .map_err(|e| MemoryError::Database(e.to_string()))?;
-        let query_lower = query.to_lowercase();
+        let query_terms: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
 
         let mut matches: Vec<MemoryItem> = read
             .values()
@@ -108,11 +112,12 @@ impl MemoryStore for InMemoryMemoryStore {
                         return false;
                     }
                 }
-                if query_lower.is_empty() {
+                if query_terms.is_empty() {
                     return true;
                 }
-                item.key.to_lowercase().contains(&query_lower)
-                    || item.value.to_lowercase().contains(&query_lower)
+                let key = item.key.to_lowercase();
+                let value = item.value.to_lowercase();
+                query_terms.iter().any(|term| key.contains(term) || value.contains(term))
             })
             .cloned()
             .collect();
