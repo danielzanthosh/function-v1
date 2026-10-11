@@ -22,6 +22,33 @@ pub mod context;
 /// `RUST_LOG=function_agent::lifecycle=info` to diagnose stuck requests.
 pub const LIFECYCLE_LOG_TARGET: &str = "function_agent::lifecycle";
 
+/// Only retry without screenshots when the provider's error actually indicates
+/// unsupported/invalid image input. A generic HTTP 400 can also mean an oversized
+/// context or malformed request, neither of which removing images necessarily fixes.
+fn should_retry_without_images(error: &str, has_images: bool) -> bool {
+    if !has_images || !error.contains("API error (400)") {
+        return false;
+    }
+
+    let error = error.to_ascii_lowercase();
+    [
+        "image input is not supported",
+        "image input is unsupported",
+        "does not support image",
+        "doesn't support image",
+        "unsupported image",
+        "invalid image",
+        "image_url",
+        "image url",
+        "vision is not supported",
+        "multimodal input is not supported",
+        "content type 'image'",
+        "content type \\"image\\"",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
 const STATE_CHANNEL_CAPACITY: usize = 256;
 const MEMORY_RECALL_TIMEOUT: Duration = Duration::from_secs(5);
 const TOOL_EXECUTION_TIMEOUT: Duration = Duration::from_secs(180);
@@ -958,7 +985,7 @@ Agentic Multi-Step & Observation Loop:
                     let has_images = messages.iter().any(|message| {
                         message.images.as_ref().is_some_and(|images| !images.is_empty())
                     });
-                    if error_text.contains("API error (400)") && has_images {
+                    if should_retry_without_images(&error_text, has_images) {
                         for message in &mut messages {
                             if message.images.as_ref().is_some_and(|images| !images.is_empty()) {
                                 message.images = None;
@@ -1290,6 +1317,30 @@ mod tests {
                 finish_reason: Some("tool_calls".to_string()),
             })
         }
+    }
+
+    #[test]
+    fn image_fallback_only_triggers_for_image_input_errors() {
+        assert!(should_retry_without_images(
+            "API error (400): This model does not support image input",
+            true
+        ));
+        assert!(should_retry_without_images(
+            "API error (400): invalid image_url payload",
+            true
+        ));
+        assert!(!should_retry_without_images(
+            "API error (400): This endpoint's maximum context length is 1048576 tokens, but the request contains too many tokens",
+            true
+        ));
+        assert!(!should_retry_without_images(
+            "API error (400): malformed request body",
+            true
+        ));
+        assert!(!should_retry_without_images(
+            "API error (400): unsupported image input",
+            false
+        ));
     }
 
     #[tokio::test]
