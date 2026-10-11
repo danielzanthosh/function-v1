@@ -743,8 +743,30 @@ Agentic Multi-Step & Observation Loop:
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
 
-            let compaction_started = Instant::now();
             let estimated_tokens = context::estimate_tokens(&messages, &tool_definitions);
+            if estimated_tokens > target_budget {
+                if let Some((index, message)) = messages
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, message)| message.content.chars().count())
+                {
+                    tracing::warn!(
+                        target: LIFECYCLE_LOG_TARGET,
+                        run_id,
+                        step,
+                        estimated_tokens,
+                        target_budget,
+                        largest_message_index = index,
+                        largest_message_role = ?message.role,
+                        largest_message_chars = message.content.chars().count(),
+                        largest_message_images = message.images.as_ref().map_or(0, Vec::len),
+                        largest_message_tool_calls = message.tool_calls.as_ref().map_or(0, Vec::len),
+                        "oversized context detected; largest message identified"
+                    );
+                }
+            }
+
+            let compaction_started = Instant::now();
             // Context optimization can be disabled by the user, but never allow an
             // oversized request to escape the safety guard. Compact whenever enabled
             // or whenever the request exceeds the configured input budget.
