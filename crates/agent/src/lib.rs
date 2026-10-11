@@ -771,6 +771,39 @@ Agentic Multi-Step & Observation Loop:
                 }
             }
 
+            // Size-only diagnostics: locate prompt growth without logging prompt text,
+            // screenshot bytes, credentials, or tool output contents.
+            tracing::info!(
+                target: LIFECYCLE_LOG_TARGET,
+                run_id,
+                step,
+                message_count = messages.len(),
+                text_chars = messages.iter().map(|m| m.content.chars().count()).sum::<usize>(),
+                image_count = messages.iter().map(|m| m.images.as_ref().map_or(0, Vec::len)).sum::<usize>(),
+                image_chars = messages.iter().flat_map(|m| m.images.iter().flatten()).map(|image| image.chars().count()).sum::<usize>(),
+                tool_call_count = messages.iter().map(|m| m.tool_calls.as_ref().map_or(0, Vec::len)).sum::<usize>(),
+                tool_schema_count = tool_definitions.len(),
+                tool_schema_chars = tool_definitions.iter().map(|t| t.name.chars().count() + t.description.chars().count() + t.parameters.to_string().chars().count()).sum::<usize>(),
+                estimated_tokens,
+                target_budget,
+                "preflight request size"
+            );
+            for (message_index, message) in messages.iter().enumerate() {
+                tracing::debug!(
+                    target: LIFECYCLE_LOG_TARGET,
+                    run_id,
+                    step,
+                    message_index,
+                    role = ?message.role,
+                    chars = message.content.chars().count(),
+                    images = message.images.as_ref().map_or(0, Vec::len),
+                    image_chars = message.images.as_ref().map(|images| images.iter().map(|image| image.chars().count()).sum::<usize>()).unwrap_or(0),
+                    tool_call_count = message.tool_calls.as_ref().map_or(0, Vec::len),
+                    tool_output = message.tool_call_id.is_some(),
+                    "request message size"
+                );
+            }
+
             let compaction_started = Instant::now();
             // Context optimization can be disabled by the user, but never allow an
             // oversized request to escape the safety guard. Compact whenever enabled
@@ -813,7 +846,7 @@ Agentic Multi-Step & Observation Loop:
                         step,
                         after_tokens = compaction.after_tokens,
                         budget = target_budget,
-                        "context exceeds the input token budget even after compaction; dispatching anyway"
+                        "context exceeds the input token budget even after compaction"
                     );
                 }
 
