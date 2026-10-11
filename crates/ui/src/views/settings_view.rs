@@ -912,7 +912,7 @@ pub fn render_settings_view(
                         .bg(rgba(0x7A2424FF))
                         .hover(|style| style.opacity(0.9))
                         .text_xs()
-                        .text_color(gpui::white())
+                        .text_color(Rgba { a: 1.0, r: 1.0, g: 1.0, b: 1.0 })
                         .child("Reset Everything")
                         .on_mouse_down(
                             MouseButton::Left,
