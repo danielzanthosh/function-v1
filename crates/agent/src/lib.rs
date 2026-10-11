@@ -1119,9 +1119,18 @@ Agentic Multi-Step & Observation Loop:
                     }
                 }
 
+                // Screenshot bytes are attached to the following image message. Never
+                // also serialize the same base64 payload into the tool-result text: it
+                // balloons requests and still survives image-only fallback retries.
+                let mut tool_output = result.output.clone();
+                if screenshot_base64.is_some() {
+                    if let Some(object) = tool_output.as_object_mut() {
+                        object.remove("base64");
+                    }
+                }
                 messages.push(ChatMessage::tool(
                     call.id.clone(),
-                    result.output.to_string(),
+                    tool_output.to_string(),
                 ));
 
                 if let Some(b64) = screenshot_base64 {
