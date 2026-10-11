@@ -161,9 +161,9 @@ impl ConversationStore {
     }
 
     /// Clear all conversation history.
-    pub fn clear_all(&mut self) {
+    pub fn clear_all(&mut self) -> Result<(), String> {
         self.conversations.clear();
-        let _ = self.save();
+        self.save()
     }
 }
 
