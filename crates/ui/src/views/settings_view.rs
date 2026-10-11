@@ -905,6 +905,24 @@ pub fn render_settings_view(
                 )
                 .child(
                     div()
+                        .cursor_pointer()
+                        .px_3()
+                        .py_1p5()
+                        .rounded_md()
+                        .bg(rgba(0x7A2424FF))
+                        .hover(|style| style.opacity(0.9))
+                        .text_xs()
+                        .text_color(gpui::white())
+                        .child("Reset Everything")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.reset_everything(cx);
+                            }),
+                        ),
+                )
+                .child(
+                    div()
                         .flex()
                         .items_center()
                         .gap_2()
