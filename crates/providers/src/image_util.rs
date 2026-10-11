@@ -22,8 +22,8 @@ pub fn process_request_messages(messages: &mut [ChatMessage]) -> Result<(), Prov
 }
 
 /// Process an image string (raw base64, data URL, or file path).
-/// If the image payload as base64 is already under 5 MB, it is returned unchanged.
-/// If oversized, it is automatically decoded, resized, and compressed to JPEG.
+/// Images under 5 MB and within the dimension limit are returned unchanged.
+/// Oversized payloads or images with a longest edge above 1600 px are compressed.
 pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
     let trimmed = img_str.trim();
 
@@ -49,18 +49,20 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
             "bmp" => "image/bmp",
             _ => "image/png",
         };
-        // Always normalize screenshots and image files before sending them to a
-        // vision model, even when the original file is under the byte-size limit.
         let dyn_img = image::load_from_memory(&file_bytes).map_err(|e| ProviderError::Api {
             code: 400,
             message: format!("Failed to decode image file '{}': {}", trimmed, e),
         })?;
+        if file_bytes.len() + format!("data:{};base64,", mime).len() <= MAX_BASE64_IMAGE_BYTES
+            && dyn_img.width().max(dyn_img.height()) <= 1600
+        {
+            return Ok(format!("data:{};base64,{}", mime, b64));
+        }
         return compress_dynamic_image(&dyn_img);
     }
 
-    // 2. Check current base64 payload size
-    // Normalize all base64 images, not only oversized ones, to reduce vision
-    // token cost and keep screenshot dimensions bounded.
+    // 2. Preserve already-small images to avoid needless re-encoding.
+    // Large screenshots are downscaled even when their compressed file is small.
 
     // 3. Extract base64 payload
     let raw_b64 = if is_data_url {
@@ -78,11 +80,30 @@ pub fn process_image_string(img_str: &str) -> Result<String, ProviderError> {
         message: format!("Failed to decode base64 image data: {}", e),
     })?;
 
+    let formatted_len = if is_data_url {
+        trimmed.len()
+    } else {
+        "data:image/png;base64,".len() + raw_b64.len()
+    };
+    if formatted_len <= MAX_BASE64_IMAGE_BYTES {
+        let dyn_img = image::load_from_memory(&decoded_bytes).map_err(|e| ProviderError::Api {
+            code: 400,
+            message: format!("Failed to parse image: {}", e),
+        })?;
+        if dyn_img.width().max(dyn_img.height()) <= 1600 {
+            return Ok(if is_data_url {
+                trimmed.to_string()
+            } else {
+                format!("data:image/png;base64,{}", raw_b64)
+            });
+        }
+        return compress_dynamic_image(&dyn_img);
+    }
+
     let dyn_img = image::load_from_memory(&decoded_bytes).map_err(|e| ProviderError::Api {
         code: 400,
         message: format!("Failed to parse image for compression: {}", e),
     })?;
-
     compress_dynamic_image(&dyn_img)
 }
 
