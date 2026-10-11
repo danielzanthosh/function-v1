@@ -824,6 +824,26 @@ Agentic Multi-Step & Observation Loop:
                 }
             }
 
+            // Never send a request that the local estimator already knows
+            // exceeds the configured/provider context budget. Dispatching anyway
+            // turns a recoverable local issue into a provider HTTP 400.
+            if compaction.budget_unreachable || compaction.after_tokens > target_budget {
+                let message = format!(
+                    "Request is still too large after context compaction (estimated {} tokens; budget {}). Shorten the task or reduce the tool/context payload before retrying.",
+                    context::format_token_k(compaction.after_tokens),
+                    context::format_token_k(target_budget),
+                );
+                tracing::error!(
+                    target: LIFECYCLE_LOG_TARGET,
+                    run_id,
+                    step,
+                    estimated_tokens = compaction.after_tokens,
+                    target_budget,
+                    "blocking oversized request before provider dispatch"
+                );
+                return Err(RunFailure::new(AgentError::Provider(message), &history_tail));
+            }
+
             let req = CompletionRequest {
                 model: "default".to_string(),
                 messages: request_messages,
