@@ -191,6 +191,7 @@ pub struct OpenAiLlmProvider {
     base_url: String,
     api_key: Option<String>,
     default_model: String,
+    http_client: reqwest::Client,
 }
 
 impl OpenAiLlmProvider {
@@ -207,6 +208,7 @@ impl OpenAiLlmProvider {
             base_url: url,
             api_key,
             default_model: default_model.into(),
+            http_client: reqwest::Client::new(),
         }
     }
 }
@@ -270,70 +272,28 @@ impl LlmProvider for OpenAiLlmProvider {
             payload["tools"] = json!(tools_json);
         }
 
-        let body_str = payload.to_string();
+        // Use a pooled async HTTP client instead of spawning curl for ordinary
+        // completion requests. Keep the raw response body so provider-specific
+        // validation errors remain visible to the existing error parser.
+        let mut request = self
+            .http_client
+            .post(&endpoint)
+            .timeout(std::time::Duration::from_secs(180))
+            .json(&payload);
 
-        // Perform HTTP request asynchronously via piped curl stdin to prevent Windows quote mangling
-        let base_url = endpoint.clone();
-        let api_key = self.api_key.clone();
+        if let Some(key) = self.api_key.as_deref().filter(|key| !key.is_empty()) {
+            request = request.bearer_auth(key);
+        }
 
-        let response_body =
-            tokio::task::spawn_blocking(move || -> Result<String, ProviderError> {
-                use std::io::Write;
-                let curl_bin = if cfg!(target_os = "windows") {
-                    "curl.exe"
-                } else {
-                    "curl"
-                };
-                let mut cmd = Command::new(curl_bin);
-                cmd.arg("-s")
-                    .arg("-X")
-                    .arg("POST")
-                    .arg(&base_url)
-                    .arg("-H")
-                    .arg("Content-Type: application/json");
-
-                if let Some(ref key) = api_key {
-                    if !key.is_empty() {
-                        cmd.arg("-H").arg(format!("Authorization: Bearer {}", key));
-                    }
-                }
-
-                cmd.arg("--data-binary")
-                    .arg("@-")
-                    .arg("-w")
-                    .arg(format!("{}%{{http_code}}", CURL_STATUS_MARKER));
-                cmd.stdin(std::process::Stdio::piped());
-                cmd.stdout(std::process::Stdio::piped());
-                cmd.stderr(std::process::Stdio::piped());
-
-                let mut child = cmd
-                    .spawn()
-                    .map_err(|e| ProviderError::Network(e.to_string()))?;
-
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin
-                        .write_all(body_str.as_bytes())
-                        .map_err(|e| ProviderError::Network(e.to_string()))?;
-                }
-
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| ProviderError::Network(e.to_string()))?;
-
-                if !output.status.success() {
-                    return Err(ProviderError::Network(format!(
-                        "curl exited with code {:?}",
-                        output.status.code()
-                    )));
-                }
-
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
-            })
+        let response = request
+            .send()
             .await
-            .map_err(|e| ProviderError::Network(e.to_string()))??;
-
-        let (response_body, http_status) = split_curl_response(response_body);
-        let status_code = http_status.unwrap_or(200);
+            .map_err(|error| ProviderError::Network(error.to_string()))?;
+        let status_code = response.status().as_u16();
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| ProviderError::Network(error.to_string()))?;
 
         let parsed: serde_json::Value = match serde_json::from_str(&response_body) {
             Ok(val) => val,
