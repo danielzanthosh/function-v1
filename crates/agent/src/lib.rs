@@ -386,6 +386,11 @@ impl Agent {
         }
     }
 
+    /// Clear all persistent memory without touching provider or app configuration.
+    pub async fn clear_all_memory(&self) -> Result<(), function_memory::MemoryError> {
+        self.memory.clear_all().await
+    }
+
     /// Set a request delay in milliseconds applied before sending new requests to the provider.
     pub fn set_request_delay(&self, delay_ms: u64) {
         self.request_delay_ms.store(delay_ms, Ordering::Relaxed);
