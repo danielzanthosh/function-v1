@@ -29,7 +29,7 @@ impl Tool for MouseTool {
     }
 
     fn description(&self) -> &str {
-        "Control mouse cursor: move to coordinates, click, double click, right click, scroll, or drag."
+        "Control the mouse. Use pixel coordinates from the original computer_screen screenshot image, not preview-scaled coordinates or macOS logical points. Coordinates are converted once to native screen points. Click actions with x/y move to that target before clicking; without x/y they click the current cursor position."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -40,13 +40,13 @@ impl Tool for MouseTool {
                     "type": "string",
                     "enum": ["move", "click", "double_click", "right_click", "middle_click", "scroll", "drag"]
                 },
-                "x": { "type": "integer", "description": "Target X pixel coordinate" },
-                "y": { "type": "integer", "description": "Target Y pixel coordinate" },
+                "x": { "type": "integer", "description": "X pixel coordinate in the original computer_screen screenshot image; do not scale to logical points yourself" },
+                "y": { "type": "integer", "description": "Y pixel coordinate in the original computer_screen screenshot image; do not scale to logical points yourself" },
                 "delta": { "type": "integer", "description": "Scroll delta (positive for up, negative for down)" },
-                "start_x": { "type": "integer", "description": "Drag starting X coordinate" },
-                "start_y": { "type": "integer", "description": "Drag starting Y coordinate" },
-                "end_x": { "type": "integer", "description": "Drag ending X coordinate" },
-                "end_y": { "type": "integer", "description": "Drag ending Y coordinate" }
+                "start_x": { "type": "integer", "description": "Starting X pixel coordinate in the original screenshot image" },
+                "start_y": { "type": "integer", "description": "Starting Y pixel coordinate in the original screenshot image" },
+                "end_x": { "type": "integer", "description": "Ending X pixel coordinate in the original screenshot image" },
+                "end_y": { "type": "integer", "description": "Ending Y pixel coordinate in the original screenshot image" }
             },
             "required": ["action"]
         })
