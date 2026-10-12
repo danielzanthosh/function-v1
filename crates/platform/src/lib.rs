@@ -2362,8 +2362,9 @@ pub fn set_macos_activity_glow(active: bool) {
                     // A small click-through ring marks the AI-controlled pointer.
                     let cursor_layer = send0(objc_getClass(c"CALayer".as_ptr()), sel_registerName(c"layer".as_ptr()));
                     let cursor_frame = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 42.0, height: 42.0 } };
-                    let set_frame: SendRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                    set_frame(cursor_layer, sel_registerName(c"setBounds:".as_ptr()), cursor_frame, 0, 0, false);
+                    type SendCGRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect) -> *mut std::ffi::c_void;
+                    let set_frame: SendCGRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                    set_frame(cursor_layer, sel_registerName(c"setBounds:".as_ptr()), cursor_frame);
                     send_float(cursor_layer, sel_registerName(c"setCornerRadius:".as_ptr()), 21.0);
                     send_float(cursor_layer, sel_registerName(c"setBorderWidth:".as_ptr()), 3.0);
                     send_float(cursor_layer, sel_registerName(c"setShadowRadius:".as_ptr()), 10.0);
