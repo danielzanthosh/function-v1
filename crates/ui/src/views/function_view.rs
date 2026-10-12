@@ -462,6 +462,7 @@ impl FunctionView {
                             match &state_clone {
                                 AgentState::Processing { thought_summary } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_task_running(true);
                                     // Prefer a short, model-provided progress summary over a generic label.
                                     let status = thought_summary
                                         .as_deref()
@@ -484,6 +485,7 @@ impl FunctionView {
                                 }
                                 AgentState::Acting { action_description } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_task_running(true);
                                     let status = status_bar_snippet(action_description);
                                     function_platform::set_macos_status_text(if status.is_empty() { "Taking action" } else { &status });
                                     for activity in &mut view.activities {
@@ -502,6 +504,7 @@ impl FunctionView {
                                     accumulated,
                                 } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_task_running(true);
                                     // Mirror only the first four words of the live model output in
                                     // the menu bar. Never leave streamed text visible after completion.
                                     let status = status_bar_snippet(accumulated);
@@ -679,6 +682,7 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_task_running(false);
                                     function_platform::set_macos_status_text("");
                                     tracing::warn!(
                                         target: "function_ui",
@@ -701,6 +705,7 @@ impl FunctionView {
                                 }
                                 AgentState::WaitingForConfirmation { action, .. } => {
                                     view.state = state_clone.clone();
+                                    function_platform::set_macos_task_running(true);
                                     view.activities.push(ActivityEntry {
                                         step: view.activities.len() + 1,
                                         description: format!(
