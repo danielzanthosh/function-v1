@@ -359,7 +359,7 @@ fn main() {
                                         tracing::info!("PlatformCommand::StopCurrentTask received");
                                         let update_res = cx.update(|cx| {
                                             let res = handle_clone.update(cx, |view, window, cx| {
-                                                view.cancel(&function_ui::CancelTask, window, cx);
+                                                view.stop_response(cx);
                                             });
                                             if let Err(e) = res {
                                                 tracing::error!(error = ?e, "Failed to stop current task");
