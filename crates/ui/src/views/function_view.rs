@@ -816,6 +816,13 @@ impl FunctionView {
     }
 
     pub fn set_state(&mut self, state: AgentState, cx: &mut Context<Self>) {
+        let phase_changed = std::mem::discriminant(&self.state) != std::mem::discriminant(&state);
+        if phase_changed {
+            let success = matches!(state, AgentState::Completed { .. });
+            if matches!(state, AgentState::Listening | AgentState::Processing { .. } | AgentState::Acting { .. } | AgentState::WaitingForConfirmation { .. } | AgentState::Completed { .. } | AgentState::Error { .. }) {
+                function_platform::trigger_macos_haptic(success);
+            }
+        }
         self.state = state;
         cx.notify();
     }

@@ -2366,6 +2366,31 @@ pub fn set_macos_activity_glow(active: bool) {
     let _ = active;
 }
 
+/// Best-effort Force Touch trackpad feedback for meaningful agent state changes.
+pub fn trigger_macos_haptic(success: bool) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+        }
+        type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type SendPattern = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize, isize) -> *mut std::ffi::c_void;
+        let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_pattern: SendPattern = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let cls = objc_getClass(c"NSHapticFeedbackManager".as_ptr());
+        if cls.is_null() { return; }
+        let manager = send0(cls, sel_registerName(c"defaultPerformer".as_ptr()));
+        if !manager.is_null() {
+            // AppKit patterns: generic = 0, alignment = 1; performance time "now" = 0.
+            let _ = send_pattern(manager, sel_registerName(c"performFeedbackPattern:performanceTime:".as_ptr()), if success { 1 } else { 0 }, 0);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = success;
+}
+
 /// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
