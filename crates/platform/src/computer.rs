@@ -61,7 +61,9 @@ pub trait ComputerControl: Send + Sync {
         for (index, character) in text.chars().enumerate() {
             self.keyboard_type(&character.to_string())?;
             if index + 1 < character_count {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                // Give target applications time to process each injected character.
+                // 100 ms is intentionally conservative for browser inputs and games.
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
         Ok(())
