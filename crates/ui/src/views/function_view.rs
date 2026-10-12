@@ -534,6 +534,7 @@ impl FunctionView {
                                     summary,
                                     new_history,
                                 } => {
+                                    function_platform::set_macos_task_running(false);
                                     view.state = state_clone.clone();
                                     // Clear immediately when the response finishes so idle never
                                     // inherits a stale "Working…" or response snippet.
@@ -796,6 +797,7 @@ impl FunctionView {
     }
 
     pub fn stop_response(&mut self, cx: &mut Context<Self>) {
+        function_platform::set_macos_task_running(false);
         function_platform::set_macos_status_text("");
         if let Some(ref agent) = self.agent {
             agent.cancel();
@@ -2295,6 +2297,7 @@ impl FunctionView {
         });
 
         if let Some(agent) = self.agent.clone() {
+            function_platform::set_macos_task_running(true);
             self.state = AgentState::Processing {
                 thought_summary: None,
             };
