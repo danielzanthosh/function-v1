@@ -963,10 +963,13 @@ pub fn render_markdown(text: &str, theme: &Theme) -> Div {
 }
 
 fn append_text_words(mut row: Div, text: &str) -> Div {
-    let mut words = text.split(' ').peekable();
-    while let Some(word) = words.next() {
-        if !word.is_empty() {
-            row = row.child(div().child(word.to_string()));
+    // Keep whitespace with each word. Without it, GPUI lays out each word as a
+    // separate flex item with no separating space, causing prose to bunch up
+    // and wrap unpredictably inside narrow chat bubbles.
+    let mut words = text.split_inclusive(char::is_whitespace).peekable();
+    while let Some(chunk) = words.next() {
+        if !chunk.is_empty() {
+            row = row.child(div().child(chunk.to_string()));
         }
     }
     row
