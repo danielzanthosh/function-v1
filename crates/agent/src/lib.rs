@@ -670,7 +670,7 @@ Agentic Multi-Step & Observation Loop:
             }
         }
 
-        let tool_definitions: Vec<ToolDefinition> = self
+        let mut tool_definitions: Vec<ToolDefinition> = self
             .tools
             .list()
             .into_iter()
@@ -958,6 +958,28 @@ Agentic Multi-Step & Observation Loop:
                     let has_images = messages.iter().any(|message| {
                         message.images.as_ref().is_some_and(|images| !images.is_empty())
                     });
+                    // Some OpenRouter routes reject tool calling for the selected model.
+                    // Retry without web_search instead of aborting otherwise-valid desktop work.
+                    let unsupported_tool_routing = error_text.contains("API error (400)")
+                        && (error_text.to_ascii_lowercase().contains("no endpoints found that support tool use")
+                            || error_text.to_ascii_lowercase().contains("does not support tool use"));
+                    if unsupported_tool_routing {
+                        let before = tool_definitions.len();
+                        tool_definitions.retain(|tool| tool.name != "web_search");
+                        if tool_definitions.len() < before {
+                            tracing::warn!(
+                                target: LIFECYCLE_LOG_TARGET,
+                                run_id,
+                                step,
+                                provider = %provider.name(),
+                                "Provider route does not support tool use; retrying without web_search"
+                            );
+                            run.emit(AgentState::Processing {
+                                thought_summary: Some("This model route cannot use web search. Retrying with supported desktop tools...".to_string()),
+                            });
+                            continue;
+                        }
+                    }
                     if error_text.contains("API error (400)") && has_images {
                         for message in &mut messages {
                             if message.images.as_ref().is_some_and(|images| !images.is_empty()) {
