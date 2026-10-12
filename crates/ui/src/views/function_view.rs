@@ -772,6 +772,7 @@ impl FunctionView {
     }
 
     pub fn stop_response(&mut self, cx: &mut Context<Self>) {
+        function_platform::set_macos_status_text("");
         if let Some(ref agent) = self.agent {
             agent.cancel();
         }
