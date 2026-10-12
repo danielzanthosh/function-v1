@@ -358,7 +358,7 @@ fn main() {
                                     Ok(PlatformCommand::StopCurrentTask) => {
                                         tracing::info!("PlatformCommand::StopCurrentTask received");
                                         let update_res = cx.update(|cx| {
-                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                            let res = handle_clone.update(cx, |view, _window, cx| {
                                                 view.stop_response(cx);
                                             });
                                             if let Err(e) = res {
