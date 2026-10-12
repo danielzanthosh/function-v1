@@ -504,8 +504,6 @@ pub mod macos {
 
     extern "C" {
         fn CGMainDisplayID() -> u32;
-        fn CGDisplayPixelsWide(display: u32) -> usize;
-        fn CGDisplayPixelsHigh(display: u32) -> usize;
         fn CGDisplayBounds(display: u32) -> CGRect;
         fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
         fn CGEventSourceCreate(state_id: u32) -> *mut std::ffi::c_void;
