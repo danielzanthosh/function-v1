@@ -23,6 +23,31 @@ pub struct ScreenDimensions {
     pub height: u32,
 }
 
+// Dimensions of the most recent screenshot, in image pixels. Model-provided mouse
+// coordinates refer to this image space, while macOS CoreGraphics expects logical points.
+static LAST_SCREENSHOT_SIZE: std::sync::Mutex<(u32, u32)> = std::sync::Mutex::new((0, 0));
+
+pub fn remember_screenshot_size(width: u32, height: u32) {
+    if width > 0 && height > 0 {
+        if let Ok(mut size) = LAST_SCREENSHOT_SIZE.lock() {
+            *size = (width, height);
+        }
+    }
+}
+
+/// Convert coordinates from the last screenshot's pixel space into the platform's
+/// native input coordinate space. On macOS this maps Retina pixels to logical points.
+pub fn map_screenshot_coordinates(x: i32, y: i32, screen: ScreenDimensions) -> (i32, i32) {
+    let image_size = LAST_SCREENSHOT_SIZE.lock().map(|size| *size).unwrap_or((0, 0));
+    if image_size.0 == 0 || image_size.1 == 0 || screen.width == 0 || screen.height == 0 {
+        return (x, y);
+    }
+    let mapped_x = (x as f64 * screen.width as f64 / image_size.0 as f64).round() as i32;
+    let mapped_y = (y as f64 * screen.height as f64 / image_size.1 as f64).round() as i32;
+    (mapped_x.clamp(0, screen.width.saturating_sub(1) as i32),
+     mapped_y.clamp(0, screen.height.saturating_sub(1) as i32))
+}
+
 pub trait ComputerControl: Send + Sync {
     fn get_screen_dimensions(&self) -> ScreenDimensions;
     fn get_cursor_position(&self) -> (i32, i32);
@@ -424,10 +449,25 @@ pub mod macos {
         y: f64,
     }
 
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
     extern "C" {
         fn CGMainDisplayID() -> u32;
         fn CGDisplayPixelsWide(display: u32) -> usize;
         fn CGDisplayPixelsHigh(display: u32) -> usize;
+        fn CGDisplayBounds(display: u32) -> CGRect;
         fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
         fn CGEventSourceCreate(state_id: u32) -> *mut std::ffi::c_void;
         fn CGPreflightPostEventAccess() -> bool;
@@ -476,8 +516,11 @@ pub mod macos {
         fn get_screen_dimensions(&self) -> ScreenDimensions {
             unsafe {
                 let disp = CGMainDisplayID();
-                let w = CGDisplayPixelsWide(disp) as u32;
-                let h = CGDisplayPixelsHigh(disp) as u32;
+                // CoreGraphics mouse events use logical points, not backing pixels.
+                // Return dimensions in that same coordinate space.
+                let bounds = CGDisplayBounds(disp);
+                let w = bounds.size.width.round() as u32;
+                let h = bounds.size.height.round() as u32;
                 if w > 0 && h > 0 {
                     ScreenDimensions {
                         width: w,
@@ -914,6 +957,13 @@ pub mod macos {
                 PlatformError::SystemApi(format!("Failed to read screenshot: {}", e))
             })?;
             let _ = std::fs::remove_file(&path_buf);
+
+            // Read PNG IHDR dimensions without adding an image dependency.
+            if bytes.len() >= 24 && &bytes[..8] == b"\\x89PNG\\r\\n\\x1a\\n" {
+                let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+                let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+                remember_screenshot_size(width, height);
+            }
             Ok(bytes)
         }
     }
