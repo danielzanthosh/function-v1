@@ -205,6 +205,17 @@ pub struct FunctionView {
 
 pub type AssistantView = FunctionView;
 
+/// Condense model/action text to a single-line menu-bar preview of at most four words.
+fn status_bar_snippet(text: &str) -> String {
+    text.split_whitespace()
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect()
+}
+
 impl FunctionView {
     pub fn new(cx: &mut Context<Self>, mic_configured: bool, mic_available: bool) -> Self {
         let focus_handle = cx.focus_handle();
@@ -451,7 +462,13 @@ impl FunctionView {
                             match &state_clone {
                                 AgentState::Processing { thought_summary } => {
                                     view.state = state_clone.clone();
-                                    function_platform::set_macos_status_text("Working…");
+                                    // Prefer a short, model-provided progress summary over a generic label.
+                                    let status = thought_summary
+                                        .as_deref()
+                                        .map(status_bar_snippet)
+                                        .filter(|snippet| !snippet.is_empty())
+                                        .unwrap_or_else(|| "Thinking…".to_string());
+                                    function_platform::set_macos_status_text(&status);
                                     for activity in &mut view.activities {
                                         if activity.status == ActivityStatus::Running {
                                             activity.status = ActivityStatus::Done;
@@ -467,7 +484,8 @@ impl FunctionView {
                                 }
                                 AgentState::Acting { action_description } => {
                                     view.state = state_clone.clone();
-                                    function_platform::set_macos_status_text("Acting…");
+                                    let status = status_bar_snippet(action_description);
+                                    function_platform::set_macos_status_text(if status.is_empty() { "Taking action" } else { &status });
                                     for activity in &mut view.activities {
                                         if activity.status == ActivityStatus::Running {
                                             activity.status = ActivityStatus::Done;
@@ -484,6 +502,12 @@ impl FunctionView {
                                     accumulated,
                                 } => {
                                     view.state = state_clone.clone();
+                                    // Mirror only the first four words of the live model output in
+                                    // the menu bar. Never leave streamed text visible after completion.
+                                    let status = status_bar_snippet(accumulated);
+                                    if !status.is_empty() {
+                                        function_platform::set_macos_status_text(&status);
+                                    }
                                     view.latest_result = Some(accumulated.clone());
                                     if let Some(last) = view.chat_display.last_mut() {
                                         if !last.is_user {
@@ -511,9 +535,9 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
-                                    if !view.config.tts.enabled || summary.is_empty() {
-                                        function_platform::set_macos_status_text("Done");
-                                    }
+                                    // Clear immediately when the response finishes so idle never
+                                    // inherits a stale "Working…" or response snippet.
+                                    function_platform::set_macos_status_text("");
                                     view.latest_result = Some(summary.clone());
                                     if let Some(last) = view.chat_display.last_mut() {
                                         if !last.is_user {
@@ -654,7 +678,7 @@ impl FunctionView {
                                     new_history,
                                 } => {
                                     view.state = state_clone.clone();
-                                    function_platform::set_macos_status_text("Error");
+                                    function_platform::set_macos_status_text("");
                                     tracing::warn!(
                                         target: "function_ui",
                                         error = %message,
