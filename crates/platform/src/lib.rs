@@ -2255,14 +2255,26 @@ pub fn set_macos_task_running(active: bool) {
 pub fn set_macos_cursor_highlight(x: i32, y: i32) {
     #[cfg(target_os = "macos")]
     unsafe {
-        let window = G_ACTIVITY_GLOW_WINDOW.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+        #[repr(C)] #[derive(Copy, Clone)] struct CGPoint { x: f64, y: f64 }
+        #[repr(C)] #[derive(Copy, Clone)] struct CGSize { width: f64, height: f64 }
+        #[repr(C)] #[derive(Copy, Clone)] struct CGRect { origin: CGPoint, size: CGSize }
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+            fn CGMainDisplayID() -> u32;
+            fn CGDisplayBounds(display: u32) -> CGRect;
+        }
+        type Send1 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type SendPoint = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGPoint) -> *mut std::ffi::c_void;
+        let send1: Send1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_point: SendPoint = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let layer = G_ACTIVITY_CURSOR_LAYER.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
-        if window.is_null() || layer.is_null() { return; }
-        type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        type SendRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, usize, usize, bool) -> *mut std::ffi::c_void;
-        let _ = (x, y);
-        let _ = (window, layer);
-        let _ = (std::mem::transmute::<unsafe extern "C" fn(), Send0>, std::mem::transmute::<unsafe extern "C" fn(), SendRect>);
+        if layer.is_null() { return; }
+        let bounds = CGDisplayBounds(CGMainDisplayID());
+        let position = CGPoint { x: x as f64, y: bounds.size.height - y as f64 };
+        send_point(layer, sel_registerName(c"setPosition:".as_ptr()), position);
+        let _ = send1;
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (x, y);
@@ -2346,6 +2358,20 @@ pub fn set_macos_activity_glow(active: bool) {
                     let cg_color = send0(blue, sel_registerName(c"CGColor".as_ptr()));
                     send1(layer, sel_registerName(c"setBorderColor:".as_ptr()), cg_color);
                     send1(layer, sel_registerName(c"setShadowColor:".as_ptr()), cg_color);
+
+                    // A small click-through ring marks the AI-controlled pointer.
+                    let cursor_layer = send0(objc_getClass(c"CALayer".as_ptr()), sel_registerName(c"layer".as_ptr()));
+                    let cursor_frame = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 42.0, height: 42.0 } };
+                    let set_frame: SendRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                    set_frame(cursor_layer, sel_registerName(c"setBounds:".as_ptr()), cursor_frame, 0, 0, false);
+                    send_float(cursor_layer, sel_registerName(c"setCornerRadius:".as_ptr()), 21.0);
+                    send_float(cursor_layer, sel_registerName(c"setBorderWidth:".as_ptr()), 3.0);
+                    send_float(cursor_layer, sel_registerName(c"setShadowRadius:".as_ptr()), 10.0);
+                    send_float32(cursor_layer, sel_registerName(c"setShadowOpacity:".as_ptr()), 0.9_f32);
+                    send1(cursor_layer, sel_registerName(c"setBorderColor:".as_ptr()), cg_color);
+                    send1(cursor_layer, sel_registerName(c"setShadowColor:".as_ptr()), cg_color);
+                    send1(layer, sel_registerName(c"addSublayer:".as_ptr()), cursor_layer);
+                    G_ACTIVITY_CURSOR_LAYER.store(cursor_layer as isize, std::sync::atomic::Ordering::SeqCst);
                     G_ACTIVITY_GLOW_WINDOW.store(window as isize, std::sync::atomic::Ordering::SeqCst);
                     window
                 } else { window_ptr };
