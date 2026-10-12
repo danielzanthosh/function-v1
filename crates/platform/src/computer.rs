@@ -107,13 +107,22 @@ pub fn smooth_motion_steps(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -
 
 #[cfg(test)]
 mod motion_tests {
-    use super::smooth_motion_steps;
+    use super::{map_screenshot_coordinates, remember_screenshot_size, smooth_motion_steps, ScreenDimensions};
 
     #[test]
     fn motion_uses_more_steps_for_longer_paths() {
         assert_eq!(smooth_motion_steps(10, 10, 10, 10), 2);
         assert!(smooth_motion_steps(0, 0, 1000, 0) > smooth_motion_steps(0, 0, 100, 0));
         assert_eq!(smooth_motion_steps(0, 0, 10_000, 0), 24);
+    }
+
+    #[test]
+    fn screenshot_coordinates_map_to_logical_screen_points() {
+        remember_screenshot_size(3420, 2214);
+        let screen = ScreenDimensions { width: 1710, height: 1107 };
+        assert_eq!(map_screenshot_coordinates(1710, 1107, screen), (855, 554));
+        assert_eq!(map_screenshot_coordinates(0, 0, screen), (0, 0));
+        assert_eq!(map_screenshot_coordinates(4000, 3000, screen), (1709, 1106));
     }
 }
 
