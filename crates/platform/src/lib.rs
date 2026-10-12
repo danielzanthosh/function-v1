@@ -151,6 +151,8 @@ pub enum PlatformCommand {
     Quit,
     StartPushToTalk,
     StopPushToTalk,
+    StopCurrentTask,
+    StopAudioPlayback,
 }
 
 static WINDOW_IS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2415,6 +2417,24 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
                 send_platform_command(PlatformCommand::Quit);
             }
 
+            unsafe extern "C" fn on_stop_current_task(
+                _this: *mut std::ffi::c_void,
+                _cmd: *mut std::ffi::c_void,
+                _sender: *mut std::ffi::c_void,
+            ) {
+                tracing::info!("macOS menu action: Stop Current Task");
+                send_platform_command(PlatformCommand::StopCurrentTask);
+            }
+
+            unsafe extern "C" fn on_stop_audio_playback(
+                _this: *mut std::ffi::c_void,
+                _cmd: *mut std::ffi::c_void,
+                _sender: *mut std::ffi::c_void,
+            ) {
+                tracing::info!("macOS menu action: Stop Audio Playback");
+                send_platform_command(PlatformCommand::StopAudioPlayback);
+            }
+
             let show_sel = sel_registerName(c"onShowFunction:".as_ptr());
             class_addMethod(target_cls, show_sel, on_show_function, c"v@:@".as_ptr());
 
@@ -2428,6 +2448,12 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
 
             let quit_sel = sel_registerName(c"onQuitFunction:".as_ptr());
             class_addMethod(target_cls, quit_sel, on_quit_function, c"v@:@".as_ptr());
+
+            let stop_task_sel = sel_registerName(c"onStopCurrentTask:".as_ptr());
+            class_addMethod(target_cls, stop_task_sel, on_stop_current_task, c"v@:@".as_ptr());
+
+            let stop_audio_sel = sel_registerName(c"onStopAudioPlayback:".as_ptr());
+            class_addMethod(target_cls, stop_audio_sel, on_stop_audio_playback, c"v@:@".as_ptr());
 
             objc_registerClassPair(target_cls);
         }
@@ -2623,7 +2649,42 @@ unsafe fn setup_macos_menu_bar_icon_inner() {
             let sep2 = msg_send_0(ns_menu_item_cls, sep_sel);
             msg_send_1(menu, add_item_sel, sep2);
 
-            // 3. "Quit Function" (keyEquivalent: ⌘Q)
+            // 3. Stop current agent task/response.
+            let stop_task_title = msg_send_cstr(ns_string, utf8_sel, c"Stop Current Task".as_ptr());
+            let empty_key = msg_send_cstr(ns_string, utf8_sel, c"".as_ptr());
+            let stop_task_act = sel_registerName(c"onStopCurrentTask:".as_ptr());
+            let stop_task_item = msg_send_init_item(
+                msg_send_0(ns_menu_item_cls, alloc_sel),
+                init_item_sel,
+                stop_task_title,
+                stop_task_act,
+                empty_key,
+            );
+            msg_send_usize(stop_task_item, set_mask_sel, 0);
+            msg_send_1(stop_task_item, set_target_sel, target_inst);
+            msg_send_bool(stop_task_item, set_enabled_sel, 1);
+            msg_send_1(menu, add_item_sel, stop_task_item);
+
+            // 4. Stop current speech/audio playback.
+            let stop_audio_title = msg_send_cstr(ns_string, utf8_sel, c"Stop Audio Playback".as_ptr());
+            let stop_audio_act = sel_registerName(c"onStopAudioPlayback:".as_ptr());
+            let stop_audio_item = msg_send_init_item(
+                msg_send_0(ns_menu_item_cls, alloc_sel),
+                init_item_sel,
+                stop_audio_title,
+                stop_audio_act,
+                empty_key,
+            );
+            msg_send_usize(stop_audio_item, set_mask_sel, 0);
+            msg_send_1(stop_audio_item, set_target_sel, target_inst);
+            msg_send_bool(stop_audio_item, set_enabled_sel, 1);
+            msg_send_1(menu, add_item_sel, stop_audio_item);
+
+            // Separator
+            let sep3 = msg_send_0(ns_menu_item_cls, sep_sel);
+            msg_send_1(menu, add_item_sel, sep3);
+
+            // 5. "Quit Function" (keyEquivalent: ⌘Q)
             let quit_title = msg_send_cstr(ns_string, utf8_sel, c"Quit Function".as_ptr());
             let q_key = msg_send_cstr(ns_string, utf8_sel, c"q".as_ptr());
             let quit_act = sel_registerName(c"onQuitFunction:".as_ptr());
