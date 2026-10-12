@@ -2238,6 +2238,116 @@ pub fn set_macos_status_text(status: &str) {
     let _ = status;
 }
 
+/// Show a non-interactive macOS screen-edge glow while computer actions are running.
+/// The hide is debounced so consecutive tool calls keep the glow continuously visible.
+static G_ACTIVITY_GLOW_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static G_ACTIVITY_GLOW_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_macos_activity_glow(active: bool) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct CGPoint { x: f64, y: f64 }
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct CGSize { width: f64, height: f64 }
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct CGRect { origin: CGPoint, size: CGSize }
+
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+            fn dispatch_async_f(queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void));
+            fn dispatch_after_f(when: u64, queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void));
+            fn dispatch_time(when: u64, delta: i64) -> u64;
+            static _dispatch_main_q: std::ffi::c_void;
+            fn CGMainDisplayID() -> u32;
+            fn CGDisplayBounds(display: u32) -> CGRect;
+        }
+
+        struct GlowUpdate { active: bool, generation: u64 }
+        unsafe extern "C" fn apply_glow(ctx: *mut std::ffi::c_void) {
+            let update = Box::from_raw(ctx as *mut GlowUpdate);
+            if !update.active && G_ACTIVITY_GLOW_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != update.generation {
+                return;
+            }
+            type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type Send1 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type SendBool = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+            type SendInt = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void;
+            type SendFloat = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64) -> *mut std::ffi::c_void;
+            type SendFloat32 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f32) -> *mut std::ffi::c_void;
+            type SendRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, usize, usize, bool) -> *mut std::ffi::c_void;
+            type SendColor = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64, f64, f64, f64) -> *mut std::ffi::c_void;
+            let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send1: Send1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_bool: SendBool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_int: SendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_float: SendFloat = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_float32: SendFloat32 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_rect: SendRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_color: SendColor = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
+            let window_ptr = G_ACTIVITY_GLOW_WINDOW.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+            if update.active {
+                let window = if window_ptr.is_null() {
+                    let bounds = CGDisplayBounds(CGMainDisplayID());
+                    let frame = CGRect { origin: bounds.origin, size: bounds.size };
+                    let cls = objc_getClass(c"NSWindow".as_ptr());
+                    let alloc = send0(cls, sel_registerName(c"alloc".as_ptr()));
+                    let init: *mut std::ffi::c_void = send_rect(alloc, sel_registerName(c"initWithContentRect:styleMask:backing:defer:".as_ptr()), frame, 0, 2, false);
+                    if init.is_null() { return; }
+                    let window = init;
+                    let ns_color = objc_getClass(c"NSColor".as_ptr());
+                    let clear = send0(ns_color, sel_registerName(c"clearColor".as_ptr()));
+                    send1(window, sel_registerName(c"setBackgroundColor:".as_ptr()), clear);
+                    send_bool(window, sel_registerName(c"setOpaque:".as_ptr()), false);
+                    send_bool(window, sel_registerName(c"setHasShadow:".as_ptr()), false);
+                    send_bool(window, sel_registerName(c"setIgnoresMouseEvents:".as_ptr()), true);
+                    send_int(window, sel_registerName(c"setLevel:".as_ptr()), 1000);
+                    send_int(window, sel_registerName(c"setCollectionBehavior:".as_ptr()), (1 | 16 | 64) as isize);
+                    let content = send0(window, sel_registerName(c"contentView".as_ptr()));
+                    send_bool(content, sel_registerName(c"setWantsLayer:".as_ptr()), true);
+                    let layer = send0(content, sel_registerName(c"layer".as_ptr()));
+                    send_float(layer, sel_registerName(c"setBorderWidth:".as_ptr()), 4.0);
+                    send_float(layer, sel_registerName(c"setShadowRadius:".as_ptr()), 18.0);
+                    send_float32(layer, sel_registerName(c"setShadowOpacity:".as_ptr()), 0.95_f32);
+                    send_float(layer, sel_registerName(c"setCornerRadius:".as_ptr()), 0.0);
+                    let blue = send_color(ns_color, sel_registerName(c"colorWithCalibratedRed:green:blue:alpha:".as_ptr()), 0.25, 0.58, 1.0, 0.95);
+                    let cg_color = send0(blue, sel_registerName(c"CGColor".as_ptr()));
+                    send1(layer, sel_registerName(c"setBorderColor:".as_ptr()), cg_color);
+                    send1(layer, sel_registerName(c"setShadowColor:".as_ptr()), cg_color);
+                    G_ACTIVITY_GLOW_WINDOW.store(window as isize, std::sync::atomic::Ordering::SeqCst);
+                    window
+                } else { window_ptr };
+                let order = sel_registerName(c"orderFrontRegardless".as_ptr());
+                send0(window, order);
+            } else if !window_ptr.is_null() {
+                send1(window_ptr, sel_registerName(c"orderOut:".as_ptr()), std::ptr::null_mut());
+            }
+        }
+
+        let generation = if active {
+            G_ACTIVITY_GLOW_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+        } else {
+            G_ACTIVITY_GLOW_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let ctx = Box::into_raw(Box::new(GlowUpdate { active, generation })) as *mut std::ffi::c_void;
+        let queue = &_dispatch_main_q as *const _ as *mut std::ffi::c_void;
+        if active {
+            dispatch_async_f(queue, ctx, apply_glow);
+        } else {
+            let when = dispatch_time(0, 350_000_000);
+            dispatch_after_f(when, queue, ctx, apply_glow);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = active;
+}
+
 /// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
