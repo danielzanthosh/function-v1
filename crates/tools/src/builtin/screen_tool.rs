@@ -67,17 +67,27 @@ impl Tool for ScreenTool {
                         // Do not persist temporary visual context in the user's attachments folder.
                         Ok(ToolResult::success(
                             format!(
-                                "Screenshot captured successfully ({}x{}, {} KB)",
+                                "Screenshot captured successfully ({}x{} image pixels; screen input space {}x{} logical points; {} KB)",
+                                png_dimensions(&bytes).map(|d| d.0).unwrap_or(dims.width),
+                                png_dimensions(&bytes).map(|d| d.1).unwrap_or(dims.height),
                                 dims.width,
                                 dims.height,
                                 bytes.len() / 1024
                             ),
-                            json!({
-                                "status": "success",
-                                "width": dims.width,
-                                "height": dims.height,
-                                "base64": b64,
-                            }),
+                            {
+                                let (pixel_width, pixel_height) = png_dimensions(&bytes).unwrap_or((dims.width, dims.height));
+                                json!({
+                                    "status": "success",
+                                    "width": pixel_width,
+                                    "height": pixel_height,
+                                    "pixel_width": pixel_width,
+                                    "pixel_height": pixel_height,
+                                    "screen_width": dims.width,
+                                    "screen_height": dims.height,
+                                    "coordinate_space": "pixel coordinates in returned screenshot image; mouse tool converts once to logical screen points",
+                                    "base64": b64,
+                                })
+                            },
                         ))
                     }
                     Err(e) => Ok(ToolResult::failure(
@@ -106,6 +116,15 @@ impl Tool for ScreenTool {
             }),
         }
     }
+}
+
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    if data.len() >= 24 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
+        let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+        let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+        if width > 0 && height > 0 { return Some((width, height)); }
+    }
+    None
 }
 
 fn to_base64(data: &[u8]) -> String {
