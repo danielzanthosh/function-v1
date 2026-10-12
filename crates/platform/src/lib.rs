@@ -2469,7 +2469,8 @@ pub fn set_macos_notch_status(status: &str) {
             let text_layer = G_NOTCH_TEXT_LAYER.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
             if !text_layer.is_null() {
                 let ns_string_cls = cls(b"NSString\0");
-                let string = send1(ns_string_cls, sel(b"stringWithUTF8String:\0"), status.as_ptr() as *mut std::ffi::c_void);
+                let c_status = std::ffi::CString::new(status.as_bytes()).unwrap_or_default();
+                let string = send1(ns_string_cls, sel(b"stringWithUTF8String:\0"), c_status.as_ptr() as *mut std::ffi::c_void);
                 send1(text_layer, sel(b"setString:\0"), string);
                 let text_rect = CGRect { origin: CGPoint { x: 16.0, y: 4.0 }, size: CGSize { width: width - 32.0, height: 34.0 } };
                 send_rect_only(text_layer, sel(b"setFrame:\0"), text_rect);
