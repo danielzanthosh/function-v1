@@ -2402,6 +2402,8 @@ pub fn set_macos_notch_status(status: &str) {
             type SendInt = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void;
             type SendRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, usize, usize, bool) -> *mut std::ffi::c_void;
             type SendRectBool = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, bool) -> *mut std::ffi::c_void;
+            type SendColor = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64, f64, f64, f64) -> *mut std::ffi::c_void;
+            type SendRectOnly = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect) -> *mut std::ffi::c_void;
             type SendFloat = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64) -> *mut std::ffi::c_void;
             let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let send1: Send1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
@@ -2409,6 +2411,8 @@ pub fn set_macos_notch_status(status: &str) {
             let send_int: SendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let send_rect: SendRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let send_rect_bool: SendRectBool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_rect_only: SendRectOnly = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_color: SendColor = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let send_float: SendFloat = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
             let cls = |name: &'static [u8]| objc_getClass(name.as_ptr() as *const std::os::raw::c_char);
             let sel = |name: &'static [u8]| sel_registerName(name.as_ptr() as *const std::os::raw::c_char);
@@ -2446,12 +2450,13 @@ pub fn set_macos_notch_status(status: &str) {
                 let layer = send0(content, sel(b"layer\0"));
                 send_float(layer, sel(b"setCornerRadius:\0"), 21.0);
                 send_float(layer, sel(b"setBorderWidth:\0"), 0.5);
-                let bg = send0(ns_color, sel(b"colorWithCalibratedRed:green:blue:alpha:\0"));
-                let _ = bg;
+                let bg = send_color(ns_color, sel(b"colorWithCalibratedRed:green:blue:alpha:\0"), 0.055, 0.055, 0.065, 0.96);
+                let bg_cg = send0(bg, sel(b"CGColor\0"));
+                send1(layer, sel(b"setBackgroundColor:\0"), bg_cg);
                 let cat_layer_cls = cls(b"CATextLayer\0");
                 let text_layer = send0(cat_layer_cls, sel(b"layer\0"));
                 let text_rect = CGRect { origin: CGPoint { x: 16.0, y: 4.0 }, size: CGSize { width: width - 32.0, height: 34.0 } };
-                send_rect_bool(text_layer, sel(b"setFrame:\0"), text_rect, true);
+                send_rect_only(text_layer, sel(b"setFrame:\0"), text_rect);
                 let white = send0(ns_color, sel(b"whiteColor\0"));
                 let color = send0(white, sel(b"CGColor\0"));
                 send1(text_layer, sel(b"setForegroundColor:\0"), color);
@@ -2467,7 +2472,7 @@ pub fn set_macos_notch_status(status: &str) {
                 let string = send1(ns_string_cls, sel(b"stringWithUTF8String:\0"), status.as_ptr() as *mut std::ffi::c_void);
                 send1(text_layer, sel(b"setString:\0"), string);
                 let text_rect = CGRect { origin: CGPoint { x: 16.0, y: 4.0 }, size: CGSize { width: width - 32.0, height: 34.0 } };
-                send_rect_bool(text_layer, sel(b"setFrame:\0"), text_rect, true);
+                send_rect_only(text_layer, sel(b"setFrame:\0"), text_rect);
             }
             send_rect_bool(window, sel(b"setFrame:display:\0"), rect, true);
             send0(window, sel(b"orderFrontRegardless\0"));
