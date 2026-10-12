@@ -283,6 +283,16 @@ impl Tool for TakeScreenshotTool {
             })?;
 
         let dims = self.control.get_screen_dimensions();
+        // Report the actual image dimensions separately from the logical input space.
+        // Retina screenshots can contain 2x as many pixels as CoreGraphics screen points.
+        let (image_width, image_height) = if bytes.len() >= 24 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
+            (
+                u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+                u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+            )
+        } else {
+            (dims.width, dims.height)
+        };
 
         // Keep screenshots in memory only. The native capture backend removes any
         // temporary capture file after reading it, so no persistent screenshot is left behind.
@@ -311,11 +321,13 @@ impl Tool for TakeScreenshotTool {
         }
 
         Ok(ToolResult::success(
-            format!("Captured screen ({}x{})", dims.width, dims.height),
+            format!("Captured screenshot image ({}x{} pixels; screen {}x{} points)", image_width, image_height, dims.width, dims.height),
             json!({
                 "success": true,
-                "width": dims.width,
-                "height": dims.height,
+                "width": image_width,
+                "height": image_height,
+                "screen_width": dims.width,
+                "screen_height": dims.height,
                 "base64": b64,
                 "message": "Screenshot captured successfully"
             }),
