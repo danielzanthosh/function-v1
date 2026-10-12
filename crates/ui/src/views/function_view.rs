@@ -816,13 +816,6 @@ impl FunctionView {
     }
 
     pub fn set_state(&mut self, state: AgentState, cx: &mut Context<Self>) {
-        let phase_changed = std::mem::discriminant(&self.state) != std::mem::discriminant(&state);
-        if phase_changed {
-            let success = matches!(state, AgentState::Completed { .. });
-            if matches!(state, AgentState::Listening | AgentState::Processing { .. } | AgentState::Acting { .. } | AgentState::WaitingForConfirmation { .. } | AgentState::Completed { .. } | AgentState::Error { .. }) {
-                function_platform::trigger_macos_haptic(success);
-            }
-        }
         self.state = state;
         cx.notify();
     }
@@ -3069,23 +3062,6 @@ impl Render for FunctionView {
         if !self.is_visible {
             return div().size_0().into_any_element();
         }
-
-        let notch_status = if self.listening || matches!(self.state, AgentState::Listening) {
-            "Listening".to_string()
-        } else {
-            match &self.state {
-                AgentState::Idle if self.is_transcribing => "Transcribing…".to_string(),
-                AgentState::Idle => String::new(),
-                AgentState::Processing { thought_summary } => thought_summary.clone().unwrap_or_else(|| "Thinking…".to_string()),
-                AgentState::Streaming { accumulated, .. } => status_bar_snippet(accumulated),
-                AgentState::Acting { action_description } => status_bar_snippet(action_description),
-                AgentState::WaitingForConfirmation { action, .. } => format!("Confirm: {}", status_bar_snippet(action)),
-                AgentState::Completed { summary, .. } => status_bar_snippet(summary),
-                AgentState::Error { message, .. } => format!("Error: {}", status_bar_snippet(message)),
-                AgentState::Listening => "Listening".to_string(),
-            }
-        };
-        function_platform::set_macos_notch_status(&notch_status);
 
         let theme = self.theme;
         let is_listening = self.listening;
