@@ -2249,7 +2249,6 @@ pub fn set_macos_status_text(status: &str) {
 /// Show a non-interactive macOS screen-edge glow while computer actions are running.
 /// The hide is debounced so consecutive tool calls keep the glow continuously visible.
 static G_ACTIVITY_GLOW_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
-static G_ACTIVITY_CURSOR_LAYER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static G_ACTIVITY_GLOW_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static G_ACTIVITY_TASK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -2259,39 +2258,6 @@ pub fn set_macos_task_running(active: bool) {
     set_macos_activity_glow(active);
 }
 
-/// Move the non-interactive cursor ring to the AI-controlled pointer position.
-pub fn set_macos_cursor_highlight(x: i32, y: i32) {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        extern "C" {
-            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
-            fn objc_msgSend();
-            fn dispatch_async_f(queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void));
-            static _dispatch_main_q: std::ffi::c_void;
-            fn CGMainDisplayID() -> u32;
-            fn CGDisplayBounds(display: u32) -> CGRect;
-        }
-        #[repr(C)] #[derive(Copy, Clone)] struct CGPoint { x: f64, y: f64 }
-        #[repr(C)] #[derive(Copy, Clone)] struct CGSize { width: f64, height: f64 }
-        #[repr(C)] #[derive(Copy, Clone)] struct CGRect { origin: CGPoint, size: CGSize }
-        struct CursorUpdate { x: i32, y: i32 }
-        unsafe extern "C" fn apply_cursor_update(ctx: *mut std::ffi::c_void) {
-            let update = Box::from_raw(ctx as *mut CursorUpdate);
-            type SendPoint = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGPoint) -> *mut std::ffi::c_void;
-            let send_point: SendPoint = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            let layer = G_ACTIVITY_CURSOR_LAYER.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
-            if layer.is_null() { return; }
-            let bounds = CGDisplayBounds(CGMainDisplayID());
-            let position = CGPoint { x: update.x as f64, y: bounds.size.height - update.y as f64 };
-            send_point(layer, sel_registerName(c"setPosition:".as_ptr()), position);
-        }
-        let ctx = Box::into_raw(Box::new(CursorUpdate { x, y })) as *mut std::ffi::c_void;
-        let queue = &_dispatch_main_q as *const _ as *mut std::ffi::c_void;
-        dispatch_async_f(queue, ctx, apply_cursor_update);
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (x, y);
-}
 
 pub fn set_macos_activity_glow(active: bool) {
     #[cfg(target_os = "macos")]
@@ -2372,20 +2338,6 @@ pub fn set_macos_activity_glow(active: bool) {
                     send1(layer, sel_registerName(c"setBorderColor:".as_ptr()), cg_color);
                     send1(layer, sel_registerName(c"setShadowColor:".as_ptr()), cg_color);
 
-                    // A small click-through ring marks the AI-controlled pointer.
-                    let cursor_layer = send0(objc_getClass(c"CALayer".as_ptr()), sel_registerName(c"layer".as_ptr()));
-                    let cursor_frame = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 42.0, height: 42.0 } };
-                    type SendCGRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect) -> *mut std::ffi::c_void;
-                    let set_frame: SendCGRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                    set_frame(cursor_layer, sel_registerName(c"setBounds:".as_ptr()), cursor_frame);
-                    send_float(cursor_layer, sel_registerName(c"setCornerRadius:".as_ptr()), 21.0);
-                    send_float(cursor_layer, sel_registerName(c"setBorderWidth:".as_ptr()), 3.0);
-                    send_float(cursor_layer, sel_registerName(c"setShadowRadius:".as_ptr()), 10.0);
-                    send_float32(cursor_layer, sel_registerName(c"setShadowOpacity:".as_ptr()), 0.9_f32);
-                    send1(cursor_layer, sel_registerName(c"setBorderColor:".as_ptr()), cg_color);
-                    send1(cursor_layer, sel_registerName(c"setShadowColor:".as_ptr()), cg_color);
-                    send1(layer, sel_registerName(c"addSublayer:".as_ptr()), cursor_layer);
-                    G_ACTIVITY_CURSOR_LAYER.store(cursor_layer as isize, std::sync::atomic::Ordering::SeqCst);
                     G_ACTIVITY_GLOW_WINDOW.store(window as isize, std::sync::atomic::Ordering::SeqCst);
                     window
                 } else { window_ptr };

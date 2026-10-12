@@ -91,7 +91,6 @@ pub trait ComputerControl: Send + Sync {
             let progress = step as f32 / steps as f32;
             let next_x = start_x as f32 + (x - start_x) as f32 * progress;
             let next_y = start_y as f32 + (y - start_y) as f32 * progress;
-            crate::set_macos_cursor_highlight(next_x.round() as i32, next_y.round() as i32);
             self.mouse_move(next_x.round() as i32, next_y.round() as i32)?;
             if step < steps {
                 std::thread::sleep(std::time::Duration::from_millis(4));
