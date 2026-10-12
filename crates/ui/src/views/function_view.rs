@@ -2371,6 +2371,7 @@ impl FunctionView {
                     return;
                 }
                 "escape" | "n" => {
+                    function_platform::set_macos_task_running(false);
                     self.play_sound_feedback(SoundEffect::Select);
                     self.state = AgentState::Idle;
                     self.latest_result = Some("Action denied by user. Operation canceled.".into());
