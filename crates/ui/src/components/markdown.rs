@@ -488,12 +488,15 @@ fn extract_inline_math(text: &str) -> Vec<InlineMathSegment> {
 
 /// AST-based Markdown & LaTeX Renderer
 pub fn render_markdown(text: &str, theme: &Theme) -> Div {
+    // Keep markdown shrinkable inside chat bubbles; otherwise intrinsic text width
+    // can escape the message column and overlap neighboring UI.
     let mut container = div()
         .flex()
         .flex_col()
         .gap_2()
         .w_full()
         .max_w_full()
+        .min_w_0()
         .overflow_hidden();
 
     let mut opts = Options::empty();
