@@ -128,6 +128,21 @@ pub fn parse_error_info(raw: &str) -> Option<ParsedErrorInfo> {
     }
 
     if is_error_prefixed {
+        let lower = trimmed.to_lowercase();
+        if lower.contains("no endpoints found that support tool use")
+            || (lower.contains("support tool use") && lower.contains("web_search"))
+        {
+            return Some(ParsedErrorInfo {
+                title: "Model Does Not Support Tool Use".to_string(),
+                summary: "OpenRouter could not find an endpoint for this model with the requested tools enabled.".to_string(),
+                status: Some("HTTP 400".to_string()),
+                message: Some("Choose a tool-calling-capable model/provider, or disable web_search in the provider/model settings if that option is enabled. Function cannot safely perform computer actions without tool support.".to_string()),
+                quota_info: None,
+                formatted_json: None,
+                raw_text: trimmed.to_string(),
+            });
+        }
+
         if trimmed.contains("RESOURCE_EXHAUSTED") || trimmed.contains("429") {
             return Some(ParsedErrorInfo {
                 title: "Gemini API Error".to_string(),
