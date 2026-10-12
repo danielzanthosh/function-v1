@@ -2479,7 +2479,7 @@ pub fn set_macos_notch_status(status: &str) {
             send0(window, sel(b"orderFrontRegardless\0"));
         }
         extern "C" { fn dispatch_async_f(queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void)); static _dispatch_main_q: std::ffi::c_void; }
-        dispatch_async_f(unsafe { &_dispatch_main_q as *const _ as *mut std::ffi::c_void }, context, apply);
+        unsafe { dispatch_async_f(&_dispatch_main_q as *const _ as *mut std::ffi::c_void, context, apply); }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = status;
