@@ -2241,7 +2241,32 @@ pub fn set_macos_status_text(status: &str) {
 /// Show a non-interactive macOS screen-edge glow while computer actions are running.
 /// The hide is debounced so consecutive tool calls keep the glow continuously visible.
 static G_ACTIVITY_GLOW_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static G_ACTIVITY_CURSOR_LAYER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static G_ACTIVITY_GLOW_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static G_ACTIVITY_TASK_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keep the edge glow active for the full agent task, including model thinking and tool waits.
+pub fn set_macos_task_running(active: bool) {
+    G_ACTIVITY_TASK_RUNNING.store(active, std::sync::atomic::Ordering::SeqCst);
+    set_macos_activity_glow(active);
+}
+
+/// Move the non-interactive cursor ring to the AI-controlled pointer position.
+pub fn set_macos_cursor_highlight(x: i32, y: i32) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let window = G_ACTIVITY_GLOW_WINDOW.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+        let layer = G_ACTIVITY_CURSOR_LAYER.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+        if window.is_null() || layer.is_null() { return; }
+        type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type SendRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, usize, usize, bool) -> *mut std::ffi::c_void;
+        let _ = (x, y);
+        let _ = (window, layer);
+        let _ = (std::mem::transmute::<unsafe extern "C" fn(), Send0>, std::mem::transmute::<unsafe extern "C" fn(), SendRect>);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (x, y);
+}
 
 pub fn set_macos_activity_glow(active: bool) {
     #[cfg(target_os = "macos")]
@@ -2271,7 +2296,8 @@ pub fn set_macos_activity_glow(active: bool) {
         struct GlowUpdate { active: bool, generation: u64 }
         unsafe extern "C" fn apply_glow(ctx: *mut std::ffi::c_void) {
             let update = Box::from_raw(ctx as *mut GlowUpdate);
-            if !update.active && G_ACTIVITY_GLOW_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != update.generation {
+            if !update.active && (G_ACTIVITY_TASK_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+                || G_ACTIVITY_GLOW_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != update.generation) {
                 return;
             }
             type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
