@@ -23,6 +23,23 @@ pub struct ScreenDimensions {
     pub height: u32,
 }
 
+
+/// Keeps the visual activity indicator visible during a complete input operation.
+struct ActivityGlowGuard;
+
+impl ActivityGlowGuard {
+    fn new() -> Self {
+        crate::set_macos_activity_glow(true);
+        Self
+    }
+}
+
+impl Drop for ActivityGlowGuard {
+    fn drop(&mut self) {
+        crate::set_macos_activity_glow(false);
+    }
+}
+
 // Dimensions of the most recent screenshot, in image pixels. Model-provided mouse
 // coordinates refer to this image space, while macOS CoreGraphics expects logical points.
 static LAST_SCREENSHOT_SIZE: std::sync::Mutex<(u32, u32)> = std::sync::Mutex::new((0, 0));
@@ -66,6 +83,7 @@ pub trait ComputerControl: Send + Sync {
     /// Move through short interpolated steps so automation looks deliberate
     /// and gives the target application time to process pointer events.
     fn mouse_move_smooth(&self, x: i32, y: i32) -> Result<(), PlatformError> {
+        let _glow = ActivityGlowGuard::new();
         let (x, y) = map_screenshot_coordinates(x, y, self.get_screen_dimensions());
         let (start_x, start_y) = self.get_cursor_position();
         let steps = smooth_motion_steps(start_x, start_y, x, y);
@@ -83,13 +101,12 @@ pub trait ComputerControl: Send + Sync {
     /// Type with a small inter-character cadence instead of injecting the
     /// entire string in one burst.
     fn keyboard_type_smooth(&self, text: &str) -> Result<(), PlatformError> {
+        let _glow = ActivityGlowGuard::new();
         let character_count = text.chars().count();
         for (index, character) in text.chars().enumerate() {
             self.keyboard_type(&character.to_string())?;
             if index + 1 < character_count {
-                // Give target applications time to process each injected character.
-                // 100 ms is intentionally conservative for browser inputs and games.
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
         Ok(())
@@ -246,6 +263,7 @@ pub mod windows {
         }
 
         fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             unsafe {
                 match button {
                     MouseButton::Left => {
@@ -266,12 +284,14 @@ pub mod windows {
         }
 
         fn mouse_double_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             self.mouse_click(button)?;
             std::thread::sleep(std::time::Duration::from_millis(60));
             self.mouse_click(button)
         }
 
         fn mouse_scroll(&self, delta: i32) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             unsafe {
                 let wheel_delta = (delta * 120) as u32;
                 mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_delta, 0);
@@ -286,6 +306,7 @@ pub mod windows {
             end_x: i32,
             end_y: i32,
         ) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             let screen = self.get_screen_dimensions();
             let (start_x, start_y) = map_screenshot_coordinates(start_x, start_y, screen);
             let (end_x, end_y) = map_screenshot_coordinates(end_x, end_y, screen);
@@ -313,6 +334,7 @@ pub mod windows {
         }
 
         fn keyboard_press(&self, key: &str) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             if let Some(vk) = Self::key_name_to_vk(key) {
                 unsafe {
                     keybd_event(vk, 0, 0, 0);
@@ -325,6 +347,7 @@ pub mod windows {
         }
 
         fn keyboard_shortcut(&self, keys: &[&str]) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             let vks: Vec<u8> = keys
                 .iter()
                 .filter_map(|k| Self::key_name_to_vk(k))
@@ -580,6 +603,7 @@ pub mod macos {
         }
 
         fn mouse_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             // CGEventPost requires macOS Post Event permission. Accessibility being
             // enabled in the UI is not enough to assume synthetic events are accepted.
             unsafe {
@@ -642,6 +666,7 @@ pub mod macos {
         }
 
         fn mouse_double_click(&self, button: MouseButton) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             self.mouse_click(button)?;
             std::thread::sleep(std::time::Duration::from_millis(60));
             let (x, y) = self.get_cursor_position();
@@ -674,6 +699,7 @@ pub mod macos {
         }
 
         fn mouse_scroll(&self, delta: i32) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             unsafe {
                 let ev = CGEventCreateScrollWheelEvent(std::ptr::null(), 1, 1, delta);
                 if !ev.is_null() {
@@ -691,6 +717,7 @@ pub mod macos {
             end_x: i32,
             end_y: i32,
         ) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             let screen = self.get_screen_dimensions();
             let (start_x, start_y) = map_screenshot_coordinates(start_x, start_y, screen);
             let (end_x, end_y) = map_screenshot_coordinates(end_x, end_y, screen);
@@ -761,6 +788,7 @@ pub mod macos {
         }
 
         fn keyboard_press(&self, key: &str) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             let keycode = match key.to_lowercase().as_str() {
                 "return" | "enter" => 36,
                 "tab" => 48,
@@ -831,6 +859,7 @@ pub mod macos {
         }
 
         fn keyboard_shortcut(&self, keys: &[&str]) -> Result<(), PlatformError> {
+            let _glow = ActivityGlowGuard::new();
             let mut flags: u64 = 0;
             let mut main_key = "";
 
