@@ -17,7 +17,7 @@ pub struct WindowInfo {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ScreenDimensions {
     pub width: u32,
     pub height: u32,
