@@ -66,6 +66,7 @@ pub trait ComputerControl: Send + Sync {
     /// Move through short interpolated steps so automation looks deliberate
     /// and gives the target application time to process pointer events.
     fn mouse_move_smooth(&self, x: i32, y: i32) -> Result<(), PlatformError> {
+        let (x, y) = map_screenshot_coordinates(x, y, self.get_screen_dimensions());
         let (start_x, start_y) = self.get_cursor_position();
         let steps = smooth_motion_steps(start_x, start_y, x, y);
         for step in 1..=steps {
@@ -274,6 +275,9 @@ pub mod windows {
             end_x: i32,
             end_y: i32,
         ) -> Result<(), PlatformError> {
+            let screen = self.get_screen_dimensions();
+            let (start_x, start_y) = map_screenshot_coordinates(start_x, start_y, screen);
+            let (end_x, end_y) = map_screenshot_coordinates(end_x, end_y, screen);
             self.mouse_move(start_x, start_y)?;
             unsafe {
                 mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
@@ -676,6 +680,9 @@ pub mod macos {
             end_x: i32,
             end_y: i32,
         ) -> Result<(), PlatformError> {
+            let screen = self.get_screen_dimensions();
+            let (start_x, start_y) = map_screenshot_coordinates(start_x, start_y, screen);
+            let (end_x, end_y) = map_screenshot_coordinates(end_x, end_y, screen);
             self.mouse_move(start_x, start_y)?;
             let start_pt = CGPoint {
                 x: start_x as f64,
@@ -959,7 +966,7 @@ pub mod macos {
             let _ = std::fs::remove_file(&path_buf);
 
             // Read PNG IHDR dimensions without adding an image dependency.
-            if bytes.len() >= 24 && &bytes[..8] == b"\\x89PNG\\r\\n\\x1a\\n" {
+            if bytes.len() >= 24 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
                 let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
                 let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
                 remember_screenshot_size(width, height);
