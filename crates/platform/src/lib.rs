@@ -331,17 +331,21 @@ pub fn speak_text(text: &str) {
             if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
                 lock.push(std::sync::Arc::clone(&handle));
             }
-            std::thread::spawn(move || {
-                let child_opt = {
-                    if let Ok(mut guard) = handle.lock() {
-                        guard.take()
-                    } else {
-                        None
+            std::thread::spawn(move || loop {
+                let finished = if let Ok(mut guard) = handle.lock() {
+                    match guard.as_mut() {
+                        Some(child) => match child.try_wait() {
+                            Ok(Some(_)) => { guard.take(); true }
+                            Ok(None) => false,
+                            Err(_) => { guard.take(); true }
+                        },
+                        None => true,
                     }
+                } else {
+                    true
                 };
-                if let Some(mut child) = child_opt {
-                    let _ = child.wait();
-                }
+                if finished { break; }
+                std::thread::sleep(std::time::Duration::from_millis(40));
             });
         }
     }
@@ -360,17 +364,21 @@ pub fn speak_text(text: &str) {
             if let Ok(mut lock) = AUDIO_PROCESSES.lock() {
                 lock.push(std::sync::Arc::clone(&handle));
             }
-            std::thread::spawn(move || {
-                let child_opt = {
-                    if let Ok(mut guard) = handle.lock() {
-                        guard.take()
-                    } else {
-                        None
+            std::thread::spawn(move || loop {
+                let finished = if let Ok(mut guard) = handle.lock() {
+                    match guard.as_mut() {
+                        Some(child) => match child.try_wait() {
+                            Ok(Some(_)) => { guard.take(); true }
+                            Ok(None) => false,
+                            Err(_) => { guard.take(); true }
+                        },
+                        None => true,
                     }
+                } else {
+                    true
                 };
-                if let Some(mut child) = child_opt {
-                    let _ = child.wait();
-                }
+                if finished { break; }
+                std::thread::sleep(std::time::Duration::from_millis(40));
             });
         }
     }
