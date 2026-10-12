@@ -355,6 +355,34 @@ fn main() {
                                             tracing::error!(error = ?e, "Failed cx.update on StopPushToTalk");
                                         }
                                     }
+                                    Ok(PlatformCommand::StopCurrentTask) => {
+                                        tracing::info!("PlatformCommand::StopCurrentTask received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, window, cx| {
+                                                view.cancel(&function_ui::CancelTask, window, cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to stop current task");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on StopCurrentTask");
+                                        }
+                                    }
+                                    Ok(PlatformCommand::StopAudioPlayback) => {
+                                        tracing::info!("PlatformCommand::StopAudioPlayback received");
+                                        let update_res = cx.update(|cx| {
+                                            let res = handle_clone.update(cx, |view, _window, cx| {
+                                                view.stop_audio(cx);
+                                            });
+                                            if let Err(e) = res {
+                                                tracing::error!(error = ?e, "Failed to stop audio playback");
+                                            }
+                                        });
+                                        if let Err(e) = update_res {
+                                            tracing::error!(error = ?e, "Failed cx.update on StopAudioPlayback");
+                                        }
+                                    }
                                     Ok(PlatformCommand::Quit) => {
                                         tracing::info!("PlatformCommand::Quit received, shutting down");
                                         let _ = cx.update(|cx| {
