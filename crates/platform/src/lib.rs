@@ -2366,6 +2366,145 @@ pub fn set_macos_activity_glow(active: bool) {
     let _ = active;
 }
 
+
+static G_NOTCH_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static G_NOTCH_TEXT_LAYER: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static G_NOTCH_LAST_STATUS: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+/// Publish a concise live status to the native macOS notch companion.
+/// Empty status hides the pill. Other platforms intentionally no-op.
+pub fn set_macos_notch_status(status: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let cache = G_NOTCH_LAST_STATUS.get_or_init(|| std::sync::Mutex::new(String::new()));
+        if let Ok(mut last) = cache.lock() {
+            if *last == status { return; }
+            *last = status.to_string();
+        }
+        let status = status.chars().filter(|c| !c.is_control()).take(180).collect::<String>();
+        let context = Box::into_raw(Box::new(status)) as *mut std::ffi::c_void;
+        unsafe extern "C" fn apply(context: *mut std::ffi::c_void) {
+            let status = Box::from_raw(context as *mut String);
+            extern "C" {
+                fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+                fn objc_msgSend();
+            }
+            #[repr(C)] #[derive(Copy, Clone)]
+            struct CGPoint { x: f64, y: f64 }
+            #[repr(C)] #[derive(Copy, Clone)]
+            struct CGSize { width: f64, height: f64 }
+            #[repr(C)] #[derive(Copy, Clone)]
+            struct CGRect { origin: CGPoint, size: CGSize }
+            type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type Send1 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+            type SendBool = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, bool) -> *mut std::ffi::c_void;
+            type SendInt = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void;
+            type SendRect = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, usize, usize, bool) -> *mut std::ffi::c_void;
+            type SendRectBool = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, CGRect, bool) -> *mut std::ffi::c_void;
+            type SendFloat = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, f64) -> *mut std::ffi::c_void;
+            let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send1: Send1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_bool: SendBool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_int: SendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_rect: SendRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_rect_bool: SendRectBool = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send_float: SendFloat = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let cls = |name: &'static [u8]| objc_getClass(name.as_ptr() as *const std::os::raw::c_char);
+            let sel = |name: &'static [u8]| sel_registerName(name.as_ptr() as *const std::os::raw::c_char);
+            let window = G_NOTCH_WINDOW.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+            if status.is_empty() {
+                if !window.is_null() { send1(window, sel(b"orderOut:\0"), std::ptr::null_mut()); }
+                return;
+            }
+            let screen_cls = cls(b"NSScreen\0");
+            let screen = send0(screen_cls, sel(b"mainScreen\0"));
+            if screen.is_null() { return; }
+            let frame: CGRect = {
+                type SendRectOut = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> CGRect;
+                let f: SendRectOut = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                f(screen, sel(b"frame\0"))
+            };
+            let width = (status.chars().count() as f64 * 7.2 + 90.0).clamp(250.0, 520.0);
+            let height = 42.0;
+            let rect = CGRect { origin: CGPoint { x: frame.origin.x + (frame.size.width - width) / 2.0, y: frame.origin.y + frame.size.height - height - 3.0 }, size: CGSize { width, height } };
+            let window = if window.is_null() {
+                let ns_window = cls(b"NSWindow\0");
+                let allocated = send0(ns_window, sel(b"alloc\0"));
+                let created = send_rect(allocated, sel(b"initWithContentRect:styleMask:backing:defer:\0"), rect, 0, 2, false);
+                if created.is_null() { return; }
+                let ns_color = cls(b"NSColor\0");
+                let clear = send0(ns_color, sel(b"clearColor\0"));
+                send1(created, sel(b"setBackgroundColor:\0"), clear);
+                send_bool(created, sel(b"setOpaque:\0"), false);
+                send_bool(created, sel(b"setHasShadow:\0"), false);
+                send_bool(created, sel(b"setIgnoresMouseEvents:\0"), true);
+                send_int(created, sel(b"setLevel:\0"), 25);
+                send_int(created, sel(b"setCollectionBehavior:\0"), (1 | 16 | 64) as isize);
+                let content = send0(created, sel(b"contentView\0"));
+                send_bool(content, sel(b"setWantsLayer:\0"), true);
+                let layer = send0(content, sel(b"layer\0"));
+                send_float(layer, sel(b"setCornerRadius:\0"), 21.0);
+                send_float(layer, sel(b"setBorderWidth:\0"), 0.5);
+                let bg = send0(ns_color, sel(b"colorWithCalibratedRed:green:blue:alpha:\0"));
+                let _ = bg;
+                let cat_layer_cls = cls(b"CATextLayer\0");
+                let text_layer = send0(cat_layer_cls, sel(b"layer\0"));
+                let text_rect = CGRect { origin: CGPoint { x: 16.0, y: 4.0 }, size: CGSize { width: width - 32.0, height: 34.0 } };
+                send_rect_bool(text_layer, sel(b"setFrame:\0"), text_rect, true);
+                let white = send0(ns_color, sel(b"whiteColor\0"));
+                let color = send0(white, sel(b"CGColor\0"));
+                send1(text_layer, sel(b"setForegroundColor:\0"), color);
+                send_float(text_layer, sel(b"setFontSize:\0"), 14.0);
+                send1(layer, sel(b"addSublayer:\0"), text_layer);
+                G_NOTCH_TEXT_LAYER.store(text_layer as isize, std::sync::atomic::Ordering::SeqCst);
+                G_NOTCH_WINDOW.store(created as isize, std::sync::atomic::Ordering::SeqCst);
+                created
+            } else { window };
+            let text_layer = G_NOTCH_TEXT_LAYER.load(std::sync::atomic::Ordering::SeqCst) as *mut std::ffi::c_void;
+            if !text_layer.is_null() {
+                let ns_string_cls = cls(b"NSString\0");
+                let string = send1(ns_string_cls, sel(b"stringWithUTF8String:\0"), status.as_ptr() as *mut std::ffi::c_void);
+                send1(text_layer, sel(b"setString:\0"), string);
+                let text_rect = CGRect { origin: CGPoint { x: 16.0, y: 4.0 }, size: CGSize { width: width - 32.0, height: 34.0 } };
+                send_rect_bool(text_layer, sel(b"setFrame:\0"), text_rect, true);
+            }
+            send_rect_bool(window, sel(b"setFrame:display:\0"), rect, true);
+            send0(window, sel(b"orderFrontRegardless\0"));
+        }
+        extern "C" { fn dispatch_async_f(queue: *mut std::ffi::c_void, context: *mut std::ffi::c_void, work: unsafe extern "C" fn(*mut std::ffi::c_void)); static _dispatch_main_q: std::ffi::c_void; }
+        dispatch_async_f(unsafe { &_dispatch_main_q as *const _ as *mut std::ffi::c_void }, context, apply);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = status;
+}
+
+/// Subtle Force Touch trackpad feedback. This is best-effort and never blocks the UI.
+pub fn trigger_macos_haptic(success: bool) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn objc_getClass(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn sel_registerName(name: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+            fn objc_msgSend();
+        }
+        type Send0 = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        type SendPattern = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize, isize) -> *mut std::ffi::c_void;
+        let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_pattern: SendPattern = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let cls = objc_getClass(c"NSHapticFeedbackManager".as_ptr());
+        if cls.is_null() { return; }
+        let manager = send0(cls, sel_registerName(c"defaultPerformer".as_ptr()));
+        if !manager.is_null() {
+            // AppKit patterns: generic = 0, alignment = 1. Use "now" timing.
+            let _ = send_pattern(manager, sel_registerName(c"performFeedbackPattern:performanceTime:".as_ptr()), if success { 1 } else { 0 }, 0);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = success;
+}
+
+
 /// Setup macOS menu bar status item (top bar icon) that displays the transparent template icon and native AppKit menu.
 pub fn setup_macos_menu_bar_icon() {
     #[cfg(target_os = "macos")]
