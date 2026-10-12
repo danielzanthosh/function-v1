@@ -973,6 +973,7 @@ impl FunctionView {
         self.voice_error = None;
         self.listening = true;
         self.state = AgentState::Listening;
+        function_platform::trigger_macos_haptic(false);
         function_platform::set_macos_status_text("Listening…");
         tracing::info!("[Push-To-Talk] Recording started");
         self.play_sound_feedback(SoundEffect::Select);
@@ -1010,6 +1011,7 @@ impl FunctionView {
                 self.state = AgentState::Processing {
                     thought_summary: Some("Transcribing speech with Whisper...".to_string()),
                 };
+        function_platform::trigger_macos_haptic(false);
                 self.voice_error = None;
                 tracing::info!("[Push-To-Talk] Audio sent to STT");
                 cx.notify();
@@ -1147,6 +1149,7 @@ impl FunctionView {
                         self.state = AgentState::Processing {
                             thought_summary: Some("Transcribing audio...".to_string()),
                         };
+        function_platform::trigger_macos_haptic(false);
                         self.voice_error = None;
                         cx.notify();
 
@@ -1285,6 +1288,7 @@ impl FunctionView {
             self.listening = true;
             self.voice_error = None;
             self.state = AgentState::Listening;
+        function_platform::trigger_macos_haptic(false);
             self.play_sound_feedback(SoundEffect::Select);
             cx.notify();
         }
@@ -2313,6 +2317,7 @@ impl FunctionView {
             self.state = AgentState::Processing {
                 thought_summary: None,
             };
+        function_platform::trigger_macos_haptic(false);
 
             let history_snapshot = self.chat_history_api.clone();
             let prompt_clone = prompt.clone();
@@ -2370,6 +2375,7 @@ impl FunctionView {
                     self.state = AgentState::Acting {
                         action_description: format!("Approved: {}", action_name),
                     };
+        function_platform::trigger_macos_haptic(false);
                     self.latest_result = Some(format!(
                         "Action '{}' approved by user. Proceeding.",
                         action_name
