@@ -2,13 +2,12 @@ name: macOS Build & Distribution
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "swift_main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "swift_main"]
   workflow_dispatch:
 
 env:
-  CARGO_TERM_COLOR: always
   APP_VERSION: "0.1.0"
 
 jobs:
@@ -20,88 +19,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Select Swift 6.2 toolchain
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2.3"
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+      - name: Run Swift tests
+        run: swift test
 
-      - name: Run workspace tests
-        run: cargo test --verbose
-
-      - name: Build release binary
-        run: cargo build --release --bin function --verbose
-
-      - name: Verify binary
+      - name: Build and package native SwiftUI app
         run: |
-          ls -lh target/release/function
-          file target/release/function
-
-      - name: Package Function.app
-        run: |
-          set -euo pipefail
-
-          rm -rf Function.app Function-macOS.zip dmg-root Function.dmg icon.iconset
-
-          mkdir -p Function.app/Contents/MacOS
-          mkdir -p Function.app/Contents/Resources
-
-          cp target/release/function Function.app/Contents/MacOS/function
-          chmod +x Function.app/Contents/MacOS/function
-
-          cp assets/icon.ico Function.app/Contents/Resources/icon.ico
-          cp assets/icon.png Function.app/Contents/Resources/icon.png
-          cp "assets/brand/White logo in Tranparent.png" "Function.app/Contents/Resources/White logo in Tranparent.png"
-          cp "assets/brand/White logo in Tranparent.png" Function.app/Contents/Resources/menu_icon.png
-
-          mkdir -p icon.iconset
-          sips -z 16 16 assets/icon.png --out icon.iconset/icon_16x16.png
-          sips -z 32 32 assets/icon.png --out icon.iconset/icon_16x16@2x.png
-          sips -z 32 32 assets/icon.png --out icon.iconset/icon_32x32.png
-          sips -z 64 64 assets/icon.png --out icon.iconset/icon_32x32@2x.png
-          sips -z 128 128 assets/icon.png --out icon.iconset/icon_128x128.png
-          sips -z 256 256 assets/icon.png --out icon.iconset/icon_128x128@2x.png
-          sips -z 256 256 assets/icon.png --out icon.iconset/icon_256x256.png
-          sips -z 512 512 assets/icon.png --out icon.iconset/icon_256x256@2x.png
-          sips -z 512 512 assets/icon.png --out icon.iconset/icon_512x512.png
-          sips -z 1024 1024 assets/icon.png --out icon.iconset/icon_512x512@2x.png
-          iconutil -c icns icon.iconset -o Function.app/Contents/Resources/AppIcon.icns
-          rm -rf icon.iconset
-
-          cat > Function.app/Contents/Info.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>function</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.function.desktop</string>
-              <key>CFBundleName</key>
-              <string>Function</string>
-              <key>CFBundleDisplayName</key>
-              <string>Function</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>0.1.0</string>
-              <key>CFBundleVersion</key>
-              <string>0.1.0</string>
-              <key>CFBundleIconFile</key>
-              <string>AppIcon</string>
-              <key>LSUIElement</key>
-              <true/>
-              <key>NSHighResolutionCapable</key>
-              <true/>
-              <key>NSSupportsAutomaticGraphicsSwitching</key>
-              <true/>
-              <key>NSMicrophoneUsageDescription</key>
-              <string>Function needs microphone access for speech input.</string>
-          </dict>
-          </plist>
-          EOF
-
-          cp assets/macos/entitlements.plist Function.app/Contents/entitlements.plist
+          bash scripts/package-macos.sh
+          cp -R dist/Function.app Function.app
+          plutil -lint Function.app/Contents/Info.plist
+          test -f Function.app/Contents/Resources/icon.png
+          file Function.app/Contents/MacOS/Function
 
       - name: Sign Function.app
         env:
@@ -160,7 +92,6 @@ jobs:
           # UDZO is a compressed, read-only distribution image suitable for downloads.
           hdiutil create             -volname "Function"             -srcfolder dmg-root             -ov             -format UDZO             -imagekey zlib-level=9             Function.dmg
 
-          ditto -c -k --keepParent Function.app "Function-${APP_VERSION}.app.zip"
 
       - name: Notarize and staple distribution
         if: env.SIGNED == 'true'
@@ -196,6 +127,9 @@ jobs:
         if: env.SIGNED != 'true'
         run: |
           codesign --verify --deep --strict --verbose=2 Function.app
+
+      - name: Archive packaged app
+        run: ditto -c -k --keepParent Function.app "Function-${APP_VERSION}.app.zip"
 
       - name: Upload Function.app
         uses: actions/upload-artifact@v5

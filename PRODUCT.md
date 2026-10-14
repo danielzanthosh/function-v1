@@ -2,7 +2,7 @@
 
 ## Product
 
-A native desktop AI computer assistant for Windows and macOS.
+A native macOS AI computer assistant written in Swift and SwiftUI.
 
 The assistant is designed to operate a computer on the user's behalf using natural language and voice.
 
@@ -13,7 +13,7 @@ It should feel like a serious desktop productivity tool rather than a traditiona
 The user presses a global shortcut:
 
 - macOS: Double Command (⌘ ⌘)
-- Windows: Ctrl + Space
+- macOS: configurable Control + Space, Option + Space, or Command + Space alternatives
 
 A compact floating assistant appears.
 
@@ -38,28 +38,20 @@ The goal is for the assistant to operate the computer similarly to how a human w
 
 ## Platforms
 
-Primary platforms:
-
-- Windows
-- macOS
-
-Both platforms are first-class targets.
-
-The application should not feel like a Windows application awkwardly ported to macOS or vice versa.
+The active SwiftUI application targets macOS 14+. Windows support belonged to the previous Rust implementation and is not provided by SwiftUI.
 
 ## Technology Direction
 
 Core technology:
 
-- Rust
-- GPUI
-- SQLite
-- Playwright where appropriate
-- Native OS APIs
-- OpenAI-compatible AI APIs
-- Whisper-based speech-to-text
-- Optional web search
-- OS or external text-to-speech
+- Swift 6 and SwiftUI
+- Foundation and URLSession for the portable agent and providers
+- AppKit, CoreGraphics, and ScreenCaptureKit for desktop integration
+- AVFoundation for recording and speech
+- Security / macOS Keychain for credentials
+- Local atomic JSON storage for memory and conversations
+- OpenAI compatible AI/speech APIs, Gemini, and native ChatGPT authentication
+- Optional DuckDuckGo instant answers
 
 ## Brand
 

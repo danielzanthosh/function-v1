@@ -26,7 +26,7 @@ Function should only save notes when asked, and it should not store credentials 
 - `task_summary`
 - `custom_instruction`
 
-Notes are local to the configured memory store. The default application initializes a file-backed store. If it cannot open that store, it currently falls back to in-memory storage, and new notes from that fallback will not survive an app restart. Check startup logs if a note does not persist.
+Notes are stored in `~/.function/swift/memory.json` through atomic writes. New memory state is published only after persistence succeeds. If the file cannot be opened, Function reports the error. The memory browser lets you review, forget, or clear notes with confirmation. Disabling persistent memory excludes its tool and retrieved context from new runs.
 
 ## Current limitations
 

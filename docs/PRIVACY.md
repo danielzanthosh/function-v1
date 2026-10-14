@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: October 11, 2026_
+_Last updated: October 14, 2026_
 
 This policy explains how the Function desktop application handles information. Function is an early-stage open-source project, and behavior can change as the code changes. Read this alongside the settings and provider documentation for the version you're running.
 
@@ -25,9 +25,9 @@ The exact information involved depends on your configuration, provider, platform
 
 ### Local storage
 
-Function stores its persistent memory through the configured local memory file. The precise path is resolved by the app's configuration code and may vary by platform. You can inspect or remove that file using your operating system's file tools after closing Function.
+Function stores configuration, memory, and conversation history in `~/.function/swift/` as local JSON files. Credentials and ChatGPT OAuth tokens are stored in macOS Keychain. Temporary voice recordings are removed after transcription or cancellation. Memory and history are not encrypted by Function; use operating-system disk encryption when needed.
 
-If the persistent store fails to initialize, the current application can fall back to an in-memory store. Memory saved during that fallback may disappear when the app closes.
+If memory cannot be opened, the app reports the error. It does not silently claim notes were persisted. The explicit legacy import retains the original `~/.function/` files and backs up existing native data. Original legacy configuration can contain plaintext API keys; remove those manually after verifying migration.
 
 ### Third-party providers
 

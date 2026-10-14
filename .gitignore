@@ -1,5 +1,7 @@
-/target
-**/*.pdb
-**/*.exe
+.build/
+.swiftpm/
 dist/
 *.zip
+*.dmg
+*.xcodeproj/xcuserdata/
+.DS_Store
