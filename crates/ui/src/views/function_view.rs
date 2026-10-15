@@ -1668,8 +1668,9 @@ impl FunctionView {
             function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
             function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
             function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
-            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::AuroraGlass,
-            function_config::ThemeStyle::AuroraGlass => function_config::ThemeStyle::CarbonDark,
+            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::Graphite,
+            // Fall back to the default theme when another theme variant is introduced.
+            _ => function_config::ThemeStyle::CarbonDark,
         };
         self.theme = Theme::from_config(&self.config);
         self.play_sound_feedback(SoundEffect::Navigate);
