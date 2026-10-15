@@ -130,6 +130,23 @@ impl Theme {
                 accent_hover: rgb(0x2e2a20),
                 ..Self::light()
             },
+            ThemeStyle::Swift => Self {
+                mode: ThemeMode::Dark,
+                // Warm, understated command-bar palette inspired by the Swift reference.
+                surface_base: rgb(0x14120a),
+                surface_elevated: rgb(0x19170f),
+                surface_floating: rgb(0x201e15),
+                surface_active: rgb(0x29261c),
+                surface_input: rgb(0x14120a),
+                border_subtle: rgb(0x343126),
+                border_focus: rgb(0x514d40),
+                text_primary: rgb(0xf1f0ef),
+                text_secondary: rgb(0xa8a49c),
+                text_muted: rgb(0x56534a),
+                accent_primary: rgb(0xf1f0ef),
+                accent_hover: rgb(0xd1cdc7),
+                ..Self::dark()
+            },
         }
     }
 
