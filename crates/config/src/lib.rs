@@ -84,6 +84,7 @@ pub enum ThemeStyle {
     SlateMidnight,
     StudioLight,
     Graphite,
+    Swift,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
