@@ -147,6 +147,7 @@ impl Theme {
                 accent_hover: rgb(0xd1cdc7),
                 ..Self::dark()
             },
+            _ => Self::dark(),
         }
     }
 
