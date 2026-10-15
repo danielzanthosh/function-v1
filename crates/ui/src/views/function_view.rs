@@ -1663,6 +1663,7 @@ impl FunctionView {
     }
 
     pub fn cycle_theme_style(&mut self, cx: &mut Context<Self>) {
+        // Keep this cycle exhaustive when adding a new ThemeStyle variant.
         self.config.theme_style = match self.config.theme_style {
             function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
             function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
