@@ -83,6 +83,7 @@ pub enum ThemeStyle {
     ObsidianOled,
     SlateMidnight,
     StudioLight,
+    AuroraGlass,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
