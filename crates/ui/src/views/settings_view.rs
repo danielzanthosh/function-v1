@@ -752,7 +752,7 @@ pub fn render_settings_view(
                                             ThemeStyle::ObsidianOled => "Obsidian OLED",
                                             ThemeStyle::SlateMidnight => "Slate Midnight",
                                             ThemeStyle::StudioLight => "Studio Light",
-                                            ThemeStyle::AuroraGlass => "Aurora Glass",
+                                            ThemeStyle::Graphite => "Graphite",
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
