@@ -83,6 +83,7 @@ pub enum ThemeStyle {
     ObsidianOled,
     SlateMidnight,
     StudioLight,
+    Graphite,
     Swift,
 }
 
