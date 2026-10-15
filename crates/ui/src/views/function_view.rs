@@ -1663,11 +1663,13 @@ impl FunctionView {
     }
 
     pub fn cycle_theme_style(&mut self, cx: &mut Context<Self>) {
+        // Keep this cycle exhaustive when adding a new ThemeStyle variant.
         self.config.theme_style = match self.config.theme_style {
             function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
             function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
             function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
-            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::CarbonDark,
+            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::Graphite,
+            function_config::ThemeStyle::Graphite => function_config::ThemeStyle::CarbonDark,
         };
         self.theme = Theme::from_config(&self.config);
         self.play_sound_feedback(SoundEffect::Navigate);
@@ -2423,6 +2425,9 @@ impl FunctionView {
                             function_config::ThemeStyle::StudioLight
                         }
                         function_config::ThemeStyle::StudioLight => {
+                            function_config::ThemeStyle::Graphite
+                        }
+                        function_config::ThemeStyle::Graphite => {
                             function_config::ThemeStyle::CarbonDark
                         }
                     };
