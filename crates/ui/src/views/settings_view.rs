@@ -753,6 +753,7 @@ pub fn render_settings_view(
                                             ThemeStyle::SlateMidnight => "Slate Midnight",
                                             ThemeStyle::StudioLight => "Studio Light",
                                             ThemeStyle::Swift => "Swift",
+                                            _ => "Other Theme",
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
