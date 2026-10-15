@@ -1668,7 +1668,8 @@ impl FunctionView {
             function_config::ThemeStyle::CarbonDark => function_config::ThemeStyle::ObsidianOled,
             function_config::ThemeStyle::ObsidianOled => function_config::ThemeStyle::SlateMidnight,
             function_config::ThemeStyle::SlateMidnight => function_config::ThemeStyle::StudioLight,
-            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::Swift,
+            function_config::ThemeStyle::StudioLight => function_config::ThemeStyle::Graphite,
+            function_config::ThemeStyle::Graphite => function_config::ThemeStyle::Swift,
             function_config::ThemeStyle::Swift => function_config::ThemeStyle::CarbonDark,
         };
         self.theme = Theme::from_config(&self.config);
@@ -2425,6 +2426,9 @@ impl FunctionView {
                             function_config::ThemeStyle::StudioLight
                         }
                         function_config::ThemeStyle::StudioLight => {
+                            function_config::ThemeStyle::Graphite
+                        }
+                        function_config::ThemeStyle::Graphite => {
                             function_config::ThemeStyle::Swift
                         }
                         function_config::ThemeStyle::Swift => {
