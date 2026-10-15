@@ -130,18 +130,17 @@ impl Theme {
                 accent_hover: rgb(0x2e2a20),
                 ..Self::light()
             },
-            ThemeStyle::AuroraGlass => Self {
+            ThemeStyle::Graphite => Self {
                 mode: ThemeMode::Dark,
-                // Cool, translucent-looking surfaces inspired by Aurora Glass.
-                // GPUI's current theme model uses opaque colors; true blur and
-                // background gradients belong in the window/container layer.
+                // Graphite: restrained neutral surfaces with no gradients or visible borders.
+                // Native Liquid Glass requires a platform-level macOS material, not a color token.
                 surface_base: rgb(0x17191f),
                 surface_elevated: rgb(0x25272d),
                 surface_floating: rgb(0x303137),
                 surface_active: rgb(0x3b3d44),
                 surface_input: rgb(0x292b32),
-                border_subtle: rgb(0x454750),
-                border_focus: accent,
+                border_subtle: rgb(0x17191f),
+                border_focus: rgb(0x17191f),
                 text_primary: rgb(0xf5f5f5),
                 text_secondary: rgb(0xa5a5aa),
                 text_muted: rgb(0x777981),
